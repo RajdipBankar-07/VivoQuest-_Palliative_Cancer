@@ -1,0 +1,38 @@
+@import './styles/fonts.css';
+@import './styles/theme.css';
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #1976D2;
+  --color-primary-hover: #1565C0;
+  --color-primary-light: #E3F2FD;
+  --color-secondary: #2E9E6F;
+  --color-secondary-hover: #26875E;
+  --color-secondary-light: #E8F5E9;
+  --color-navy: #17324D;
+  --color-navy-dark: #0E1F30;
+  --color-navy-light: #244565;
+  --color-background: #F4F9FC;
+  --color-card: #FFFFFF;
+  --color-border: #D9E3EA;
+  --color-foreground: #17324D;
+  --color-muted-foreground: #5A7184;
+  --color-success: #28A745;
+  --color-warning: #F4A62A;
+  --color-destructive: #D9534F;
+}
+
+@layer base {
+  * {
+    border-color: #D9E3EA;
+    box-sizing: border-box;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background-color: #F4F9FC;
+    color: #17324D;
+    font-family: var(--font-body);
+  }
+}

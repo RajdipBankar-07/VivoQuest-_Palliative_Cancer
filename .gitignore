@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+venv/
+.venv/
+env/
+ENV/
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+*.tsbuildinfo
+
+# Next.js Build
+.next/
+**/.next/
+**/.next/**
+out/
+**/out/
+
+# React Native & Expo
+.expo/
+.expo-shared/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Environment & Secrets (NEVER commit credentials)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.cert
+*.crt
+*.id_rsa
+
+# Database & Runtime Data
+*.sqlite3
+*.sqlite3-journal
+*.db
+pg_data/
+redis_data/
+
+# Logs & Diagnostics
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+server_out.txt
+server_err.txt
+ports.txt
+
+# Editor & System Files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Scratch & Temporary Notes
+scratch/
+*_extract*.txt

@@ -1,0 +1,60 @@
+:root {
+  /* VivoQuest Healthcare Color System */
+  --primary: #1976D2;
+  --primary-hover: #1565C0;
+  --primary-light: #E3F2FD;
+
+  --secondary: #2E9E6F;
+  --secondary-hover: #26875E;
+  --secondary-light: #E8F5E9;
+
+  --navy: #17324D;
+  --navy-dark: #0E1F30;
+  --navy-light: #244565;
+
+  --background: #F4F9FC;
+  --card: #FFFFFF;
+  --border: #D9E3EA;
+  --foreground: #17324D;
+  --muted-foreground: #5A7184;
+
+  --success: #28A745;
+  --warning: #F4A62A;
+  --destructive: #D9534F;
+
+  --font-heading: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  --radius: 0.75rem;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body);
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #F4F9FC;
+}
+::-webkit-scrollbar-thumb {
+  background: #D9E3EA;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #1976D2;
+}
+
+/* Accessible focus visible outlines */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

@@ -1,0 +1,30 @@
+{
+  "name": "vivoquest",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VivoQuest - AI-Enabled Preventive Healthcare Marketplace",
+  "workspaces": [
+    "frontend",
+    "apps/api"
+  ],
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:api": "npm --prefix apps/api run dev",
+    "build": "npm --prefix frontend run build",
+    "build:api": "npm --prefix apps/api run build",
+    "start": "npm --prefix frontend run start",
+    "start:api": "npm --prefix apps/api run start",
+    "lint": "npm --prefix frontend run lint",
+    "test:api": "npm --prefix apps/api run test"
+  },
+  "keywords": [
+    "healthcare",
+    "marketplace",
+    "preventive-care",
+    "nextjs",
+    "react",
+    "typescript"
+  ],
+  "author": "VivoQuest Engineering",
+  "license": "UNLICENSED"
+}
