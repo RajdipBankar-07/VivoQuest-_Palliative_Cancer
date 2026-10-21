@@ -6,7 +6,8 @@ export type UserRole =
   | 'professional'
   | 'hospital'
   | 'supplier'
-  | 'admin';
+  | 'admin'
+  | 'super_admin';
 
 export interface IDpdpConsent {
   accepted: boolean;
@@ -75,7 +76,7 @@ const UserSchema = new Schema<IUser>(
       type: String,
       required: [true, 'User role is required'],
       enum: {
-        values: ['patient', 'caregiver', 'professional', 'hospital', 'supplier', 'admin'],
+        values: ['patient', 'caregiver', 'professional', 'hospital', 'supplier', 'admin', 'super_admin'],
         message: '{VALUE} is not a valid VivoQuest role',
       },
       lowercase: true,

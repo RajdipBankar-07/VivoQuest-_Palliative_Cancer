@@ -74,6 +74,33 @@ vivoquest/
 
 ---
 
-## 🚀 Getting Started (Phase 1 Status)
+## 🚀 Running the Project Locally
 
-Phase 1 (Inspection & Setup) is complete. To proceed to **Phase 2 (Monorepo Foundation, Mongoose Schemas & S3 Storage Engine)**, review the Phase 1 completion report and prompt the assistant with the exact start command.
+We provide one-click Windows batch scripts to launch and stop all services across the monorepo:
+
+### 1. Start All Services
+Double-click [`run_all.bat`](file:///e:/VivoQuest%20Website/run_all.bat) or run from the terminal:
+```cmd
+run_all.bat
+```
+This automatically:
+- Checks Node.js, npm, Python, and local MongoDB service status.
+- Opens **Backend Express API** on [http://localhost:4000](http://localhost:4000) in its own console window.
+- Opens **AI FastAPI Microservice** on [http://localhost:8000](http://localhost:8000) (Swagger at [http://localhost:8000/docs](http://localhost:8000/docs)).
+- Opens **Next.js Web Application** on [http://localhost:3000](http://localhost:3000).
+- Automatically opens your default web browser to the homepage after 5 seconds.
+
+### 2. Stop All Services
+Double-click [`stop_all.bat`](file:///e:/VivoQuest%20Website/stop_all.bat) or run:
+```cmd
+stop_all.bat
+```
+This cleanly terminates all background processes running on ports `3000`, `4000`, and `8000`.
+
+### Key Portal URLs & Credentials (Default OTP: `123456`)
+- **Patient Appointments**: [http://localhost:3000/appointments](http://localhost:3000/appointments) (Phone: `9810011111`)
+- **Doctor Portal**: [http://localhost:3000/doctor/dashboard](http://localhost:3000/doctor/dashboard) (Phone: `9811011111`)
+- **Hospital Portal**: [http://localhost:3000/hospital/dashboard](http://localhost:3000/hospital/dashboard) (Phone: `9822011111`)
+- **Operations Admin**: [http://localhost:3000/admin/dashboard](http://localhost:3000/admin/dashboard) (Phone: `9899009900`)
+- **Super-Admin Governance**: [http://localhost:3000/super-admin/dashboard](http://localhost:3000/super-admin/dashboard) (Phone: `9899000001`)
+

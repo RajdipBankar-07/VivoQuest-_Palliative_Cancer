@@ -3,13 +3,15 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Menu, X, Activity, ChevronRight, User, HeartHandshake } from 'lucide-react';
+import { Menu, X, Activity, ChevronRight, User, HeartHandshake, ShoppingBag } from 'lucide-react';
 import { Button } from './Button';
+import { useCart } from '@/context/CartContext';
 
 export const Navbar: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const pathname = usePathname();
+  const { totalItemCount, openCart } = useCart();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -26,12 +28,15 @@ export const Navbar: React.FC = () => {
 
   const navLinks = [
     { label: 'Home', href: '/' },
+    { label: 'Medical Store', href: '/products' },
+    { label: 'My Orders', href: '/orders' },
+    { label: 'Find a Doctor', href: '/doctors' },
+    { label: 'Appointments', href: '/appointments' },
     { label: 'Healthcare Services', href: '/services' },
     { label: 'AI Coordination', href: '/clinical' },
-    { label: 'How It Works', href: '/#how-it-works' },
-    { label: 'For Professionals', href: '/professionals' },
-    { label: 'About Us', href: '/about' },
-    { label: 'Contact', href: '/contact' },
+    { label: 'Doctor Portal', href: '/doctor/dashboard' },
+    { label: 'Hospital Portal', href: '/hospital/dashboard' },
+    { label: 'Admin Portal', href: '/admin/dashboard' },
   ];
 
   const isActive = (href: string) => {
@@ -42,31 +47,6 @@ export const Navbar: React.FC = () => {
 
   return (
     <header className="sticky top-0 z-50 w-full transition-all duration-200">
-      {/* Top Trust Notice Banner */}
-      <div className="bg-navy text-white text-xs py-1.5 px-4 sm:px-8 border-b border-navy-light/40 flex items-center justify-between">
-        <div className="flex items-center gap-2 max-w-7xl mx-auto w-full justify-between">
-          <div className="flex items-center gap-2 text-white/90 truncate">
-            <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-            <span className="font-medium">
-              India&apos;s AI-Enabled Home Healthcare &amp; Preventive Diagnostics Marketplace
-            </span>
-            <span className="hidden md:inline text-white/40">•</span>
-            <span className="hidden md:inline text-white/75">
-              Verified Independent Specialists &amp; DME Depots
-            </span>
-          </div>
-          <div className="hidden lg:flex items-center gap-4 text-xs font-medium text-white/80">
-            <Link href="/about#safety" className="hover:text-white transition-colors">
-              Patient Safety Guardrails
-            </Link>
-            <span className="text-white/30">|</span>
-            <span className="text-secondary-light font-semibold">
-              Emergency: Dial 112 / 108
-            </span>
-          </div>
-        </div>
-      </div>
-
       {/* Main Navigation Bar */}
       <nav
         className={`w-full transition-all duration-200 ${
@@ -117,10 +97,24 @@ export const Navbar: React.FC = () => {
           </div>
 
           {/* Desktop Right Actions */}
-          <div className="hidden md:flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-2 lg:gap-3">
+            {/* Cart Button */}
+            <button
+              onClick={openCart}
+              className="relative p-2 rounded-xl text-navy/80 hover:text-primary hover:bg-slate-100 transition-colors flex items-center justify-center"
+              aria-label="Open medical shopping cart"
+            >
+              <ShoppingBag size={20} />
+              {totalItemCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-secondary text-white font-extrabold text-[10px] w-5 h-5 rounded-full flex items-center justify-center shadow-xs animate-in zoom-in">
+                  {totalItemCount}
+                </span>
+              )}
+            </button>
+
             <Link
               href="/sign-in"
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-navy hover:text-primary transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-semibold text-navy hover:text-primary transition-colors"
             >
               <User size={16} />
               <span>Sign In</span>
@@ -134,10 +128,33 @@ export const Navbar: React.FC = () => {
             >
               Get Started
             </Button>
+
+            {/* Tablet Menu Toggle (md to xl screens) */}
+            <button
+              onClick={() => setIsOpen(!isOpen)}
+              className="xl:hidden p-2 rounded-xl text-navy hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-primary ml-1"
+              aria-label={isOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={isOpen}
+            >
+              {isOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
           </div>
 
-          {/* Mobile Hamburger Toggle Button */}
+          {/* Mobile Right Actions (< md) */}
           <div className="flex md:hidden items-center gap-2">
+            <button
+              onClick={openCart}
+              className="relative p-2 rounded-lg text-navy hover:bg-slate-100 transition-colors flex items-center justify-center"
+              aria-label="Open medical shopping cart"
+            >
+              <ShoppingBag size={20} />
+              {totalItemCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-secondary text-white font-extrabold text-[10px] w-4 h-4 rounded-full flex items-center justify-center shadow-xs">
+                  {totalItemCount}
+                </span>
+              )}
+            </button>
+
             <Link
               href="/sign-in"
               className="text-xs font-semibold text-primary px-3 py-1.5 rounded-lg bg-primary-light"
@@ -155,9 +172,9 @@ export const Navbar: React.FC = () => {
           </div>
         </div>
 
-        {/* Mobile Navigation Drawer */}
+        {/* Mobile & Tablet Navigation Drawer */}
         {isOpen && (
-          <div className="md:hidden w-full bg-white border-b border-border px-5 pt-3 pb-6 animate-in slide-in-from-top-2 duration-200 shadow-xl">
+          <div className="xl:hidden w-full bg-white border-b border-border px-5 pt-3 pb-6 animate-in slide-in-from-top-2 duration-200 shadow-xl max-h-[80vh] overflow-y-auto">
             <div className="flex flex-col space-y-1.5">
               {navLinks.map((link) => {
                 const active = isActive(link.href);

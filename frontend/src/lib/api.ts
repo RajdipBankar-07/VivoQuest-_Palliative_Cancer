@@ -370,3 +370,1810 @@ export const aiApi = {
   },
 };
 
+// -----------------------------------------------------------------------------
+// Doctors & Healthcare Specialists APIs
+// -----------------------------------------------------------------------------
+export const doctorsApi = {
+  async getDoctors(params?: {
+    search?: string;
+    specialty?: string;
+    professionType?: string;
+    consultationMode?: string;
+    city?: string;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.specialty && params.specialty !== 'all') query.set('specialty', params.specialty);
+    if (params?.professionType && params.professionType !== 'all') query.set('professionType', params.professionType);
+    if (params?.consultationMode && params.consultationMode !== 'all') query.set('consultationMode', params.consultationMode);
+    if (params?.city && params.city !== 'all') query.set('city', params.city);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/doctors${queryString}`);
+
+    return res.data;
+  },
+
+  async getDoctorById(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/doctors/${id}`);
+    return res.data;
+  },
+
+  async getDoctorSlots(id: string, date: string, mode?: string) {
+    const query = new URLSearchParams({ date });
+    if (mode) query.set('mode', mode);
+
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/doctors/${id}/slots?${query.toString()}`);
+    return res.data;
+  },
+
+  async getDoctorAvailability(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/doctors/${id}/availability`);
+    return res.data;
+  },
+
+  async updateSchedule(scheduleData: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/doctors/schedule', {
+      method: 'PUT',
+      body: JSON.stringify(scheduleData),
+    });
+    return res.data;
+  },
+
+  async getDashboardStats() {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>('/api/v1/doctors/dashboard/stats');
+    return res.data;
+  },
+
+  async getDoctorAppointments(params?: { view?: string; date?: string; status?: string }) {
+    const query = new URLSearchParams();
+    if (params?.view) query.set('view', params.view);
+    if (params?.date) query.set('date', params.date);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/doctors/dashboard/appointments${queryString}`);
+    return res.data;
+  },
+
+  async getDoctorProfile() {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>('/api/v1/doctors/me/profile');
+    return res.data;
+  },
+
+  async getAssignedPatients(params?: {
+    search?: string;
+    condition?: string;
+    riskLevel?: string;
+    followUpStatus?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.condition && params.condition !== 'all') query.set('condition', params.condition);
+    if (params?.riskLevel && params.riskLevel !== 'all') query.set('riskLevel', params.riskLevel);
+    if (params?.followUpStatus && params.followUpStatus !== 'all') query.set('followUpStatus', params.followUpStatus);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      total: number;
+      page: number;
+      totalPages: number;
+      data: any[];
+    }>(`/api/v1/doctors/me/patients${queryString}`);
+    return res;
+  },
+
+  async getPatientDossier(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/doctors/me/patients/${id}`);
+    return res.data;
+  },
+
+  async addClinicalNote(
+    patientId: string,
+    noteData: {
+      subjective?: string;
+      objective?: string;
+      assessment: string;
+      plan: string;
+      followUpInstructions?: string;
+      followUpDate?: string;
+      appointmentId?: string;
+      fieldVisitId?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/doctors/me/patients/${patientId}/clinical-notes`, {
+      method: 'POST',
+      body: JSON.stringify(noteData),
+    });
+    return res.data;
+  },
+
+  async updateFollowUpPlan(
+    patientId: string,
+    planData: {
+      followUpDate: string;
+      careTasks?: string[];
+      instructions?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/doctors/me/patients/${patientId}/follow-up`, {
+      method: 'POST',
+      body: JSON.stringify(planData),
+    });
+    return res.data;
+  },
+
+  async getHealthUpdatesQueue(params?: { status?: string }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/doctors/me/health-updates${queryString}`);
+    return res.data;
+  },
+
+  async reviewHealthUpdate(
+    updateId: string,
+    reviewData: {
+      reviewStatus: 'reviewed' | 'follow_up_required';
+      clinicianNotes: string;
+      followUpAction?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/doctors/me/health-updates/${updateId}/review`, {
+      method: 'PATCH',
+      body: JSON.stringify(reviewData),
+    });
+    return res.data;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Patients & Caregivers APIs
+// -----------------------------------------------------------------------------
+export const patientsApi = {
+  async submitHealthUpdate(data: {
+    submitterName: string;
+    relationship?: string;
+    symptoms?: string[];
+    notes?: string;
+    vitals?: any;
+    patientId?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/patients/health-updates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res.data;
+  },
+
+  async getMyHealthUpdates() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/patients/health-updates/me');
+    return res.data;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Appointments APIs
+// -----------------------------------------------------------------------------
+export const appointmentsApi = {
+  async bookAppointment(params: {
+    doctorId: string;
+    appointmentDate: string;
+    timeSlot: { startTime: string; endTime: string };
+    consultationMode: 'in_clinic' | 'video' | 'home_visit';
+    patientName: string;
+    phone: string;
+    email?: string;
+    age?: number;
+    gender?: string;
+    clinicalReason?: string;
+    serviceLocationAddress?: string;
+    serviceLocationCity?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/appointments', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res.data;
+  },
+
+  async getMyAppointments(params?: { filter?: string; status?: string }) {
+    const query = new URLSearchParams();
+    if (params?.filter) query.set('filter', params.filter);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/appointments/me${queryString}`);
+    return res.data;
+  },
+
+  async getAppointmentById(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/appointments/${id}`);
+    return res.data;
+  },
+
+  async rescheduleAppointment(
+    id: string,
+    params: {
+      newDate: string;
+      newTimeSlot: { startTime: string; endTime: string };
+      reason?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/appointments/${id}/reschedule`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res.data;
+  },
+
+  async cancelAppointment(id: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/appointments/${id}/cancel`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reason }),
+    });
+    return res.data;
+  },
+
+  async updateStatus(
+    id: string,
+    params: {
+      status: string;
+      doctorNotes?: string;
+      prescription?: any;
+      reason?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/appointments/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res.data;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Hospital Referral & Dashboard APIs (Phase 6)
+// -----------------------------------------------------------------------------
+export interface ReferralCreatePayload {
+  referringStaff: {
+    name: string;
+    department: string;
+    designation: string;
+    phone: string;
+    email?: string;
+  };
+  patientDetails: {
+    fullName: string;
+    phone: string;
+    email?: string;
+    age: number;
+    gender: 'male' | 'female' | 'other' | 'prefer_not_to_say';
+    ipdNumber?: string;
+    dischargeDate?: string;
+    address: string;
+    city?: string;
+    pincode: string;
+    cluster?: string;
+  };
+  clinicalSummary: {
+    primaryDiagnosis: string;
+    secondaryConditions?: string[];
+    surgicalHistory?: string;
+    dietaryRestrictions?: string;
+    mobilityStatus?: 'ambulatory' | 'assisted_walker' | 'wheelchair_bound' | 'bedbound';
+    palliativeCareNeeds?: string;
+    clinicalNotes?: string;
+  };
+  requestedServices: Array<{
+    serviceCode: string;
+    serviceName: string;
+    frequency?: 'daily' | 'alternate_days' | 'weekly' | 'as_needed' | 'one_time';
+    durationDays?: number;
+    preferredStartDate: string;
+    preferredTimeSlot?: 'morning' | 'afternoon' | 'evening' | 'any';
+    instructions?: string;
+  }>;
+  equipmentRequired?: Array<{
+    itemType: string;
+    name: string;
+    quantity: number;
+    urgency?: 'routine' | 'urgent' | 'immediate';
+    deliveryDate?: string;
+    durationWeeks?: number;
+    specialInstructions?: string;
+  }>;
+  priority?: 'routine' | 'urgent' | 'immediate';
+}
+
+export const hospitalsApi = {
+  async getProfile() {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>('/api/v1/hospitals/profile');
+    return res.data;
+  },
+
+  async updateProfile(data: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/hospitals/profile', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    return res.data;
+  },
+
+  async getServicesCatalog() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        services: any[];
+        equipment: any[];
+      };
+    }>('/api/v1/hospitals/services-catalog');
+    return res.data;
+  },
+
+  async getDashboardStats() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        overview: {
+          totalReferrals: number;
+          activeInHomeCare: number;
+          pendingTriage: number;
+          completedEpisodes: number;
+          rejectedCount: number;
+          totalEquipmentDeployed: number;
+          turnaroundAvgHours: number;
+        };
+        statusBreakdown: Record<string, number>;
+        departmentBreakdown: Record<string, number>;
+        serviceTypeBreakdown: Record<string, number>;
+      };
+    }>('/api/v1/hospitals/dashboard/stats');
+    return res.data;
+  },
+
+  async createReferral(payload: ReferralCreatePayload) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/hospitals/referrals', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res.data;
+  },
+
+  async getReferrals(params?: {
+    status?: string;
+    priority?: string;
+    search?: string;
+    department?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.priority && params.priority !== 'all') query.set('priority', params.priority);
+    if (params?.search) query.set('search', params.search);
+    if (params?.department && params.department !== 'all') query.set('department', params.department);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/hospitals/referrals${queryString}`);
+    return res;
+  },
+
+  async getReferralById(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/hospitals/referrals/${id}`);
+    return res.data;
+  },
+
+  async updateReferralStatus(
+    id: string,
+    params: {
+      status: string;
+      reason?: string;
+      notes?: string;
+      changedByName?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/hospitals/referrals/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res.data;
+  },
+
+  async evaluateCareBundle(id: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/hospitals/referrals/${id}/evaluate-bundle`, {
+      method: 'POST',
+    });
+    return res.data;
+  },
+
+  async assignProviders(
+    id: string,
+    params: {
+      providers: Array<{
+        professionalId?: string;
+        name: string;
+        role: string;
+        phone?: string;
+        serviceAssigned: string;
+      }>;
+      reviewNotes?: string;
+      approveImmediately?: boolean;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/hospitals/referrals/${id}/assign-providers`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res.data;
+  },
+
+  async recordVisit(
+    id: string,
+    params: {
+      visitDate: string;
+      providerName: string;
+      providerRole: string;
+      vitals?: {
+        bloodPressure?: string;
+        pulse?: number;
+        spO2?: number;
+        temperature?: string;
+        respiratoryRate?: number;
+      };
+      clinicalObservation: string;
+      proceduresPerformed?: string[];
+      medicationsAdministered?: string[];
+      nextFollowUpDate?: string;
+      isFinalVisit?: boolean;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/hospitals/referrals/${id}/visits`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res.data;
+  },
+
+  async getReferralCompletionSummary(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/hospitals/referrals/${id}/completion-summary`);
+    return res.data;
+  },
+
+  async acknowledgeReferralSummary(id: string, params: { acknowledgedByName: string; notes?: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/hospitals/referrals/${id}/acknowledge-summary`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Admin & Operations APIs (Role: admin | super_admin)
+// -----------------------------------------------------------------------------
+export const adminApi = {
+  async getOverview() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        totalUsers: number;
+        totalPatients: number;
+        totalProfessionals: number;
+        totalHospitals: number;
+        totalBookings: number;
+        activeBookings: number;
+        completedBookings: number;
+        totalReferrals: number;
+        activeReferrals: number;
+        emergencyReferrals: number;
+        pendingCredentialsCount: number;
+        openSupportTicketsCount: number;
+        recentAuditLogs: any[];
+        recentExceptions: {
+          unassignedBookings: any[];
+          urgentPendingReferrals: any[];
+        };
+        lastUpdated: string;
+      };
+    }>('/api/v1/admin/dashboard/overview');
+    return res.data;
+  },
+
+  async getUsers(params?: {
+    role?: string;
+    status?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.role && params.role !== 'all') query.set('role', params.role);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/admin/users${queryString}`);
+    return res;
+  },
+
+  async updateUserStatus(id: string, status: 'active' | 'suspended' | 'pending_verification') {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/users/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    return res;
+  },
+
+  async getCredentials(params?: {
+    status?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/admin/credentials${queryString}`);
+    return res;
+  },
+
+  async reviewCredential(
+    id: string,
+    params: {
+      status: 'pending' | 'approved' | 'rejected' | 'expired';
+      notes?: string;
+      reason?: string;
+      expiryDate?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/credentials/${id}/review`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async getHospitals(params?: { search?: string; status?: string }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/admin/hospitals${queryString}`);
+    return res.data;
+  },
+
+  async onboardHospital(data: {
+    hospitalName: string;
+    registrationNumber: string;
+    adminUserId?: string;
+    contactPerson: {
+      name: string;
+      role?: string;
+      phone: string;
+      email: string;
+    };
+    address: {
+      city: string;
+      state: string;
+      pincode: string;
+      street?: string;
+    };
+    palliativeCareServicesOffered?: string[];
+    bedCapacity?: number;
+    emergencyCoordinationAvailable?: boolean;
+    accreditationLevel?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/hospitals', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async updateHospitalStatus(id: string, isActive: boolean) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/hospitals/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    });
+    return res;
+  },
+
+  async getServices() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/admin/services');
+    return res.data;
+  },
+
+  async updateServiceAvailability(id: string, isActive: boolean) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/services/${id}/availability`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isActive }),
+    });
+    return res;
+  },
+
+  async getExceptions() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        unassignedBookings: any[];
+        urgentPendingReferrals: any[];
+        stalledCases: any[];
+        totalExceptions: number;
+      };
+    }>('/api/v1/admin/exceptions');
+    return res.data;
+  },
+
+  async getAuditLogs(params?: {
+    category?: string;
+    severity?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.severity && params.severity !== 'all') query.set('severity', params.severity);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/admin/audit-logs${queryString}`);
+    return res;
+  },
+
+  async getSupportTickets(params?: { status?: string; priority?: string }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.priority && params.priority !== 'all') query.set('priority', params.priority);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/admin/support-tickets${queryString}`);
+    return res.data;
+  },
+
+  async updateSupportTicket(
+    id: string,
+    params: {
+      status?: string;
+      resolutionNotes?: string;
+      isEscalated?: boolean;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/support-tickets/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async getOrders(params?: {
+    status?: string;
+    paymentStatus?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.paymentStatus && params.paymentStatus !== 'all') query.set('paymentStatus', params.paymentStatus);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/admin/orders${queryString}`);
+    return res;
+  },
+
+  async getOrderById(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/admin/orders/${id}`);
+    return res.data;
+  },
+
+  async updateOrderStatus(id: string, params: { status: string; trackingMessage?: string; location?: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/orders/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async assignInstallationSpecialist(
+    id: string,
+    params: {
+      specialistId?: string;
+      specialistName: string;
+      setupDate?: string;
+      setupNotes?: string;
+      setupStatus?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/orders/${id}/setup`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async addOrderTrackingEvent(
+    id: string,
+    params: {
+      status: string;
+      message: string;
+      location?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/orders/${id}/tracking`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async getAdminFieldVisits(params?: {
+    status?: string;
+    visitType?: string;
+    date?: string;
+    providerId?: string;
+    hospitalId?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.visitType && params.visitType !== 'all') query.set('visitType', params.visitType);
+    if (params?.date) query.set('date', params.date);
+    if (params?.providerId) query.set('providerId', params.providerId);
+    if (params?.hospitalId) query.set('hospitalId', params.hospitalId);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/admin/field-visits${queryString}`);
+    return res;
+  },
+
+  async getAdminFieldVisitStats() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        totalVisits: number;
+        todayCount: number;
+        inProgressCount: number;
+        completedTodayCount: number;
+        overdueCount: number;
+        exceptionsCount: number;
+        pendingInstallationsCount: number;
+      };
+    }>('/api/v1/admin/field-visits/stats');
+    return res.data;
+  },
+
+  async reassignFieldVisit(
+    id: string,
+    params: {
+      providerId?: string;
+      providerName?: string;
+      providerPhone?: string;
+      reason?: string;
+      notes?: string;
+      scheduledDate?: string;
+      timeSlot?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/field-visits/${id}/assign`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async getSyncLogs(params?: {
+    status?: string;
+    operationType?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.operationType && params.operationType !== 'all') query.set('operationType', params.operationType);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/sync-logs${qs}`);
+    return res;
+  },
+
+  async getSyncStats() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        total: number;
+        applied: number;
+        conflicts: number;
+        failed: number;
+      };
+    }>('/api/v1/admin/sync-logs/stats');
+    return res.data;
+  },
+
+  async getNotificationLogs(params?: {
+    channel?: string;
+    status?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.channel && params.channel !== 'all') query.set('channel', params.channel);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/notifications${qs}`);
+    return res;
+  },
+
+  async retryNotification(id: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/notifications/${id}/retry`, {
+      method: 'POST',
+    });
+    return res;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Super-Admin Governance APIs (Strictly Role: super_admin)
+// -----------------------------------------------------------------------------
+export const superAdminApi = {
+  async getGovernanceOverview() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        totalSystemAccounts: number;
+        adminsCount: number;
+        superAdminsCount: number;
+        hospitalsRegistered: number;
+        activeAuditAlertsCount: number;
+        escalatedCasesCount: number;
+        criticalSecurityEvents: any[];
+        systemUptimeSec: number;
+        nodeVersion: string;
+        environment: string;
+        generatedAt: string;
+      };
+    }>('/api/v1/admin/super/governance/overview');
+    return res.data;
+  },
+
+  async getAdmins() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/admin/super/admins');
+    return res.data;
+  },
+
+  async createAdmin(data: {
+    fullName: string;
+    email: string;
+    phone: string;
+    password?: string;
+    role?: 'admin' | 'super_admin';
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/super/admins', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async updateAdminRole(id: string, role: 'admin' | 'super_admin' | 'hospital_staff' | 'patient' | 'professional') {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/super/admins/${id}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role }),
+    });
+    return res;
+  },
+
+  async getSystemHealth() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        overallStatus: 'HEALTHY' | 'DEGRADED' | 'CRITICAL';
+        checkedAt: string;
+        services: {
+          database: {
+            status: string;
+            latencyMs: number;
+            connection: string;
+          };
+          aiFastApiGateway: {
+            status: string;
+            endpoint: string;
+            type: string;
+          };
+          s3Storage: {
+            status: string;
+            provider: string;
+            bucketConfigured: boolean;
+          };
+          smsGateway: {
+            status: string;
+            mode: string;
+          };
+        };
+      };
+    }>('/api/v1/admin/super/system-health');
+    return res.data;
+  },
+
+  async getEscalations() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/admin/super/escalations');
+    return res.data;
+  },
+
+  async listOrders(params?: {
+    status?: string;
+    paymentStatus?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.paymentStatus && params.paymentStatus !== 'all') query.set('paymentStatus', params.paymentStatus);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/orders${qs}`);
+    return res;
+  },
+
+  async getOrderDetails(orderId: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/admin/orders/${orderId}`);
+    return res.data;
+  },
+
+  async updateOrderStatus(orderId: string, payload: { status: string; trackingMessage?: string; location?: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/orders/${orderId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+
+  async assignInstallationSpecialist(orderId: string, payload: {
+    specialistId?: string;
+    specialistName: string;
+    setupDate?: string;
+    setupNotes?: string;
+    setupStatus?: 'pending' | 'scheduled' | 'completed';
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/orders/${orderId}/setup`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+
+  async addOrderTrackingEvent(orderId: string, payload: { status: string; message: string; location?: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/orders/${orderId}/tracking`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+
+  async getSyncLogs(params?: {
+    status?: string;
+    operationType?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.operationType && params.operationType !== 'all') query.set('operationType', params.operationType);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/sync-logs${qs}`);
+    return res;
+  },
+
+  async getSyncStats() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        total: number;
+        applied: number;
+        conflicts: number;
+        failed: number;
+      };
+    }>('/api/v1/admin/sync-logs/stats');
+    return res.data;
+  },
+
+  async getNotificationLogs(params?: {
+    channel?: string;
+    status?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.channel && params.channel !== 'all') query.set('channel', params.channel);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/notifications${qs}`);
+    return res;
+  },
+
+  async retryNotification(id: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/notifications/${id}/retry`, {
+      method: 'POST',
+    });
+    return res;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Medical Products & DME Commerce APIs
+// -----------------------------------------------------------------------------
+export const productsApi = {
+  async getCategories() {
+    const res = await request<{
+      success: boolean;
+      data: Array<{ id: string; label: string }>;
+    }>('/api/v1/products/categories');
+    return res.data;
+  },
+
+  async getProducts(params?: {
+    category?: string;
+    search?: string;
+    rentalOnly?: boolean;
+    inStockOnly?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.search) query.set('search', params.search);
+    if (params?.rentalOnly) query.set('rentalOnly', 'true');
+    if (params?.inStockOnly) query.set('inStockOnly', 'true');
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/products${queryString}`);
+    return res;
+  },
+
+  async getProductById(idOrSku: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/products/${idOrSku}`);
+    return res.data;
+  },
+
+  async validateCart(items: Array<{ productId: string; quantity: number; isRental?: boolean; rentalDurationMonths?: number }>) {
+    const res = await request<{
+      success: boolean;
+      data: {
+        items: any[];
+        pricing: { subtotal: number; deliveryFee: number; taxGst: number; totalAmount: number };
+        warnings: string[];
+        totalItemCount: number;
+        hasUnavailableItems: boolean;
+      };
+    }>('/api/v1/products/cart/validate', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
+    return res.data;
+  },
+
+  async getCart() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        items: any[];
+        pricing: { subtotal: number; deliveryFee: number; taxGst: number; totalAmount: number };
+        warnings: string[];
+        totalItemCount: number;
+        hasUnavailableItems: boolean;
+      };
+    }>('/api/v1/products/cart');
+    return res.data;
+  },
+
+  async saveCart(items: Array<{ productId: string; quantity: number; isRental?: boolean; rentalDurationMonths?: number }>) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/products/cart', {
+      method: 'PUT',
+      body: JSON.stringify({ items }),
+    });
+    return res.data;
+  },
+
+  async clearCart() {
+    const res = await request<{
+      success: boolean;
+      message: string;
+    }>('/api/v1/products/cart', {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async placeOrder(data: {
+    items: Array<{
+      productId: string;
+      quantity: number;
+      isRental?: boolean;
+      rentalDurationMonths?: number;
+    }>;
+    deliveryAddress: {
+      street: string;
+      city: string;
+      state?: string;
+      pincode: string;
+      contactPhone?: string;
+    };
+    paymentMethod?: 'online' | 'cod' | 'insurance_claim';
+    hospitalReferralId?: string;
+    idempotencyKey?: string;
+    installationPreferences?: {
+      preferredDate?: string;
+      preferredSlot?: string;
+      accessInstructions?: string;
+    };
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/products/orders', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getMyOrders() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/products/orders/me');
+    return res.data;
+  },
+
+  async getOrderById(orderIdOrNumber: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}`);
+    return res.data;
+  },
+
+  async getPaymentConfig() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        isConfigured: boolean;
+        keyId: string;
+        mode: string;
+        missingConfigNotice: string | null;
+        allowedPaymentMethods: string[];
+      };
+    }>('/api/v1/products/payments/config');
+    return res.data;
+  },
+
+  async createPaymentIntent(orderId: string) {
+    const res = await request<{
+      success: boolean;
+      data: {
+        orderId: string;
+        orderNumber: string;
+        razorpayOrderId: string;
+        amount: number;
+        currency: string;
+        keyId: string;
+        isTestMode: boolean;
+        notice: string | null;
+      };
+    }>('/api/v1/products/payments/create-intent', {
+      method: 'POST',
+      body: JSON.stringify({ orderId }),
+    });
+    return res.data;
+  },
+
+  async verifyPayment(payload: {
+    orderId: string;
+    razorpayOrderId: string;
+    razorpayPaymentId: string;
+    razorpaySignature: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/products/payments/verify', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+
+  async cancelOrder(orderIdOrNumber: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
+  async requestReturn(orderIdOrNumber: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}/return-request`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
+  async scheduleClinicianSetup(orderIdOrNumber: string, payload: {
+    setupDate: string;
+    setupSlot?: string;
+    setupNotes?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}/setup-schedule`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Field Visits & Clinician Operations APIs
+// -----------------------------------------------------------------------------
+export const fieldVisitsApi = {
+  async getMyFieldVisits(params?: {
+    status?: string;
+    date?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.date) query.set('date', params.date);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: {
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      };
+      data: any[];
+    }>(`/api/v1/visits/provider/me${queryString}`);
+    return res;
+  },
+
+  async getVisitById(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/visits/${id}`);
+    return res.data;
+  },
+
+  async updateVisitStatus(id: string, params: { status: string; notes?: string; location?: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async recordClinicalDocumentation(
+    id: string,
+    params: {
+      vitals?: {
+        bloodPressure?: string;
+        pulse?: number;
+        spO2?: number;
+        temperature?: string;
+        respiratoryRate?: number;
+      };
+      clinicalNotes?: string;
+      proceduresPerformed?: string[];
+      medicationsAdministered?: string[];
+      recommendations?: string;
+      followUpDate?: string;
+      markAsCompleted?: boolean;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${id}/documentation`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async reportVisitException(
+    id: string,
+    params: {
+      exceptionType: string;
+      reason: string;
+      notes?: string;
+      rescheduleDate?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${id}/exception`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async verifyEquipmentInstallation(
+    id: string,
+    params: {
+      equipmentItems: Array<{
+        sku: string;
+        name: string;
+        serialNumber: string;
+        condition: string;
+        checklistPassed: boolean;
+      }>;
+      barcodeScanVerified: boolean;
+      barcodeRawData?: string;
+      patientAcknowledged: boolean;
+      patientOrCaregiverName: string;
+      consentObtained: boolean;
+      evidenceNotes?: string;
+      installationNotes?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${id}/installation-verify`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async failInstallation(
+    id: string,
+    params: {
+      failedReason: string;
+      escalatedToAdmin: boolean;
+      rescheduledToDate?: string;
+      notes?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${id}/installation-fail`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async syncOfflineBatch(operations: Array<{
+    clientOperationId: string;
+    visitId: string;
+    visitNumber?: string;
+    operationType: 'status_update' | 'clinical_documentation' | 'installation_verification' | 'visit_exception';
+    clientTimestamp: string;
+    expectedStatus?: string;
+    payload: any;
+  }>) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: {
+        success: boolean;
+        summary: {
+          total: number;
+          applied: number;
+          conflicts: number;
+          failed: number;
+        };
+        results: Array<{
+          clientOperationId: string;
+          status: 'applied' | 'conflict' | 'failed';
+          visitId: string;
+          visitNumber?: string;
+          visitStatus?: string;
+          conflictDetails?: any;
+          errorReason?: string;
+        }>;
+      };
+    }>('/api/v1/visits/sync', {
+      method: 'POST',
+      body: JSON.stringify({ operations }),
+    });
+    return res;
+  },
+};
+
+
+
+

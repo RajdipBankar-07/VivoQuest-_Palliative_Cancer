@@ -9,6 +9,13 @@ import { serviceRoutes } from './routes/serviceRoutes.js';
 import { bookingRoutes } from './routes/bookingRoutes.js';
 import { uploadRoutes } from './routes/uploadRoutes.js';
 import { aiRoutes } from './routes/aiRoutes.js';
+import { doctorRoutes } from './routes/doctorRoutes.js';
+import { appointmentRoutes } from './routes/appointmentRoutes.js';
+import { hospitalRoutes } from './routes/hospitalRoutes.js';
+import { adminRoutes } from './routes/adminRoutes.js';
+import { productRoutes } from './routes/productRoutes.js';
+import { fieldVisitRoutes } from './routes/fieldVisitRoutes.js';
+import { patientRoutes } from './routes/patientRoutes.js';
 
 export const createApp = (): Express => {
   const app = express();
@@ -56,6 +63,13 @@ export const createApp = (): Express => {
   app.use('/api/v1/bookings', bookingRoutes);
   app.use('/api/v1/uploads', uploadRoutes);
   app.use('/api/v1/ai', aiRoutes);
+  app.use('/api/v1/doctors', doctorRoutes);
+  app.use('/api/v1/appointments', appointmentRoutes);
+  app.use('/api/v1/hospitals', hospitalRoutes);
+  app.use('/api/v1/admin', adminRoutes);
+  app.use('/api/v1/products', productRoutes);
+  app.use('/api/v1/visits', fieldVisitRoutes);
+  app.use('/api/v1/patients', patientRoutes);
 
   // 5. Mock Storage Handler (For local testing without AWS S3)
   app.put('/api/v1/mock-storage/upload/:fileId', express.raw({ type: '*/*', limit: '20mb' }), (req, res) => {

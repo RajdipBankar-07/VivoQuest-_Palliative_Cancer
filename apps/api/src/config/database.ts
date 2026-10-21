@@ -32,7 +32,10 @@ export const connectDatabase = async (): Promise<typeof mongoose> => {
     });
   } catch (error: any) {
     console.error(`[MongoDB] Initial connection failed: ${error.message}`);
-    // Do not crash the entire process immediately in local dev/testing if DB is booting
+    if (env.NODE_ENV === 'production') {
+      throw new Error(`Production database startup failure: ${error.message}`);
+    }
+    // Do not crash process in local dev/testing if DB is booting
     return mongoose;
   }
 };

@@ -60,7 +60,7 @@ export const registerUser = async (data: RegisterDTO) => {
 
   // Normalize role
   const normalizedRole = (data.role || 'patient').toLowerCase() as UserRole;
-  const validRoles: UserRole[] = ['patient', 'caregiver', 'professional', 'hospital', 'supplier', 'admin'];
+  const validRoles: UserRole[] = ['patient', 'caregiver', 'professional', 'hospital', 'supplier', 'admin', 'super_admin'];
   if (!validRoles.includes(normalizedRole)) {
     throw new AppError(`Invalid role '${data.role}'. Supported roles: ${validRoles.join(', ')}`, 400);
   }

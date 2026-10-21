@@ -17,7 +17,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Menu,
-  Trophy
+  Trophy,
+  Calendar,
+  Stethoscope,
+  Activity
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -47,6 +50,8 @@ export default function Sidebar() {
 
   const mainTabs = [
     { href: '/dashboard', label: 'Dashboard', icon: Home },
+    { href: '/doctors', label: 'Find a Doctor', icon: Stethoscope },
+    { href: '/appointments', label: 'Appointments', icon: Calendar },
     { href: '/journey', label: 'Journey', icon: Compass },
     { href: '/gamification', label: 'Rewards & Arena', icon: Trophy },
     { href: '/vivoai', label: 'VivoAI Coach', icon: Bot },
@@ -65,17 +70,26 @@ export default function Sidebar() {
 
   const filteredPortals: Array<{ href: string; label: string; icon: any }> = [];
   
-  if (role === 'CORP_ADMIN' || role === 'SUPER_ADMIN') {
+  if (role === 'professional' || role === 'super_admin' || role === 'SUPER_ADMIN' || role === 'admin') {
+    filteredPortals.push({ href: '/doctor/dashboard', label: 'Doctor Schedule Portal', icon: Stethoscope });
+  }
+  if (role === 'hospital' || role === 'hospital_staff' || role === 'super_admin' || role === 'SUPER_ADMIN' || role === 'admin') {
+    filteredPortals.push({ href: '/hospital/dashboard', label: 'Hospital Portal', icon: Building2 });
+  }
+  if (role === 'admin' || role === 'super_admin' || role === 'SUPER_ADMIN') {
+    filteredPortals.push({ href: '/admin/dashboard', label: 'Admin Operations', icon: Activity });
+  }
+  if (role === 'super_admin' || role === 'SUPER_ADMIN') {
+    filteredPortals.push({ href: '/super-admin/dashboard', label: 'Super-Admin Governance', icon: Settings });
+  }
+  if (role === 'CORP_ADMIN' || role === 'super_admin' || role === 'SUPER_ADMIN') {
     filteredPortals.push({ href: '/corporate-wellness', label: 'Corporate Wellness', icon: Building2 });
   }
-  if (role === 'LEADER' || role === 'SUPER_ADMIN') {
+  if (role === 'LEADER' || role === 'super_admin' || role === 'SUPER_ADMIN') {
     filteredPortals.push({ href: '/creator', label: 'Creator Portal', icon: Sparkles });
   }
-  if (role === 'CLINICAL_OP' || role === 'SUPER_ADMIN') {
+  if (role === 'CLINICAL_OP' || role === 'super_admin' || role === 'SUPER_ADMIN') {
     filteredPortals.push({ href: '/clinical', label: 'Clinical Operator', icon: HeartHandshake });
-  }
-  if (role === 'SUPER_ADMIN') {
-    filteredPortals.push({ href: '/admin', label: 'Super Admin Console', icon: Settings });
   }
 
   const handleLogout = async () => {

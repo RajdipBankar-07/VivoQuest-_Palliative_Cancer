@@ -8,13 +8,15 @@ export function middleware(request: NextRequest) {
   
   const path = request.nextUrl.pathname;
 
+  const isAdmin = Boolean(role && ['admin', 'super_admin', 'SUPER_ADMIN'].includes(role));
+
   // =====================================================
   // Admin Login Page — PUBLIC (no auth required)
   // =====================================================
   if (path === '/admin/login') {
-    // If already authenticated as SUPER_ADMIN, redirect to dashboard
-    if (token && role === 'SUPER_ADMIN') {
-      return NextResponse.redirect(new URL('/admin', request.url));
+    // If already authenticated as admin or super_admin, redirect to dashboard
+    if (token && isAdmin) {
+      return NextResponse.redirect(new URL('/admin/dashboard', request.url));
     }
     return NextResponse.next();
   }
@@ -51,8 +53,8 @@ export function middleware(request: NextRequest) {
   // =====================================================
   if (path.startsWith('/auth/login') || path.startsWith('/auth/signup') || path.startsWith('/auth/forgot-password')) {
     if (token) {
-      if (role === 'SUPER_ADMIN') {
-        return NextResponse.redirect(new URL('/admin', request.url));
+      if (isAdmin) {
+        return NextResponse.redirect(new URL('/admin/dashboard', request.url));
       }
       return NextResponse.redirect(new URL('/dashboard', request.url));
     }
@@ -62,13 +64,17 @@ export function middleware(request: NextRequest) {
   // Role-based gates
   // =====================================================
 
-  // Only SUPER_ADMIN can access /admin (any sub-path)
-  if (path.startsWith('/admin') && role !== 'SUPER_ADMIN') {
-    return NextResponse.redirect(new URL('/admin/login', request.url));
+  // Only admin and super_admin can access /admin (any sub-path)
+  if (path.startsWith('/admin')) {
+    if (!isAdmin) {
+      return NextResponse.redirect(new URL('/admin/login', request.url));
+    }
+    if (path === '/admin') {
+      return NextResponse.redirect(new URL('/admin/dashboard', request.url));
+    }
   }
 
-
-  if (path.startsWith('/corporate-wellness') && role !== 'CORP_ADMIN' && role !== 'SUPER_ADMIN' && tier !== 'ENTERPRISE') {
+  if (path.startsWith('/corporate-wellness') && role !== 'CORP_ADMIN' && !isAdmin && tier !== 'ENTERPRISE') {
     return NextResponse.redirect(new URL('/subscription', request.url));
   }
 

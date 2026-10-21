@@ -112,23 +112,41 @@ export default function AboutPage() {
         </div>
       </section>
 
-      {/* Data Protection & DPDP Act Statement */}
-      <section id="safety" className="w-full py-16 bg-white border-b border-border">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="p-8 sm:p-10 rounded-3xl bg-navy text-white border border-navy-light/40 flex flex-col md:flex-row items-center gap-8 shadow-xl">
+      {/* Data Protection, Privacy & Terms of Service */}
+      <section id="safety" className="w-full py-16 bg-white border-b border-border scroll-mt-20">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+          <div id="privacy" className="scroll-mt-24 p-8 sm:p-10 rounded-3xl bg-navy text-white border border-navy-light/40 flex flex-col md:flex-row items-center gap-8 shadow-xl">
             <div className="w-16 h-16 rounded-2xl bg-white/10 text-secondary-light flex items-center justify-center shrink-0 border border-white/15">
               <Lock size={32} />
             </div>
 
             <div className="flex flex-col text-left">
               <span className="text-xs font-bold uppercase tracking-wider text-secondary-light mb-1">
-                Data Privacy &amp; Regulatory Protection
+                Data Privacy &amp; Protection
               </span>
               <h2 className="text-xl sm:text-2xl font-bold text-white mb-2">
-                India DPDP Act (2023) Aligned Architecture
+                Privacy Notice &amp; Patient Data Safeguards
               </h2>
               <p className="text-sm text-white/80 leading-relaxed">
-                All patient identifiers, biometrics, and medical records are stored strictly in India within AWS Mumbai (ap-south-1). We mandate explicit purpose-limited consent, ensure field workers only see task-relevant instructions, and log all data access into immutable security audit trails.
+                All patient health records and personal identifiers are handled with role-based access control and purpose-limited consent. Data is stored encrypted in secure regional cloud infrastructure with strict audit logs. Field clinicians only access information necessary for active care visits.
+              </p>
+            </div>
+          </div>
+
+          <div id="terms" className="scroll-mt-24 p-8 sm:p-10 rounded-3xl bg-background border border-border flex flex-col md:flex-row items-center gap-8 shadow-card text-navy">
+            <div className="w-16 h-16 rounded-2xl bg-primary-light text-primary flex items-center justify-center shrink-0 border border-primary/20">
+              <Shield size={32} />
+            </div>
+
+            <div className="flex flex-col text-left">
+              <span className="text-xs font-bold uppercase tracking-wider text-primary mb-1">
+                Platform Terms
+              </span>
+              <h2 className="text-xl sm:text-2xl font-bold text-navy mb-2">
+                Terms of Service &amp; Marketplace Operating Standards
+              </h2>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                VivoQuest acts as a technology facilitation marketplace connecting patients with independent, licensed clinicians and certified equipment suppliers. Services are scheduled for non-emergency home health. Clinicians operate under their respective professional licensure and regulatory council guidelines.
               </p>
             </div>
           </div>

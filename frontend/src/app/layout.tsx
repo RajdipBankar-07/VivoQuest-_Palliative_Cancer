@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import '../index.css';
+import { Providers } from '@/components/Providers';
 
 export const metadata: Metadata = {
   title: 'VivoQuest — Better Healthcare, Right at Home',
@@ -34,9 +35,11 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>
       <body className="min-h-screen bg-background text-navy antialiased selection:bg-primary/20 selection:text-primary">
-        <div className="relative min-h-screen flex flex-col">
-          {children}
-        </div>
+        <Providers>
+          <div className="relative min-h-screen flex flex-col">
+            {children}
+          </div>
+        </Providers>
       </body>
     </html>
   );

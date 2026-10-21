@@ -15,10 +15,11 @@ export interface IProfessionalCredentials extends Document {
   issueDate?: Date;
   expiryDate?: Date;
   uploadedFileId: mongoose.Types.ObjectId;
-  verificationStatus: 'pending' | 'verified' | 'rejected';
+  verificationStatus: 'pending' | 'approved' | 'rejected' | 'expired' | 'verified';
   verifiedAt?: Date;
   verifiedBy?: mongoose.Types.ObjectId;
   rejectionReason?: string;
+  reviewNotes?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -62,7 +63,7 @@ const ProfessionalCredentialsSchema = new Schema<IProfessionalCredentials>(
     },
     verificationStatus: {
       type: String,
-      enum: ['pending', 'verified', 'rejected'],
+      enum: ['pending', 'approved', 'rejected', 'expired', 'verified'],
       default: 'pending',
       index: true,
     },
@@ -72,6 +73,7 @@ const ProfessionalCredentialsSchema = new Schema<IProfessionalCredentials>(
       ref: 'User',
     },
     rejectionReason: { type: String, trim: true },
+    reviewNotes: { type: String, trim: true },
   },
   {
     timestamps: true,

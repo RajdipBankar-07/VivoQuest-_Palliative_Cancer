@@ -186,11 +186,54 @@ export default function SignInPage() {
                 required
               />
 
+              {/* Quick Fill Demo Chips */}
+              <div className="pt-1">
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1.5">
+                  Demo Test Accounts:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {role === 'hospital' ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setPhone('9822011111')}
+                        className="text-[11px] px-2.5 py-1 rounded-lg bg-navy/5 border border-navy/15 text-navy font-medium hover:bg-navy/10 transition-colors"
+                      >
+                        Ruby Hall Clinic (+91 98220 11111)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPhone('9822022222')}
+                        className="text-[11px] px-2.5 py-1 rounded-lg bg-navy/5 border border-navy/15 text-navy font-medium hover:bg-navy/10 transition-colors"
+                      >
+                        Sahyadri Hospital (+91 98220 22222)
+                      </button>
+                    </>
+                  ) : role === 'professional' ? (
+                    <button
+                      type="button"
+                      onClick={() => setPhone('9820011001')}
+                      className="text-[11px] px-2.5 py-1 rounded-lg bg-secondary/10 border border-secondary/20 text-secondary font-medium hover:bg-secondary/20 transition-colors"
+                    >
+                      Dr. Aditi Rao (+91 98200 11001)
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setPhone('9876543210')}
+                      className="text-[11px] px-2.5 py-1 rounded-lg bg-primary/10 border border-primary/20 text-primary font-medium hover:bg-primary/20 transition-colors"
+                    >
+                      Demo Patient (+91 98765 43210)
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <Button
                 type="submit"
-                variant={role === 'professional' ? 'secondary' : 'primary'}
+                variant={role === 'professional' ? 'secondary' : role === 'hospital' ? 'navy' : 'primary'}
                 size="lg"
-                className="w-full justify-center"
+                className="w-full justify-center mt-2"
                 rightIcon={<ArrowRight size={16} />}
               >
                 Continue to Verification
@@ -226,7 +269,7 @@ export default function SignInPage() {
 
               <Button
                 type="submit"
-                variant={role === 'professional' ? 'secondary' : 'primary'}
+                variant={role === 'professional' ? 'secondary' : role === 'hospital' ? 'navy' : 'primary'}
                 size="lg"
                 isLoading={isLoading}
                 className="w-full justify-center"
@@ -256,9 +299,28 @@ export default function SignInPage() {
               </div>
 
               <div className="space-y-2">
-                <Button href="/services" variant="primary" size="md" className="w-full justify-center">
-                  Go to Services Directory
-                </Button>
+                {authResponse.user.role === 'professional' ? (
+                  <Button href="/doctor/dashboard" variant="secondary" size="md" className="w-full justify-center">
+                    Go to Doctor Schedule Portal
+                  </Button>
+                ) : authResponse.user.role === 'hospital' ? (
+                  <Button href="/hospital/dashboard" variant="primary" size="md" className="w-full justify-center">
+                    Go to Hospital Referral Dashboard
+                  </Button>
+                ) : (
+                  <Button href="/doctors" variant="primary" size="md" className="w-full justify-center">
+                    Find a Doctor &amp; Book Appointment
+                  </Button>
+                )}
+                {authResponse.user.role === 'hospital' ? (
+                  <Button href="/hospital/referrals/new" variant="outline" size="md" className="w-full justify-center">
+                    + Create New Discharge Referral
+                  </Button>
+                ) : (
+                  <Button href="/appointments" variant="outline" size="md" className="w-full justify-center">
+                    View My Appointments
+                  </Button>
+                )}
                 <Button
                   onClick={() => {
                     authApi.logout();
@@ -278,11 +340,19 @@ export default function SignInPage() {
           )}
 
           {/* Footer Registration Link */}
-          <div className="mt-6 pt-5 border-t border-border text-center text-xs text-muted-foreground">
-            <span>New to VivoQuest? </span>
-            <Link href="/register" className="font-bold text-primary hover:underline">
-              Create an Account
-            </Link>
+          <div className="mt-6 pt-5 border-t border-border text-center text-xs text-muted-foreground flex flex-col gap-2">
+            <div>
+              <span>New to VivoQuest? </span>
+              <Link href="/register" className="font-bold text-primary hover:underline">
+                Create an Account
+              </Link>
+            </div>
+            <div className="text-[11px] text-muted-foreground/80">
+              <span>Platform Operator or Administrator? </span>
+              <Link href="/admin/login" className="font-semibold text-navy hover:underline">
+                Admin Portal Login &rarr;
+              </Link>
+            </div>
           </div>
 
         </div>

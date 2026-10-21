@@ -33,7 +33,7 @@ const dispatchConfirmSchema = z.object({
 router.post(
   '/bundles/preview',
   authenticateUser,
-  requireRole(['admin', 'hospital', 'professional']),
+  requireRole(['admin', 'super_admin', 'hospital', 'professional']),
   validateRequest({ body: bundlePreviewSchema }),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -54,7 +54,7 @@ router.post(
 router.post(
   '/matching/candidates',
   authenticateUser,
-  requireRole(['admin', 'hospital', 'professional']),
+  requireRole(['admin', 'super_admin', 'hospital', 'professional']),
   validateRequest({ body: candidateSearchSchema }),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
@@ -75,7 +75,7 @@ router.post(
 router.get(
   '/dispatch/review/:bookingId',
   authenticateUser,
-  requireRole(['admin', 'hospital', 'professional']),
+  requireRole(['admin', 'super_admin', 'hospital', 'professional']),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const result = await getDispatchReview(req.params.bookingId);
@@ -95,7 +95,7 @@ router.get(
 router.post(
   '/dispatch/confirm',
   authenticateUser,
-  requireRole(['admin', 'hospital']),
+  requireRole(['admin', 'super_admin', 'hospital']),
   validateRequest({ body: dispatchConfirmSchema }),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {

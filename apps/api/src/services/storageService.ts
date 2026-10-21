@@ -200,13 +200,13 @@ export const getSecureDownloadUrl = async (fileId: string, requestingUserId: str
 
   // Authorization check based on AccessTier
   if (file.accessTier === 'RESTRICTED_VERIFICATION_ONLY') {
-    if (file.uploadedBy.toString() !== requestingUserId && requestingUserRole !== 'admin') {
+    if (file.uploadedBy.toString() !== requestingUserId && !['admin', 'super_admin'].includes(requestingUserRole)) {
       throw new AppError('Access to private credential documents is restricted to credentialing admins and the owner.', 403);
     }
   }
 
   if (file.accessTier === 'PATIENT_CLINICIAN_CONFIDENTIAL') {
-    if (file.uploadedBy.toString() !== requestingUserId && requestingUserRole !== 'admin' && requestingUserRole !== 'professional') {
+    if (file.uploadedBy.toString() !== requestingUserId && !['admin', 'super_admin'].includes(requestingUserRole) && requestingUserRole !== 'professional') {
       throw new AppError('Confidential medical records are accessible only to the patient and verified clinicians.', 403);
     }
   }
