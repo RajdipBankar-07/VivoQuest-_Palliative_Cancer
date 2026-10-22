@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import AppLayout from '../../components/AppLayout';
+import { getApiBaseUrl } from '@/lib/api';
 import { 
   CheckCircle, 
   MapPin, 
@@ -465,7 +466,7 @@ export default function ProfilePage() {
     const token = localStorage.getItem('vivo_token');
     if (!token) return;
     try {
-      const res = await fetch(`http://127.0.0.1:3001/api/billing/status/`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/billing/status/`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -484,7 +485,7 @@ export default function ProfilePage() {
     const token = localStorage.getItem('vivo_token');
     if (!token) return;
     try {
-      const res = await fetch(`http://127.0.0.1:3001/api/billing/history/`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/billing/history/`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -541,7 +542,7 @@ export default function ProfilePage() {
       const token = localStorage.getItem('vivo_token');
       if (!token) return;
       try {
-        const res = await fetch(`http://127.0.0.1:3001/api/auth/profile/`, {
+        const res = await fetch(`${getApiBaseUrl()}/api/auth/profile/`, {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {

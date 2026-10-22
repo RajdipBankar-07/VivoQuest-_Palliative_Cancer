@@ -28,6 +28,28 @@ export interface LoginDTO {
   role?: string;
 }
 
+// Designated development test numbers permitted for mock OTP in development mode
+export const DESIGNATED_TEST_PHONES = new Set([
+  '9810011111', // Patient Demo (Ramesh Kulkarni)
+  '9811011111', // Doctor Specialist Demo (Dr. Priya Nair)
+  '9822011111', // Hospital Staff Demo (Ruby Hall Clinic)
+  '9822022222', // Hospital Staff Demo (Sahyadri Hospital)
+  '9822441122', // Clinician Sister Varsha (Field Visit Demo)
+  '9822119988', // Bio-Technician Rohan Shinde (Field Visit Demo)
+  '9820011003', // Physiotherapist Priya Deshmukh (Field Visit Demo)
+  '9820011001', // Oncologist Dr. Aditi Rao (Field Visit Demo)
+  '9899009900', // Operations Lead Demo
+  '9899000001', // Super Admin Demo
+  '9876500001', // Test Suite User 1
+  '9876500002', // Test Suite User 2
+  '9876500003', // Test Suite User 3
+  '9876599001', // E2E Patient
+  '9876599002', // E2E Clinician
+  '9876599003', // E2E Hospital
+  '9876599004', // E2E Admin
+  '9876599005', // E2E Super Admin
+]);
+
 export const hashPassword = async (plainText: string): Promise<string> => {
   const salt = await bcrypt.genSalt(10);
   return bcrypt.hash(plainText, salt);
@@ -179,21 +201,40 @@ export const loginUser = async (data: LoginDTO) => {
     throw new AppError('This account has been suspended. Please contact VivoQuest Clinical Support.', 403);
   }
 
-  // Validate via password OR prototype OTP flow
+  // Validate via password OR secured prototype OTP flow
   if (data.password) {
     const isMatch = await comparePassword(data.password, user.passwordHash);
     if (!isMatch) {
       throw new AppError('Invalid credentials. Please verify your password.', 401);
     }
   } else if (data.otp) {
-    // Development prototype OTP verification
-    // Notice: Clearly labeled as development prototype until real SMS gateway (Gupshup/Twilio) is wired
     const cleanOtp = data.otp.trim();
     if (!/^\d{6}$/.test(cleanOtp)) {
       throw new AppError('Verification code must be exactly 6 digits', 400);
     }
-    // Accept valid 6-digit prototype OTP (e.g., 123456 or any 6 digits in dev mode)
-    // Mark phone as verified
+
+    // Production guard: Real SMS gateway is required in production
+    if (env.NODE_ENV === 'production' || !env.ALLOW_DEV_MOCK_OTP) {
+      throw new AppError(
+        'Live SMS OTP service is not yet configured for production. Please authenticate using your registered password.',
+        503
+      );
+    }
+
+    // In development mode: Strictly restrict mock OTP to designated test accounts
+    if (!DESIGNATED_TEST_PHONES.has(user.phone)) {
+      throw new AppError(
+        'OTP authentication is disabled for non-test accounts in development mode. Please sign in with your password.',
+        401
+      );
+    }
+
+    // Strictly enforce matching the designated mock code (default 123456)
+    if (cleanOtp !== env.DEV_MOCK_OTP_CODE) {
+      throw new AppError('Invalid verification code. Please check and try again.', 401);
+    }
+
+    // Mark phone as verified upon successful code entry
     user.isPhoneVerified = true;
   } else {
     throw new AppError('Password or OTP verification code is required', 400);

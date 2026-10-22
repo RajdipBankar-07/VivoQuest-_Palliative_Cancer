@@ -12,6 +12,7 @@ import {
   failOrRescheduleInstallation,
   processSyncBatch,
 } from '../services/fieldOperationsService.js';
+import { getCaregiverAssignedPatients } from '../services/patientService.js';
 import { FieldVisitStatus, VisitExceptionType } from '../models/FieldVisit.js';
 
 const router = Router();
@@ -23,7 +24,7 @@ const router = Router();
 router.get(
   '/provider/me',
   authenticateUser,
-  requireRole(['professional', 'admin', 'super_admin']),
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const user = req.user!;
@@ -48,6 +49,35 @@ router.get(
     }
   }
 );
+
+/**
+ * GET /api/v1/visits/provider/assigned-patients
+ * Retrieve list of distinct patients actively assigned to the authenticated provider
+ */
+router.get(
+  '/provider/assigned-patients',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const includeInactive = req.query.includeInactive === 'true';
+
+      const result = await getCaregiverAssignedPatients(user._id.toString(), user.role, {
+        includeInactive,
+      });
+
+      res.status(200).json({
+        success: true,
+        count: result.count,
+        data: result.patients,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 
 /**
  * GET /api/v1/visits/:id
@@ -82,7 +112,7 @@ router.get(
 router.patch(
   '/:id/status',
   authenticateUser,
-  requireRole(['professional', 'admin', 'super_admin']),
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const user = req.user!;
@@ -117,7 +147,7 @@ router.patch(
 router.post(
   '/:id/documentation',
   authenticateUser,
-  requireRole(['professional', 'admin', 'super_admin']),
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const user = req.user!;
@@ -159,7 +189,7 @@ router.post(
 router.post(
   '/:id/exception',
   authenticateUser,
-  requireRole(['professional', 'admin', 'super_admin']),
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const user = req.user!;
@@ -273,7 +303,7 @@ router.post(
 router.post(
   '/sync',
   authenticateUser,
-  requireRole(['professional', 'admin', 'super_admin']),
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const user = req.user!;

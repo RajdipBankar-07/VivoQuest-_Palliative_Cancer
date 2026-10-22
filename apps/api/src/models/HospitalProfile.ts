@@ -35,6 +35,11 @@ export interface IHospitalProfile extends Document {
   departments: string[];   // e.g. ["Oncology", "Cardiology", "Palliative Care", "Neurology", "Orthopedics"]
   dischargeCoordinator: IDischargeCoordinator;
   authorizedStaff: IHospitalStaffMember[];
+  verificationStatus: 'pending' | 'verified' | 'rejected';
+  verifiedAt?: Date;
+  verifiedBy?: mongoose.Types.ObjectId;
+  verificationNotes?: string;
+  licenseExpiryDate?: Date;
   isActive: boolean;
   isDemo: boolean;
   createdAt: Date;
@@ -151,6 +156,19 @@ const HospitalProfileSchema = new Schema<IHospitalProfile>(
       type: [HospitalStaffMemberSchema],
       default: [],
     },
+    verificationStatus: {
+      type: String,
+      enum: ['pending', 'verified', 'rejected'],
+      default: 'verified',
+      index: true,
+    },
+    verifiedAt: { type: Date },
+    verifiedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    verificationNotes: { type: String, trim: true },
+    licenseExpiryDate: { type: Date },
     isActive: {
       type: Boolean,
       default: true,

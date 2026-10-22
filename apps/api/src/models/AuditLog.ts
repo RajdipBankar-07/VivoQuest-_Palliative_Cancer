@@ -4,6 +4,7 @@ export type AuditLogCategory =
   | 'user_management'
   | 'credential_review'
   | 'hospital_management'
+  | 'supplier_management'
   | 'service_catalog'
   | 'booking_referral'
   | 'order_fulfillment'
@@ -44,6 +45,7 @@ const AuditLogSchema = new Schema<IAuditLog>(
         'user_management',
         'credential_review',
         'hospital_management',
+        'supplier_management',
         'service_catalog',
         'booking_referral',
         'order_fulfillment',

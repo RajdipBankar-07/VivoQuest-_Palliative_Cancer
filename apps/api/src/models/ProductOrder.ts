@@ -21,6 +21,9 @@ export interface IOrderItem {
   isRental: boolean;
   rentalDurationMonths?: number;
   setupRequired: boolean;
+  sourcingType?: 'own_stock' | 'supplier_direct';
+  supplierId?: mongoose.Types.ObjectId;
+  procurementCost?: number;
 }
 
 export interface ITrackingEvent {
@@ -43,6 +46,9 @@ export interface IProductOrder extends Document {
     deliveryFee: number;
     taxGst: number;
     totalAmount: number;
+    procurementCostTotal?: number;
+    refundAmount?: number;
+    gatewayFee?: number;
   };
   deliveryAddress: {
     street: string;
@@ -106,6 +112,9 @@ const OrderItemSchema = new Schema<IOrderItem>(
     isRental: { type: Boolean, default: false },
     rentalDurationMonths: { type: Number, min: 1 },
     setupRequired: { type: Boolean, default: false },
+    sourcingType: { type: String, enum: ['own_stock', 'supplier_direct'], default: 'own_stock' },
+    supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier' },
+    procurementCost: { type: Number, default: 0, min: 0 },
   },
   { _id: false }
 );
@@ -160,6 +169,9 @@ const ProductOrderSchema = new Schema<IProductOrder>(
       deliveryFee: { type: Number, required: true, default: 0 },
       taxGst: { type: Number, required: true, default: 0 },
       totalAmount: { type: Number, required: true, min: 0 },
+      procurementCostTotal: { type: Number, default: 0, min: 0 },
+      refundAmount: { type: Number, default: 0, min: 0 },
+      gatewayFee: { type: Number, default: 0, min: 0 },
     },
     deliveryAddress: {
       street: { type: String, required: true },

@@ -4,6 +4,7 @@ export type ProfessionType =
   | 'physician'
   | 'physiotherapist'
   | 'nurse'
+  | 'caregiver'
   | 'phlebotomist'
   | 'dietitian'
   | 'chw'
@@ -52,7 +53,7 @@ const HealthcareProfessionalProfileSchema = new Schema<IHealthcareProfessionalPr
     professionType: {
       type: String,
       required: true,
-      enum: ['physician', 'physiotherapist', 'nurse', 'phlebotomist', 'dietitian', 'chw', 'technician'],
+      enum: ['physician', 'physiotherapist', 'nurse', 'caregiver', 'phlebotomist', 'dietitian', 'chw', 'technician'],
       index: true,
     },
     specializations: [{ type: String, trim: true }],

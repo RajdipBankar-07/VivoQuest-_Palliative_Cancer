@@ -2,7 +2,7 @@ import React from 'react';
 import Link from 'next/link';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'navy';
+  variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'navy' | 'outline-white' | 'white';
   size?: 'sm' | 'md' | 'lg';
   href?: string;
   isLoading?: boolean;
@@ -36,6 +36,8 @@ export const Button: React.FC<ButtonProps> = ({
     outline: 'border border-border bg-white text-navy hover:bg-background hover:border-primary hover:text-primary',
     ghost: 'text-navy hover:bg-primary-light hover:text-primary',
     navy: 'bg-navy text-white hover:bg-navy-dark shadow-md hover:shadow-lg disabled:bg-navy/50',
+    'outline-white': 'border border-white/40 bg-white/10 text-white hover:bg-white/20 hover:border-white/60 backdrop-blur-xs disabled:bg-white/5',
+    white: 'bg-white text-navy hover:bg-slate-100 shadow-md hover:shadow-lg disabled:bg-white/50',
   };
 
   const combinedStyles = `${baseStyles} ${sizeStyles[size]} ${variantStyles[variant]} ${disabled || isLoading ? 'opacity-65 cursor-not-allowed pointer-events-none' : ''} ${className}`;

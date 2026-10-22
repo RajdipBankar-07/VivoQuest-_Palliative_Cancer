@@ -20,6 +20,7 @@ const presignedUploadSchema = z.object({
     'prescription',
     'clinical_report',
   ]),
+  patientId: z.string().optional(),
 });
 
 const confirmUploadSchema = z.object({

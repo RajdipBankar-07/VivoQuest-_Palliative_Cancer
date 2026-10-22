@@ -93,26 +93,6 @@ export default function SuperAdminDashboardPage() {
     }
   };
 
-  const handleAuthenticateAsSuperAdmin = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const loginRes = await authApi.login({
-        identifier: '9899000001', // Seeded Root Super Admin
-        otp: '123456',
-        role: 'super_admin',
-      });
-      setCurrentUser(loginRes.user);
-      setIsSuperAdmin(true);
-      setSuccessMsg('Authenticated with Super Administrator Governance Privileges');
-      await loadTabData('governance');
-    } catch (err: any) {
-      setError(err.message || 'Super Administrator login failed');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const loadTabData = async (tab: SuperTab) => {
     setError(null);
     try {
@@ -249,15 +229,13 @@ export default function SuperAdminDashboardPage() {
             </h3>
 
             <div className="space-y-3">
-              <Button
-                size="md"
-                className="w-full justify-center flex items-center gap-2"
-                onClick={handleAuthenticateAsSuperAdmin}
-                disabled={isLoading}
+              <Link
+                href="/admin/login"
+                className="w-full inline-flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold bg-navy text-white hover:bg-navy-light transition-colors shadow-md shadow-navy/20"
               >
                 <ShieldCheck size={18} />
-                Authenticate as Super Administrator
-              </Button>
+                Sign In at Admin Authentication Portal
+              </Link>
 
               <Link
                 href="/admin/dashboard"
@@ -319,11 +297,11 @@ export default function SuperAdminDashboardPage() {
               </div>
             </div>
             <Button
-              variant="outline"
+              variant="outline-white"
               size="sm"
               onClick={() => loadTabData(activeTab)}
               disabled={isLoading || actionLoading}
-              className="bg-white/10 border-white/20 text-white hover:bg-white/20 flex items-center gap-1.5"
+              className="flex items-center gap-1.5"
             >
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
               Refresh Telemetry

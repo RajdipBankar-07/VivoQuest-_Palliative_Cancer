@@ -35,6 +35,7 @@ import {
   Database,
   Trash2,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/Button';
@@ -55,6 +56,7 @@ import {
 type TabView = 'today' | 'upcoming' | 'completed' | 'installation' | 'exceptions';
 
 export default function ClinicianFieldVisitsPage() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabView>('today');
   const [visits, setVisits] = useState<any[]>([]);
   const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 1 });
@@ -202,14 +204,12 @@ export default function ClinicianFieldVisitsPage() {
     setIsLoading(true);
     setError(null);
     try {
-      let user = authApi.getStoredUser();
-      if (!user || user.role !== 'professional') {
-        const loginRes = await authApi.login({
-          identifier: '9822441122',
-          otp: '123456',
-          role: 'professional',
-        });
-        user = loginRes.user;
+      const user = authApi.getStoredUser();
+      const token = authApi.getToken();
+      if (!token || !user || !['professional', 'doctor', 'nurse', 'caregiver', 'admin', 'super_admin'].includes(user.role)) {
+        setIsLoading(false);
+        router.push('/sign-in');
+        return;
       }
       setCurrentUser(user);
 
@@ -279,22 +279,6 @@ export default function ClinicianFieldVisitsPage() {
   useEffect(() => {
     loadVisits();
   }, [activeTab]);
-
-  // Demo user switcher
-  const handleSwitchDemoClinician = async (phone: string) => {
-    setIsLoading(true);
-    try {
-      await authApi.login({
-        identifier: phone,
-        otp: '123456',
-        role: 'professional',
-      });
-      window.location.reload();
-    } catch (err: any) {
-      setError(err.message || 'Failed to switch demo clinician');
-      setIsLoading(false);
-    }
-  };
 
   // Status transition handler (offline-aware)
   const handleAdvanceStatus = async (visit: any, newStatus: string) => {
@@ -760,11 +744,11 @@ export default function ClinicianFieldVisitsPage() {
               </Button>
 
               <Button
-                variant="outline"
+                variant="outline-white"
                 size="sm"
                 onClick={loadVisits}
                 disabled={isLoading || actionLoading}
-                className="bg-navy-light/50 border-white/20 text-white hover:bg-white/10 flex items-center gap-1.5"
+                className="flex items-center gap-1.5"
               >
                 <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
                 <span>Refresh</span>
@@ -786,35 +770,6 @@ export default function ClinicianFieldVisitsPage() {
                 {currentUser?.fullName || 'Sister Varsha Kulkarni, RN'}
               </span>
             </div>
-          </div>
-
-          {/* Quick Demo Clinician Switcher */}
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-slate-400">Switch Demo Role:</span>
-            <button
-              onClick={() => handleSwitchDemoClinician('9822441122')}
-              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors"
-            >
-              Sister Varsha (Nurse)
-            </button>
-            <button
-              onClick={() => handleSwitchDemoClinician('9822119988')}
-              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors"
-            >
-              Rohan Shinde (Bio-Technician)
-            </button>
-            <button
-              onClick={() => handleSwitchDemoClinician('9820011003')}
-              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors"
-            >
-              Priya Deshmukh (Physio)
-            </button>
-            <button
-              onClick={() => handleSwitchDemoClinician('9820011001')}
-              className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium transition-colors"
-            >
-              Dr. Aditi Rao (Oncologist)
-            </button>
           </div>
         </div>
       </div>

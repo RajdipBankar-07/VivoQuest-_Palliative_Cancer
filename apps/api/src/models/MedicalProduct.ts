@@ -34,6 +34,11 @@ export interface IMedicalProduct extends Document {
   setupRequiredByClinician: boolean; // Closed-loop advantage: clinician dispatched alongside equipment
   recommendedSpecialistRole?: string;
   stockQuantity: number;
+  reservedQuantity: number;
+  sourcingType: 'own_stock' | 'supplier_direct';
+  supplierId?: mongoose.Types.ObjectId;
+  supplierName?: string;
+  procurementCost: number;
   images: string[];
   specifications: Record<string, string>;
   hsnCode?: string;
@@ -136,6 +141,32 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
       type: Number,
       required: true,
       default: 10,
+      min: 0,
+    },
+    reservedQuantity: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+    },
+    sourcingType: {
+      type: String,
+      enum: ['own_stock', 'supplier_direct'],
+      default: 'own_stock',
+      index: true,
+    },
+    supplierId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Supplier',
+      index: true,
+    },
+    supplierName: {
+      type: String,
+      trim: true,
+    },
+    procurementCost: {
+      type: Number,
+      default: 0,
       min: 0,
     },
     images: [{ type: String }],

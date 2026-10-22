@@ -8,6 +8,7 @@ import { User } from '../src/models/User.js';
 import { HealthcareService } from '../src/models/HealthcareService.js';
 import { Booking } from '../src/models/Booking.js';
 import { UploadedFile } from '../src/models/UploadedFile.js';
+import { FieldVisit } from '../src/models/FieldVisit.js';
 
 describe('VivoQuest Marketplace REST API Test Suite', () => {
   const app = createApp();
@@ -19,14 +20,17 @@ describe('VivoQuest Marketplace REST API Test Suite', () => {
   before(async () => {
     await connectDatabase();
     // Clean up test data if left over from previous runs
-    await User.deleteMany({ phone: { $in: [testPhone, '9876500002'] } });
-    await Booking.deleteMany({ phone: { $in: [testPhone, '9876500002'] } });
-    await UploadedFile.deleteMany({ s3Key: { $regex: /9876500001/ } });
+    await User.deleteMany({ phone: { $in: [testPhone, '9876500002', '9876500003'] } });
+    await Booking.deleteMany({ phone: { $in: [testPhone, '9876500002', '9876500003'] } });
+    await UploadedFile.deleteMany({ s3Key: { $regex: /9876500001|9876500003/ } });
+    await FieldVisit.deleteMany({ visitNumber: { $regex: /SEC-TEST/ } });
   });
 
   after(async () => {
-    await User.deleteMany({ phone: { $in: [testPhone, '9876500002'] } });
-    await Booking.deleteMany({ phone: { $in: [testPhone, '9876500002'] } });
+    await User.deleteMany({ phone: { $in: [testPhone, '9876500002', '9876500003'] } });
+    await Booking.deleteMany({ phone: { $in: [testPhone, '9876500002', '9876500003'] } });
+    await UploadedFile.deleteMany({ s3Key: { $regex: /9876500001|9876500003/ } });
+    await FieldVisit.deleteMany({ visitNumber: { $regex: /SEC-TEST/ } });
     await disconnectDatabase();
   });
 
@@ -331,6 +335,86 @@ describe('VivoQuest Marketplace REST API Test Suite', () => {
       assert.equal(fileRecord.originalFilename, 'doctor_license.pdf');
       assert.equal(fileRecord.uploadStatus, 'pending_upload');
     });
+
+    it('should strictly enforce patient-caregiver assignment for confidential medical documents', async () => {
+      // 1. Patient uploads a confidential prescription
+      const uploadRes = await request(app)
+        .post('/api/v1/uploads/presigned')
+        .set('Authorization', `Bearer ${authToken}`)
+        .send({
+          filename: 'confidential_prescription.pdf',
+          mimeType: 'application/pdf',
+          fileSizeBytes: 200 * 1024,
+          fileCategory: 'prescription',
+        });
+
+      assert.equal(uploadRes.status, 200);
+      const confidentialFileId = uploadRes.body.data.fileId;
+      assert.equal(uploadRes.body.data.accessTier, 'PATIENT_CLINICIAN_CONFIDENTIAL');
+
+      // 2. Register an unassigned professional
+      const profPhone = '9876500003';
+      const regProfRes = await request(app).post('/api/v1/auth/register').send({
+        fullName: 'Unassigned Nurse',
+        email: 'unassigned.nurse@example.com',
+        phone: profPhone,
+        password: testPassword,
+        role: 'professional',
+        consentAccepted: true,
+      });
+      assert.equal(regProfRes.status, 201);
+      const profToken = regProfRes.body.data.token;
+      const profUserId = regProfRes.body.data.user.id;
+
+      // 3. Unassigned professional attempts to download patient prescription -> 403 Forbidden!
+      const unauthDownloadRes = await request(app)
+        .get(`/api/v1/uploads/${confidentialFileId}/download`)
+        .set('Authorization', `Bearer ${profToken}`);
+
+      assert.equal(unauthDownloadRes.status, 403);
+      assert.equal(unauthDownloadRes.body.success, false);
+      assert.match(unauthDownloadRes.body.error.message, /not an assigned clinician or caregiver/i);
+
+      // 4. Patient themselves can download -> 200 OK
+      const patientDownloadRes = await request(app)
+        .get(`/api/v1/uploads/${confidentialFileId}/download`)
+        .set('Authorization', `Bearer ${authToken}`);
+
+      assert.equal(patientDownloadRes.status, 200);
+      assert.equal(patientDownloadRes.body.success, true);
+      assert.ok(patientDownloadRes.body.data.url);
+
+      // 5. Now assign this professional to the patient via a FieldVisit
+      await FieldVisit.create({
+        visitNumber: 'SEC-TEST-VISIT-001',
+        visitType: 'nursing_procedure',
+        status: 'assigned',
+        providerId: new mongoose.Types.ObjectId(profUserId),
+        providerName: 'Unassigned Nurse',
+        providerRole: 'nurse',
+        patientId: new mongoose.Types.ObjectId(testUserId),
+        patientDetails: {
+          fullName: 'Test Patient',
+          phone: testPhone,
+          address: '123 Test St',
+          city: 'Mumbai',
+          pincode: '400001',
+          cluster: 'South Mumbai',
+        },
+        scheduledDate: '2026-10-25',
+        timeSlot: '10:00 - 12:00',
+        timestamps: { assignedAt: new Date() },
+      });
+
+      // 6. Now the assigned professional can download -> 200 OK
+      const assignedDownloadRes = await request(app)
+        .get(`/api/v1/uploads/${confidentialFileId}/download`)
+        .set('Authorization', `Bearer ${profToken}`);
+
+      assert.equal(assignedDownloadRes.status, 200);
+      assert.equal(assignedDownloadRes.body.success, true);
+      assert.ok(assignedDownloadRes.body.data.url);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -442,4 +526,51 @@ describe('VivoQuest Marketplace REST API Test Suite', () => {
       assert.equal(updated?.status, 'matched');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // 9. CORS Policy & LAN Origin Verification
+  // ---------------------------------------------------------------------------
+  describe('CORS Policy & LAN Verification', () => {
+    it('should permit localhost:3000 development origin with credentials', async () => {
+      const res = await request(app)
+        .get('/api/v1/health')
+        .set('Origin', 'http://localhost:3000');
+
+      assert.equal(res.status, 200);
+      assert.equal(res.headers['access-control-allow-origin'], 'http://localhost:3000');
+      assert.equal(res.headers['access-control-allow-credentials'], 'true');
+    });
+
+    it('should permit LAN IP 10.151.164.41:3000 development origin with credentials', async () => {
+      const res = await request(app)
+        .get('/api/v1/health')
+        .set('Origin', 'http://10.151.164.41:3000');
+
+      assert.equal(res.status, 200);
+      assert.equal(res.headers['access-control-allow-origin'], 'http://10.151.164.41:3000');
+      assert.equal(res.headers['access-control-allow-credentials'], 'true');
+    });
+
+    it('should handle OPTIONS preflight for LAN origin on API routes', async () => {
+      const res = await request(app)
+        .options('/api/v1/products')
+        .set('Origin', 'http://10.151.164.41:3000')
+        .set('Access-Control-Request-Method', 'GET')
+        .set('Access-Control-Request-Headers', 'Content-Type,Authorization');
+
+      assert.equal(res.status, 204);
+      assert.equal(res.headers['access-control-allow-origin'], 'http://10.151.164.41:3000');
+      assert.equal(res.headers['access-control-allow-credentials'], 'true');
+    });
+
+    it('should reject unauthorized public origins by omitting allow-origin header', async () => {
+      const res = await request(app)
+        .get('/api/v1/health')
+        .set('Origin', 'https://unauthorized-third-party.example.com');
+
+      assert.equal(res.status, 200);
+      assert.equal(res.headers['access-control-allow-origin'], undefined);
+    });
+  });
 });
+

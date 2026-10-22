@@ -5,7 +5,9 @@
   "description": "VivoQuest - AI-Enabled Preventive Healthcare Marketplace",
   "workspaces": [
     "frontend",
-    "apps/api"
+    "apps/api",
+    "apps/mobile-patient",
+    "apps/mobile-caregiver"
   ],
   "scripts": {
     "dev": "npm --prefix frontend run dev",
@@ -14,6 +16,8 @@
     "build:api": "npm --prefix apps/api run build",
     "start": "npm --prefix frontend run start",
     "start:api": "npm --prefix apps/api run start",
+    "mobile:patient": "npm --prefix apps/mobile-patient start",
+    "mobile:caregiver": "npm --prefix apps/mobile-caregiver start",
     "lint": "npm --prefix frontend run lint",
     "test:api": "npm --prefix apps/api run test"
   },

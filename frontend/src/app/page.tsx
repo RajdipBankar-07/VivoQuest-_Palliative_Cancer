@@ -1337,7 +1337,7 @@ export default function HomePage() {
               <Button href="/services" variant="primary" size="lg" rightIcon={<ArrowRight size={18} />}>
                 Explore Services &amp; Packages
               </Button>
-              <Button href="/doctors" variant="outline" size="lg" className="border-white/30 text-white hover:bg-white/10">
+              <Button href="/doctors" variant="outline-white" size="lg">
                 Find a Doctor
               </Button>
             </div>

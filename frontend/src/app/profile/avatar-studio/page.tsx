@@ -18,8 +18,10 @@ import {
   Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getApiBaseUrl } from '@/lib/api';
 
-const API_BASE = 'http://127.0.0.1:3001';
+const API_BASE = getApiBaseUrl();
+
 
 // Custom SVG Avatar layered renderer component
 function AvatarPreview({ 

@@ -21,25 +21,54 @@ export const createApp = (): Express => {
   const app = express();
 
   // 1. Security & CORS
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps, curl, or server-to-server)
-        if (!origin) return callback(null, true);
-        if (
-          env.CORS_ALLOWED_ORIGINS.includes(origin) ||
-          origin.startsWith('http://localhost:') ||
-          origin.startsWith('http://127.0.0.1:')
-        ) {
-          return callback(null, true);
+  const corsOptions: cors.CorsOptions = {
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile native apps, curl, Postman, server-to-server)
+      if (!origin) return callback(null, true);
+
+      const cleanOrigin = origin.replace(/\/+$/, '');
+
+      // 1. Explicitly configured origins (from env.CORS_ALLOWED_ORIGINS)
+      if (env.CORS_ALLOWED_ORIGINS.includes(cleanOrigin)) {
+        return callback(null, true);
+      }
+
+      // 2. In development or test mode, permit localhost, 127.0.0.1, and private LAN IP ranges
+      if (env.NODE_ENV !== 'production') {
+        try {
+          const url = new URL(cleanOrigin);
+          const hostname = url.hostname;
+
+          if (
+            hostname === 'localhost' ||
+            hostname === '127.0.0.1' ||
+            hostname === '10.151.164.41' ||
+            /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+            /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+            /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(hostname)
+          ) {
+            return callback(null, true);
+          }
+        } catch {
+          // Malformed origin URL
         }
-        return callback(new Error(`CORS policy blocks access from origin ${origin}`));
-      },
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    })
-  );
+      }
+
+      // Reject cleanly without crashing Express error handler
+      if (env.NODE_ENV !== 'test') {
+        console.warn(`[CORS] Rejected request from unauthorized origin: ${origin}`);
+      }
+      return callback(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    optionsSuccessStatus: 204,
+  };
+
+  app.use(cors(corsOptions));
+  app.options('*', cors(corsOptions));
+
 
   // 2. Request Parsers
   // Large files are uploaded directly to S3 via presigned URLs; small JSON limit protects against DoS

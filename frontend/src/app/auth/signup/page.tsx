@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, User, Phone, Eye, EyeOff, AlertCircle, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
+import { getApiBaseUrl } from '@/lib/api';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -38,7 +39,7 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:3001/api/auth/register/', {
+      const res = await fetch(`${getApiBaseUrl()}/api/auth/register/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

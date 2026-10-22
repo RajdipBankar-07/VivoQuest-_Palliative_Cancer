@@ -11,11 +11,17 @@ import { AuditLog, IAuditLog, AuditLogCategory, AuditLogSeverity } from '../mode
 import { SupportTicket, ISupportTicket } from '../models/SupportTicket.js';
 import { ProductOrder, IProductOrder, OrderStatus } from '../models/ProductOrder.js';
 import { MedicalProduct } from '../models/MedicalProduct.js';
+import { Supplier } from '../models/Supplier.js';
+import { SupplierPurchaseOrder } from '../models/SupplierPurchaseOrder.js';
+import { CaregiverPlan } from '../models/CaregiverPlan.js';
+import { CaregiverSubscription } from '../models/CaregiverSubscription.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { hashPassword } from './authService.js';
 import { seedServicesIfEmpty } from './serviceCatalogService.js';
 import { seedHospitalDemoData } from './hospitalReferralService.js';
 import { seedMedicalProductsIfEmpty } from './productCatalogService.js';
+import { seedSupplierDemoData } from './supplierService.js';
+import { seedCaregiverPlansDemoData } from './caregiverPlanService.js';
 
 export interface AuditLogDTO {
   action: string;
@@ -58,6 +64,8 @@ export const seedAdminDemoData = async () => {
   try {
     await seedServicesIfEmpty();
     await seedHospitalDemoData();
+    await seedSupplierDemoData();
+    await seedCaregiverPlansDemoData();
 
     // 1. Seed Super Admin: Director of Platform Governance
     const superAdminPhone = '9899000001';
@@ -311,6 +319,9 @@ export const getAdminDashboardOverview = async () => {
     openTicketsCount,
     recentAuditLogs,
     activeServicesCount,
+    totalProductOrders,
+    supplierCount,
+    activeSubscriptionsCount,
   ] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ role: { $in: ['patient', 'caregiver'] } }),
@@ -325,6 +336,9 @@ export const getAdminDashboardOverview = async () => {
     SupportTicket.countDocuments({ status: { $in: ['open', 'investigating', 'escalated'] } }),
     AuditLog.find().sort({ timestamp: -1 }).limit(8).lean(),
     HealthcareService.countDocuments({ isActive: true }),
+    ProductOrder.countDocuments(),
+    Supplier.countDocuments(),
+    CaregiverSubscription.countDocuments({ status: 'active' }),
   ]);
 
   return {
@@ -341,6 +355,9 @@ export const getAdminDashboardOverview = async () => {
       activeHospitalsCount,
       openTicketsCount,
       activeServicesCount,
+      totalProductOrders,
+      supplierCount,
+      activeSubscriptionsCount,
     },
     recentAuditLogs: recentAuditLogs.map((log: any) => ({
       id: log._id.toString(),
@@ -1362,12 +1379,19 @@ export const updateOrderStatusAdmin = async (
     );
   }
 
-  // If transitioning to cancelled, restore reserved stock
+  // If transitioning to cancelled, safely restore stock and release reservation
   if (newStatus === 'cancelled') {
     for (const item of order.items) {
       await MedicalProduct.findByIdAndUpdate(item.productId, {
-        $inc: { stockQuantity: item.quantity },
+        $inc: {
+          stockQuantity: item.quantity,
+          reservedQuantity: -item.quantity,
+        },
       });
+      await MedicalProduct.findOneAndUpdate(
+        { _id: item.productId, 'depots.0': { $exists: true } },
+        { $inc: { 'depots.0.inStockCount': item.quantity } }
+      );
     }
     order.cancellation = {
       isCancelled: true,
@@ -1376,6 +1400,15 @@ export const updateOrderStatusAdmin = async (
       cancellationReason: trackingMessage || 'Cancelled by operations administrator',
       refundStatus: order.paymentStatus === 'paid' ? 'pending' : 'none',
     };
+  }
+
+  // If transitioning from placed/confirmed to dispatched/delivered/completed, release reservation
+  if (['dispatched', 'delivered', 'completed'].includes(newStatus) && ['placed', 'confirmed'].includes(currentStatus)) {
+    for (const item of order.items) {
+      await MedicalProduct.findByIdAndUpdate(item.productId, {
+        $inc: { reservedQuantity: -item.quantity },
+      });
+    }
   }
 
   // If delivered and payment was COD, mark payment as paid
@@ -1538,4 +1571,367 @@ export const addOrderTrackingEventAdmin = async (
 
   return order;
 };
+
+// =============================================================================
+// FINANCIAL ACCURACY & REPORTING (CALCULATED ON THE SERVER)
+// =============================================================================
+
+/**
+ * Authoritative financial overview calculated entirely on the server.
+ * Accurately separates customer sales revenue, equipment procurement costs,
+ * caregiver payout liabilities, supplier payables, refunds, and gateway fees.
+ * Sourcing/procurement cost is NEVER counted as sales revenue.
+ */
+export const getFinancialSummaryAdmin = async () => {
+  await seedAdminDemoData();
+
+  // 1. Customer product sales & equipment procurement cost
+  const paidOrders = await ProductOrder.find({
+    paymentStatus: { $in: ['paid', 'cod'] },
+    orderStatus: { $ne: 'cancelled' },
+  }).lean();
+
+  let productSalesRevenue = 0;
+  let equipmentProcurementCostFromOrders = 0;
+  let onlinePaymentTotal = 0;
+  let refundsProcessed = 0;
+
+  for (const order of paidOrders) {
+    productSalesRevenue += order.pricing?.totalAmount || 0;
+    equipmentProcurementCostFromOrders += order.pricing?.procurementCostTotal || 0;
+    if (order.paymentMethod === 'online') {
+      onlinePaymentTotal += order.pricing?.totalAmount || 0;
+    }
+  }
+
+  // Also tally refunds on cancelled / refunded orders
+  const refundedOrders = await ProductOrder.find({
+    $or: [{ paymentStatus: 'refunded' }, { 'cancellation.refundStatus': 'processed' }],
+  }).lean();
+  for (const ro of refundedOrders) {
+    refundsProcessed += ro.pricing?.refundAmount || ro.pricing?.totalAmount || 0;
+  }
+
+  // 2. Caregiver subscriptions revenue & caregiver payout liabilities
+  const activeSubs = await CaregiverSubscription.find({
+    'pricing.paymentStatus': 'paid',
+  }).lean();
+
+  let caregiverSubscriptionRevenue = 0;
+  let caregiverPayoutLiabilities = 0;
+
+  for (const sub of activeSubs) {
+    caregiverSubscriptionRevenue += sub.pricing?.customerPrice || 0;
+    caregiverPayoutLiabilities += sub.pricing?.caregiverPayout || 0;
+    onlinePaymentTotal += sub.pricing?.customerPrice || 0;
+  }
+
+  // 3. Supplier Purchase Orders (Procurement Cost & Payables)
+  const pos = await SupplierPurchaseOrder.find().lean();
+  let supplierPayablesPending = 0;
+  let supplierPayablesSettled = 0;
+
+  for (const po of pos) {
+    supplierPayablesSettled += po.paidAmount || 0;
+    const pending = Math.max(0, (po.totalProcurementCost || 0) - (po.paidAmount || 0));
+    supplierPayablesPending += pending;
+  }
+
+  // Total procurement cost incurred = equipment procurement from direct customer orders + delivered supplier inventory
+  const totalProcurementCosts = equipmentProcurementCostFromOrders + supplierPayablesSettled;
+
+  // 4. Gateway Fees: standard 2% on online card/UPI payments
+  const paymentGatewayFees = Math.round(onlinePaymentTotal * 0.02);
+
+  // 5. Customer Sales Revenue
+  const totalGrossSalesRevenue = productSalesRevenue + caregiverSubscriptionRevenue;
+
+  // 6. Estimated Gross Profit = Gross Sales - Procurement Costs - Caregiver Payouts - Refunds - Gateway Fees
+  const estimatedGrossProfit =
+    totalGrossSalesRevenue -
+    totalProcurementCosts -
+    caregiverPayoutLiabilities -
+    refundsProcessed -
+    paymentGatewayFees;
+
+  return {
+    revenue: {
+      totalGrossSalesRevenue,
+      productSalesRevenue,
+      caregiverSubscriptionRevenue,
+    },
+    costsAndLiabilities: {
+      equipmentProcurementCost: totalProcurementCosts,
+      caregiverPayoutLiabilities,
+      supplierPayablesPending,
+      supplierPayablesSettled,
+      refundsProcessed,
+      paymentGatewayFees,
+    },
+    profitability: {
+      estimatedGrossProfit,
+      grossProfitMarginPct:
+        totalGrossSalesRevenue > 0
+          ? Number(((estimatedGrossProfit / totalGrossSalesRevenue) * 100).toFixed(1))
+          : 0,
+    },
+    settlementBreakdown: {
+      onlinePaymentVolume: onlinePaymentTotal,
+      paidOrderCount: paidOrders.length,
+      activeSubscriptionCount: activeSubs.length,
+      supplierPOCount: pos.length,
+    },
+  };
+};
+
+/**
+ * Safely process customer return or cancellation refund with state validation and audit log
+ */
+export const processOrderRefundAdmin = async (
+  orderId: string,
+  refundAmount: number,
+  reason: string,
+  actorUser: IUser
+): Promise<IProductOrder> => {
+  let query: any = { _id: orderId };
+  if (!mongoose.Types.ObjectId.isValid(orderId)) {
+    query = { orderNumber: orderId };
+  }
+
+  const order = await ProductOrder.findOne(query);
+  if (!order) {
+    throw new AppError('Product order not found', 404);
+  }
+
+  if (refundAmount <= 0 || refundAmount > order.pricing.totalAmount) {
+    throw new AppError(`Refund amount must be between ₹1 and ₹${order.pricing.totalAmount}`, 400);
+  }
+
+  order.paymentStatus = 'refunded';
+  order.pricing.refundAmount = refundAmount;
+  if (!order.cancellation) {
+    order.cancellation = {
+      isCancelled: true,
+      cancelledAt: new Date(),
+      cancelledBy: actorUser.fullName,
+      cancellationReason: reason,
+      refundStatus: 'processed',
+    };
+  } else {
+    order.cancellation.refundStatus = 'processed';
+    order.cancellation.cancelledBy = actorUser.fullName;
+  }
+
+  const refundId = `RFND-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+
+  order.trackingUpdates.push({
+    timestamp: new Date(),
+    status: order.orderStatus,
+    message: `Refund of ₹${refundAmount} processed successfully (Ref: ${refundId}). Reason: ${reason}`,
+    location: 'Finance & Accounts',
+  });
+
+  await order.save();
+
+  await logAdminAction({
+    action: 'ORDER_REFUND_PROCESSED',
+    category: 'order_fulfillment',
+    actorId: actorUser._id.toString(),
+    actorName: actorUser.fullName,
+    actorRole: actorUser.role,
+    targetType: 'PRODUCT_ORDER',
+    targetId: order.orderNumber,
+    details: {
+      refundAmount,
+      refundId,
+      reason,
+      patientPhone: order.patientPhone,
+    },
+    severity: 'warning',
+  });
+
+  return order;
+};
+
+/**
+ * Scan professional credentials and hospital partner registrations for expiry alerts
+ */
+export const listDocumentExpiryAlertsAdmin = async () => {
+  await seedAdminDemoData();
+
+  const now = new Date();
+  const sixtyDaysAhead = new Date(Date.now() + 60 * 24 * 3600 * 1000);
+
+  // 1. Professional credentials expiring soon or expired
+  const expiringCredentials = await ProfessionalCredentials.find({
+    expiryDate: { $lte: sixtyDaysAhead },
+  })
+    .populate({
+      path: 'professionalId',
+      select: 'title professionType registrationNumber',
+      populate: { path: 'userId', select: 'fullName phone email' },
+    })
+    .sort({ expiryDate: 1 })
+    .lean();
+
+  const credentialAlerts = expiringCredentials.map((c: any) => {
+    const isExpired = c.expiryDate && new Date(c.expiryDate) <= now;
+    const daysRemaining = c.expiryDate
+      ? Math.ceil((new Date(c.expiryDate).getTime() - now.getTime()) / (1000 * 3600 * 24))
+      : 0;
+
+    return {
+      id: c._id.toString(),
+      entityType: 'professional_credential',
+      documentType: c.documentType,
+      documentNumber: c.documentNumber,
+      issuingAuthority: c.issuingAuthority,
+      expiryDate: c.expiryDate,
+      daysRemaining,
+      status: isExpired ? 'expired' : 'expiring_soon',
+      professionalName: c.professionalId?.userId?.fullName || 'Clinician',
+      professionType: c.professionalId?.professionType || 'physician',
+      contactPhone: c.professionalId?.userId?.phone ? `+91 ******${c.professionalId.userId.phone.slice(-4)}` : undefined,
+    };
+  });
+
+  return {
+    alerts: credentialAlerts,
+    summary: {
+      totalAlerts: credentialAlerts.length,
+      expiredCount: credentialAlerts.filter((a: any) => a.status === 'expired').length,
+      expiringSoonCount: credentialAlerts.filter((a: any) => a.status === 'expiring_soon').length,
+    },
+  };
+};
+
+/**
+ * Review hospital organization verification status and license expiry
+ */
+export const reviewHospitalOrganizationVerification = async (
+  hospitalId: string,
+  newStatus: 'pending' | 'verified' | 'rejected',
+  notes: string,
+  licenseExpiryDate: string | undefined,
+  actorUser: IUser
+): Promise<IHospitalProfile> => {
+  if (!mongoose.Types.ObjectId.isValid(hospitalId)) {
+    throw new AppError('Invalid hospital ID', 400);
+  }
+
+  const profile = await HospitalProfile.findById(hospitalId);
+  if (!profile) {
+    throw new AppError('Hospital profile not found', 404);
+  }
+
+  profile.verificationStatus = newStatus;
+  profile.verifiedAt = new Date();
+  profile.verifiedBy = actorUser._id;
+  profile.verificationNotes = notes.trim();
+  if (licenseExpiryDate) {
+    profile.licenseExpiryDate = new Date(licenseExpiryDate);
+  }
+
+  await profile.save();
+
+  await logAdminAction({
+    action: 'HOSPITAL_VERIFICATION_REVIEWED',
+    category: 'hospital_management',
+    actorId: actorUser._id.toString(),
+    actorName: actorUser.fullName,
+    actorRole: actorUser.role,
+    targetType: 'hospital',
+    targetId: profile.registrationNumber,
+    details: {
+      hospitalName: profile.hospitalName,
+      newStatus,
+      notes,
+      licenseExpiryDate,
+    },
+    severity: newStatus === 'rejected' ? 'warning' : 'info',
+  });
+
+  return profile;
+};
+
+/**
+ * List doctors, nurses, and caregivers with verification credentials and statistics
+ */
+export const listHealthcareProfessionalsAdmin = async (filters: {
+  professionType?: string;
+  verificationStatus?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}) => {
+  await seedAdminDemoData();
+
+  const query: any = {};
+  if (filters.professionType && filters.professionType !== 'all') {
+    query.professionType = filters.professionType;
+  }
+  if (filters.verificationStatus && filters.verificationStatus !== 'all') {
+    query.verificationStatus = filters.verificationStatus;
+  }
+
+  const page = Math.max(1, filters.page || 1);
+  const limit = Math.min(100, Math.max(1, filters.limit || 20));
+  const skip = (page - 1) * limit;
+
+  const [profiles, total] = await Promise.all([
+    HealthcareProfessionalProfile.find(query)
+      .populate('userId', 'fullName phone email status')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    HealthcareProfessionalProfile.countDocuments(query),
+  ]);
+
+  const enriched = await Promise.all(
+    profiles.map(async (p: any) => {
+      const credentialsCount = await ProfessionalCredentials.countDocuments({
+        professionalId: p._id,
+      });
+      const pendingCredentialsCount = await ProfessionalCredentials.countDocuments({
+        professionalId: p._id,
+        verificationStatus: 'pending',
+      });
+
+      return {
+        id: p._id.toString(),
+        userId: p.userId?._id?.toString(),
+        fullName: p.userId?.fullName || 'Clinician',
+        phone: p.userId?.phone,
+        phoneMasked: p.userId?.phone ? `+91 ******${p.userId.phone.slice(-4)}` : undefined,
+        email: p.userId?.email,
+        title: p.title,
+        professionType: p.professionType,
+        specializations: p.specializations,
+        registrationNumber: p.registrationNumber,
+        registrationCouncil: p.registrationCouncil,
+        yearsOfExperience: p.yearsOfExperience,
+        serviceClusters: p.serviceClusters,
+        verificationStatus: p.verificationStatus,
+        rating: p.rating,
+        totalVisitsCompleted: p.totalVisitsCompleted,
+        isActiveForDispatch: p.isActiveForDispatch,
+        credentialsCount,
+        pendingCredentialsCount,
+        createdAt: p.createdAt,
+      };
+    })
+  );
+
+  return {
+    professionals: enriched,
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+};
+
 

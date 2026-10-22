@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, ArrowRight, AlertCircle, CheckCircle2, KeyRound } from 'lucide-react';
 import Link from 'next/link';
+import { getApiBaseUrl } from '@/lib/api';
 
 export default function ForgotPasswordPage() {
   const router = useRouter();
@@ -26,7 +27,7 @@ export default function ForgotPasswordPage() {
       const isPhone = /^\d+$/.test(identifier.replace(/\D/g, ''));
       const payload = isPhone ? { phone: identifier } : { email: identifier.toLowerCase().trim() };
 
-      const res = await fetch('http://127.0.0.1:3001/api/auth/forgot-password/', {
+      const res = await fetch(`${getApiBaseUrl()}/api/auth/forgot-password/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

@@ -151,7 +151,7 @@ export default function SignInPage() {
           <div className="p-3 rounded-xl bg-blue-50/70 border border-blue-100 flex items-start gap-2.5 text-xs text-navy/80 mb-6">
             <Info size={15} className="text-primary shrink-0 mt-0.5" />
             <p>
-              <strong>Live Backend Connected:</strong> In this phase, phone OTP verification operates in <em>development prototype mode</em> using any valid 6-digit code (e.g. <code>123456</code>) against your registered account in MongoDB.
+              <strong>Live Backend Connected:</strong> Development mock OTP is strictly restricted to designated test accounts. Other registered accounts authenticate using their secure password.
             </p>
           </div>
 
@@ -259,11 +259,11 @@ export default function SignInPage() {
                 id="otp"
                 type="text"
                 maxLength={6}
-                placeholder="123456"
+                placeholder="••••••"
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
                 error={error}
-                helperText="Enter any 6 digits (e.g., 123456) for development prototype verification"
+                helperText="Enter 6-digit verification code"
                 required
               />
 

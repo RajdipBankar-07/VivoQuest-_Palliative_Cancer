@@ -28,14 +28,10 @@ export const Navbar: React.FC = () => {
 
   const navLinks = [
     { label: 'Home', href: '/' },
-    { label: 'Medical Store', href: '/products' },
+    { label: 'Medical Equipment', href: '/products' },
+    { label: 'Caregiver Plans', href: '/caregiver-plans' },
     { label: 'My Orders', href: '/orders' },
-    { label: 'Find a Doctor', href: '/doctors' },
-    { label: 'Appointments', href: '/appointments' },
-    { label: 'Healthcare Services', href: '/services' },
-    { label: 'AI Coordination', href: '/clinical' },
-    { label: 'Doctor Portal', href: '/doctor/dashboard' },
-    { label: 'Hospital Portal', href: '/hospital/dashboard' },
+    { label: 'Palliative Services', href: '/services' },
     { label: 'Admin Portal', href: '/admin/dashboard' },
   ];
 

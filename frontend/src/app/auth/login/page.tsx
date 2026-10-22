@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
+import { getApiBaseUrl } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,7 +24,7 @@ export default function LoginPage() {
     if (!token) return; // No cookie — show login form normally
 
     // Validate the token against the backend before redirecting
-    fetch('http://127.0.0.1:3001/api/auth/profile/', {
+    fetch(`${getApiBaseUrl()}/api/auth/profile/`, {
       method: 'GET',
       headers: { 'Authorization': `Bearer ${token}` },
       credentials: 'include',
@@ -69,7 +70,7 @@ export default function LoginPage() {
         ? { phone: identifier.replace(/\D/g, ''), password }
         : { email: identifier.toLowerCase().trim(), password };
 
-      const res = await fetch('http://127.0.0.1:3001/api/auth/login/', {
+      const res = await fetch(`${getApiBaseUrl()}/api/auth/login/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

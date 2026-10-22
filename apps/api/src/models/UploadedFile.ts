@@ -24,6 +24,7 @@ export interface IUploadedFile extends Document {
   mimeType: string;
   fileSizeBytes: number;
   uploadedBy: mongoose.Types.ObjectId;
+  patientId?: mongoose.Types.ObjectId;
   fileCategory: FileCategory;
   accessTier: AccessTier;
   uploadStatus: UploadStatus;
@@ -73,6 +74,11 @@ const UploadedFileSchema = new Schema<IUploadedFile>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+      index: true,
+    },
+    patientId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
       index: true,
     },
     fileCategory: {

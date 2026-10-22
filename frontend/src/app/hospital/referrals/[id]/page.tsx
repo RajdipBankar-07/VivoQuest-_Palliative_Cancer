@@ -91,13 +91,9 @@ export default function ReferralDetailPage() {
       // Ensure token exists
       const currentToken = localStorage.getItem('vivo_token');
       if (!currentToken) {
-        const loginRes = await authApi.login({
-          identifier: '9822011111',
-          otp: '123456',
-          role: 'hospital',
-        });
-        localStorage.setItem('vivo_token', loginRes.token);
-        localStorage.setItem('vivo_role', 'hospital');
+        setIsLoading(false);
+        router.push('/sign-in');
+        return;
       }
 
       const data = await hospitalsApi.getReferralById(referralId);

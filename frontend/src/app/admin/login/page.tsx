@@ -24,10 +24,10 @@ import { authApi, ApiClientError } from '@/lib/api';
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const [identifier, setIdentifier] = useState('9899009900');
-  const [authMethod, setAuthMethod] = useState<'otp' | 'password'>('otp');
-  const [password, setPassword] = useState('Password#2026');
-  const [otp, setOtp] = useState('123456');
+  const [identifier, setIdentifier] = useState('');
+  const [authMethod, setAuthMethod] = useState<'otp' | 'password'>('password');
+  const [password, setPassword] = useState('');
+  const [otp, setOtp] = useState('');
   const [step, setStep] = useState<'input' | 'success'>('input');
   const [error, setError] = useState('');
   const [apiError, setApiError] = useState<string | null>(null);
@@ -232,7 +232,7 @@ export default function AdminLoginPage() {
                   placeholder="e.g. 123456"
                   value={otp}
                   onChange={(e) => setOtp(e.target.value)}
-                  helperText="Use 123456 in development/staging environment"
+                  helperText="Enter 6-digit verification code"
                   required
                 />
               ) : (
@@ -243,48 +243,10 @@ export default function AdminLoginPage() {
                   placeholder="••••••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  helperText="Default prototype password is Password#2026"
+                  helperText="Enter your secure administrative password"
                   required
                 />
               )}
-
-              {/* Quick-Fill Seeded Credentials */}
-              <div className="pt-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
-                  Pre-Provisioned Administrative Credentials:
-                </span>
-                <div className="flex flex-col gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIdentifier('9899009900');
-                      setOtp('123456');
-                      setPassword('Password#2026');
-                    }}
-                    className="text-[11px] px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-left hover:bg-slate-100 transition-colors flex items-center justify-between"
-                  >
-                    <span>
-                      <strong className="text-navy font-bold">Central Operations Lead</strong> (Role: admin)
-                    </span>
-                    <span className="text-slate-400 text-[10px]">98990 09900</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIdentifier('9899000001');
-                      setOtp('123456');
-                      setPassword('Password#2026');
-                    }}
-                    className="text-[11px] px-3 py-2 rounded-xl bg-navy/5 border border-navy/20 text-navy text-left hover:bg-navy/10 transition-colors flex items-center justify-between"
-                  >
-                    <span>
-                      <strong className="text-navy font-bold">Platform Super Admin</strong> (Role: super_admin)
-                    </span>
-                    <span className="text-primary font-bold text-[10px]">98990 00001</span>
-                  </button>
-                </div>
-              </div>
 
               {/* Submit Button */}
               <div className="pt-2">

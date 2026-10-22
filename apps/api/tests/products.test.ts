@@ -284,9 +284,55 @@ describe('Medical Products & DME Commerce Test Suite', () => {
       createdOrderId = res.body.data._id || res.body.data.id;
       createdOrderNumber = res.body.data.orderNumber;
 
-      // Verify stock was deducted
+      // Verify stock was deducted and atomically reserved
       const updatedProduct = await MedicalProduct.findById(dmeProduct._id);
       assert.equal(updatedProduct?.stockQuantity, initialStock - 2, 'Stock must be decremented');
+      assert.equal(updatedProduct?.reservedQuantity, 2, 'Reserved quantity must be incremented atomically');
+    });
+
+    it('should safely handle concurrent orders without overselling under contention', async () => {
+      // Create a test product with exactly 3 in stock
+      const limitedProduct = await MedicalProduct.create({
+        sku: `CONCUR-TEST-${Date.now()}`,
+        title: 'Limited Stock DME Device',
+        category: 'mobility',
+        description: 'Testing concurrency safety',
+        price: 5000,
+        stockQuantity: 3,
+        reservedQuantity: 0,
+        requiresPrescription: false,
+        setupRequiredByClinician: false,
+        isActive: true,
+      });
+
+      // Fire 5 concurrent requests each attempting to order 1 unit
+      const promises = Array.from({ length: 5 }, (_, idx) =>
+        request(app)
+          .post('/api/v1/products/orders')
+          .set('Authorization', `Bearer ${patientAToken}`)
+          .send({
+            idempotencyKey: `CONCUR-IDEM-${Date.now()}-${idx}`,
+            items: [{ productId: limitedProduct._id.toString(), quantity: 1 }],
+            deliveryAddress: {
+              street: `${idx} Race Condition St`,
+              city: 'Pune',
+              pincode: '411038',
+            },
+          })
+      );
+
+      const results = await Promise.all(promises);
+      const successfulOrders = results.filter((r) => r.status === 201);
+      const rejectedOrders = results.filter((r) => r.status === 400);
+
+      // Exactly 3 must succeed and exactly 2 must be rejected
+      assert.equal(successfulOrders.length, 3, 'Exactly 3 orders can succeed for stock of 3');
+      assert.equal(rejectedOrders.length, 2, 'Remaining 2 orders must be safely rejected');
+
+      // Final stock must be exactly 0, reservedQuantity exactly 3 (never negative!)
+      const finalProduct = await MedicalProduct.findById(limitedProduct._id);
+      assert.equal(finalProduct?.stockQuantity, 0, 'Stock must reach 0 and never go negative');
+      assert.equal(finalProduct?.reservedQuantity, 3, 'Reserved quantity must equal allocated units');
     });
 
     it('should return existing order when submitting duplicate idempotency key', async () => {
@@ -440,9 +486,10 @@ describe('Medical Products & DME Commerce Test Suite', () => {
       assert.equal(res.body.data.orderStatus, 'cancelled');
       assert.equal(res.body.data.cancellation.isCancelled, true);
 
-      // Verify stock was restored
+      // Verify stock was restored and reservation released
       const prodAfter = await MedicalProduct.findById(testItem.productId);
       assert.equal(prodAfter?.stockQuantity, stockBefore + testItem.quantity, 'Reserved stock restored');
+      assert.equal(prodAfter?.reservedQuantity, 0, 'Reserved quantity must be released on cancellation');
     });
 
     it('should reject cancelling an already cancelled order', async () => {

@@ -26,3 +26,7 @@ export * from './SyncOperation.js';
 export * from './NotificationLog.js';
 export * from './DailyHealthUpdate.js';
 export * from './ClinicalNote.js';
+export * from './Supplier.js';
+export * from './SupplierPurchaseOrder.js';
+export * from './CaregiverPlan.js';
+export * from './CaregiverSubscription.js';

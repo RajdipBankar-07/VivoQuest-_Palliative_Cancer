@@ -3,7 +3,54 @@
  * Centralized HTTP service for connecting to the VivoQuest Express Marketplace API
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+/**
+ * Centralized API Base URL Resolver
+ * 
+ * Logic:
+ * 1. Checks NEXT_PUBLIC_API_BASE_URL or NEXT_PUBLIC_API_URL.
+ * 2. If explicitly configured with a production domain (non-localhost/loopback), uses it directly.
+ * 3. In browser environments, dynamically derives the host from window.location.hostname on port 4000.
+ *    - http://localhost:3000 -> http://localhost:4000
+ *    - http://10.151.164.41:3000 -> http://10.151.164.41:4000
+ *    - Mobile device on LAN -> http://10.151.164.41:4000 (never uses device's own localhost)
+ * 4. For server-side rendering (SSR), targets local backend on port 4000.
+ */
+export const getApiBaseUrl = (): string => {
+  const configured =
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    process.env.NEXT_PUBLIC_API_URL;
+
+  if (configured) {
+    const trimmed = configured.trim().replace(/\/+$/, '');
+    const isLocalhostOrLoopback =
+      trimmed.includes('localhost') ||
+      trimmed.includes('127.0.0.1') ||
+      trimmed.includes('0.0.0.0');
+
+    // In production deployments, respect the configured public API URL directly
+    if (!isLocalhostOrLoopback) {
+      return trimmed;
+    }
+  }
+
+  // Client-side browser: dynamically bind to the current host at port 4000
+  if (typeof window !== 'undefined' && window.location) {
+    const protocol = window.location.protocol || 'http:';
+    const hostname = window.location.hostname || 'localhost';
+    return `${protocol}//${hostname}:4000`;
+  }
+
+  // Configured local override for SSR
+  if (configured) {
+    return configured.trim().replace(/\/+$/, '');
+  }
+
+  // SSR default
+  return 'http://127.0.0.1:4000';
+};
+
+export const API_BASE_URL = getApiBaseUrl();
+
 
 export interface ApiErrorResponse {
   success: false;
@@ -30,7 +77,7 @@ export class ApiClientError extends Error {
 }
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint}`;
+  const url = `${getApiBaseUrl()}${endpoint}`;
   const token = typeof window !== 'undefined' ? localStorage.getItem('vivo_token') : null;
 
   const headers: HeadersInit = {
@@ -62,7 +109,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     // Network errors (e.g. backend server not running)
     throw new ApiClientError(
       err.message === 'Failed to fetch' 
-        ? `Unable to connect to VivoQuest API at ${API_BASE_URL}. Ensure the backend server is running.`
+        ? `Unable to connect to VivoQuest API at ${getApiBaseUrl()}. Ensure the backend server is running.`
         : err.message,
       0,
       'NETWORK_ERROR'
@@ -1484,6 +1531,309 @@ export const adminApi = {
       data: any;
     }>(`/api/v1/admin/notifications/${id}/retry`, {
       method: 'POST',
+    });
+    return res;
+  },
+
+  async getFinancialSummary() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        revenue: {
+          totalGrossSalesRevenue: number;
+          productSalesRevenue: number;
+          caregiverSubscriptionRevenue: number;
+        };
+        costsAndLiabilities: {
+          equipmentProcurementCost: number;
+          caregiverPayoutLiabilities: number;
+          supplierPayablesPending: number;
+          supplierPayablesSettled: number;
+          refundsProcessed: number;
+          paymentGatewayFees: number;
+        };
+        profitability: {
+          estimatedGrossProfit: number;
+          grossProfitMarginPct: number;
+        };
+        settlementBreakdown: {
+          onlinePaymentVolume: number;
+          paidOrderCount: number;
+          activeSubscriptionCount: number;
+          supplierPOCount: number;
+        };
+      };
+    }>('/api/v1/admin/finances/summary');
+    return res.data;
+  },
+
+  async processOrderRefund(orderId: string, refundAmount: number, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/orders/${orderId}/refund`, {
+      method: 'POST',
+      body: JSON.stringify({ refundAmount, reason }),
+    });
+    return res;
+  },
+
+  async getDocumentExpiryAlerts() {
+    const res = await request<{
+      success: boolean;
+      data: {
+        alerts: any[];
+        summary: {
+          totalAlerts: number;
+          expiredCount: number;
+          expiringSoonCount: number;
+        };
+      };
+    }>('/api/v1/admin/credentials/expiry-alerts');
+    return res.data;
+  },
+
+  async verifyHospitalPartner(
+    id: string,
+    params: { status: 'pending' | 'verified' | 'rejected'; notes?: string; licenseExpiryDate?: string }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/hospitals/${id}/verify`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async getHealthcareProfessionals(params?: {
+    professionType?: string;
+    verificationStatus?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.professionType && params.professionType !== 'all') query.set('professionType', params.professionType);
+    if (params?.verificationStatus && params.verificationStatus !== 'all') query.set('verificationStatus', params.verificationStatus);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      data: any[];
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+    }>(`/api/v1/admin/professionals${qs}`);
+    return res;
+  },
+
+  async getSuppliers(params?: {
+    status?: string;
+    sourcingType?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      data: any[];
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+    }>(`/api/v1/admin/suppliers${qs}`);
+    return res;
+  },
+
+  async onboardSupplier(data: {
+    name: string;
+    contactPerson: string;
+    phone: string;
+    email: string;
+    address: string;
+    city: string;
+    state?: string;
+    pincode: string;
+    gstin: string;
+    pan: string;
+    bankDetails: {
+      accountName: string;
+      accountNumber: string;
+      ifsc: string;
+      bankName: string;
+    };
+    sourcingType?: 'own_stock' | 'supplier_direct' | 'hybrid';
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/suppliers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async verifySupplier(id: string, params: { status: 'pending_review' | 'verified' | 'rejected'; notes?: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/suppliers/${id}/verify`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async getPurchaseOrders(params?: {
+    supplierId?: string;
+    paymentStatus?: string;
+    deliveryStatus?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.supplierId) query.set('supplierId', params.supplierId);
+    if (params?.paymentStatus && params.paymentStatus !== 'all') query.set('paymentStatus', params.paymentStatus);
+    if (params?.deliveryStatus && params.deliveryStatus !== 'all') query.set('deliveryStatus', params.deliveryStatus);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      data: any[];
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+    }>(`/api/v1/admin/purchase-orders${qs}`);
+    return res;
+  },
+
+  async createPurchaseOrder(data: {
+    supplierId: string;
+    items: Array<{ productId: string; quantity: number; procurementCostPerUnit?: number }>;
+    notes?: string;
+    paymentDueDate?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/purchase-orders', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async updatePurchaseOrderStatus(
+    id: string,
+    params: {
+      deliveryStatus?: 'ordered' | 'partially_received' | 'received' | 'cancelled';
+      paymentStatus?: 'pending' | 'partially_settled' | 'settled';
+      paidAmount?: number;
+      notes?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/purchase-orders/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    });
+    return res;
+  },
+
+  async getCaregiverPlans(params?: { category?: string; planType?: string }) {
+    const query = new URLSearchParams();
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.planType && params.planType !== 'all') query.set('planType', params.planType);
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/admin/caregiver-plans${qs}`);
+    return res;
+  },
+
+  async createCaregiverPlan(data: {
+    title: string;
+    planType: 'monthly_subscription' | 'fixed_visit_package' | 'hourly_package';
+    category: 'palliative' | 'post_operative' | 'elderly_care' | 'rehabilitation';
+    durationDays: number;
+    totalVisitsIncluded: number;
+    hoursPerVisit: number;
+    customerPrice: number;
+    caregiverPayout: number;
+    description: string;
+    features?: string[];
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/caregiver-plans', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getCaregiverSubscriptions(params?: {
+    status?: string;
+    patientId?: string;
+    caregiverId?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.patientId) query.set('patientId', params.patientId);
+    if (params?.caregiverId) query.set('caregiverId', params.caregiverId);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      data: any[];
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+    }>(`/api/v1/admin/caregiver-subscriptions${qs}`);
+    return res;
+  },
+
+  async assignCaregiverToSubscription(id: string, caregiverUserId: string, notes?: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ caregiverUserId, notes }),
+    });
+    return res;
+  },
+
+  async recordSubscriptionVisit(id: string, notes?: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}/record-visit`, {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
     });
     return res;
   },

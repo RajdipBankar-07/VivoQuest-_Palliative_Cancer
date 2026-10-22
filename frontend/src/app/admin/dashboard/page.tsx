@@ -45,14 +45,36 @@ import {
   Send,
   Smartphone,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/Button';
 import { adminApi, authApi, ApiClientError } from '@/lib/api';
+import { FinancialSummaryView } from './components/FinancialSummaryView';
+import { SupplierManagementView } from './components/SupplierManagementView';
+import { CaregiverSubscriptionsView } from './components/CaregiverSubscriptionsView';
+import { DocumentExpiryAlertsView } from './components/DocumentExpiryAlertsView';
+import { HealthcareProfessionalsView } from './components/HealthcareProfessionalsView';
 
-type TabType = 'overview' | 'accounts' | 'credentials' | 'hospitals' | 'services' | 'exceptions' | 'support' | 'audits' | 'orders' | 'field_ops';
+type TabType =
+  | 'overview'
+  | 'finances'
+  | 'suppliers'
+  | 'subscriptions'
+  | 'expiry_alerts'
+  | 'professionals'
+  | 'accounts'
+  | 'credentials'
+  | 'hospitals'
+  | 'services'
+  | 'exceptions'
+  | 'support'
+  | 'audits'
+  | 'orders'
+  | 'field_ops';
 
 export default function AdminDashboardPage() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
@@ -178,6 +200,17 @@ export default function AdminDashboardPage() {
   const [notifSearch, setNotifSearch] = useState('');
   const [notifPagination, setNotifPagination] = useState({ total: 0, page: 1, limit: 10, totalPages: 1 });
 
+  // Phase 2: Order Refund & Hospital Verification States
+  const [showRefundModal, setShowRefundModal] = useState(false);
+  const [refundAmount, setRefundAmount] = useState<number>(0);
+  const [refundReason, setRefundReason] = useState<string>('');
+
+  const [showHospitalVerifyModal, setShowHospitalVerifyModal] = useState(false);
+  const [selectedHospitalForVerify, setSelectedHospitalForVerify] = useState<any | null>(null);
+  const [hospitalVerifyStatus, setHospitalVerifyStatus] = useState<'verified' | 'rejected' | 'pending'>('verified');
+  const [hospitalVerifyNotes, setHospitalVerifyNotes] = useState('');
+  const [hospitalLicenseExpiry, setHospitalLicenseExpiry] = useState('');
+
   const getPermittedTransitions = (currentStatus: string): string[] => {
     switch (currentStatus) {
       case 'placed':
@@ -204,21 +237,19 @@ export default function AdminDashboardPage() {
     setIsLoading(true);
     setError(null);
     try {
-      let storedUser = authApi.getStoredUser();
-      let token = authApi.getToken();
+      const storedUser = authApi.getStoredUser();
+      const token = authApi.getToken();
 
-      // If no valid session or not admin/super_admin, default to operations admin demo for review
+      // Enforce verified administrator session
       if (!token || !storedUser || !['admin', 'super_admin'].includes(storedUser.role)) {
-        const loginRes = await authApi.login({
-          identifier: '9899009900', // Ops Lead Admin
-          otp: '123456',
-          role: 'admin',
-        });
-        storedUser = loginRes.user;
+        setIsAuthorized(false);
+        setIsLoading(false);
+        router.push('/admin/login');
+        return;
       }
 
       setCurrentUser(storedUser);
-      setIsAuthorized(['admin', 'super_admin'].includes(storedUser.role));
+      setIsAuthorized(true);
       adminApi.getAdminFieldVisitStats().then(setFieldStats).catch(() => null);
       await loadTabData('overview');
     } catch (err: any) {
@@ -578,6 +609,50 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // Phase 2: Process Order Refund
+  const handleProcessRefundSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOrder || refundAmount <= 0) return;
+    setActionLoading(true);
+    try {
+      await adminApi.processOrderRefund(selectedOrder._id, refundAmount, refundReason);
+      setSuccessMsg(`Refund of ₹${refundAmount.toLocaleString('en-IN')} processed successfully for order ${selectedOrder.orderNumber}`);
+      setShowRefundModal(false);
+      setShowOrderDetailModal(false);
+      setRefundAmount(0);
+      setRefundReason('');
+      await loadTabData('orders');
+    } catch (err: any) {
+      setError(err.message || 'Failed to process order refund');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Phase 2: Hospital Partner Verification
+  const handleVerifyHospitalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedHospitalForVerify) return;
+    setActionLoading(true);
+    try {
+      await adminApi.verifyHospitalPartner(selectedHospitalForVerify._id, {
+        status: hospitalVerifyStatus,
+        notes: hospitalVerifyNotes.trim() || undefined,
+        licenseExpiryDate: hospitalLicenseExpiry || undefined,
+      });
+      setSuccessMsg(`Hospital '${selectedHospitalForVerify.hospitalName}' verification updated to '${hospitalVerifyStatus}'`);
+      setShowHospitalVerifyModal(false);
+      setSelectedHospitalForVerify(null);
+      setHospitalVerifyNotes('');
+      setHospitalLicenseExpiry('');
+      await loadTabData('hospitals');
+    } catch (err: any) {
+      setError(err.message || 'Failed to update hospital partner verification');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'approved':
@@ -625,6 +700,30 @@ export default function AdminDashboardPage() {
         );
     }
   };
+
+  if (!isLoading && isAuthorized === false) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-navy">
+        <Navbar />
+        <div className="flex-1 max-w-md mx-auto px-4 py-16 flex flex-col justify-center items-center text-center">
+          <div className="w-16 h-16 rounded-full bg-rose-100 flex items-center justify-center text-rose-600 mb-4 shadow-sm">
+            <Lock size={32} />
+          </div>
+          <h2 className="text-2xl font-bold text-navy mb-2">Administrative Clearance Required</h2>
+          <p className="text-sm text-slate-500 mb-6">
+            Access to the centralized operations dashboard requires verified administrative credentials.
+          </p>
+          <Link
+            href="/admin/login"
+            className="w-full inline-flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold bg-navy text-white hover:bg-navy-light transition-colors shadow-md shadow-navy/20"
+          >
+            Go to Admin Login
+          </Link>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-navy">
@@ -738,8 +837,13 @@ export default function AdminDashboardPage() {
         <div className="bg-white rounded-2xl shadow-sm border border-border p-1.5 mb-8 flex flex-wrap gap-1">
           {[
             { id: 'overview', label: 'Overview', icon: Activity },
-            { id: 'field_ops', label: 'Field Operations & DME', icon: Navigation, badge: fieldStats?.activeVisits || undefined },
+            { id: 'finances', label: 'Finances & P&L', icon: CreditCard },
+            { id: 'suppliers', label: 'Suppliers & Procurement', icon: Truck },
+            { id: 'subscriptions', label: 'Caregiver Plans', icon: HeartPulse },
+            { id: 'expiry_alerts', label: 'Expiry Alerts', icon: AlertTriangle, badge: overview?.pendingCredentialsCount, alert: overview?.pendingCredentialsCount > 0 },
+            { id: 'professionals', label: 'Healthcare Staff', icon: Stethoscope },
             { id: 'orders', label: 'Orders & DME Fulfillment', icon: Package, badge: ordersPagination.total || undefined },
+            { id: 'field_ops', label: 'Field Operations & DME', icon: Navigation, badge: fieldStats?.activeVisits || undefined },
             { id: 'accounts', label: 'Accounts & Users', icon: Users, badge: overview?.totalUsers },
             { id: 'credentials', label: 'Credential Reviews', icon: FileCheck, badge: overview?.pendingCredentialsCount, alert: overview?.pendingCredentialsCount > 0 },
             { id: 'hospitals', label: 'Hospital Partners', icon: Building2, badge: overview?.totalHospitals },
@@ -779,6 +883,20 @@ export default function AdminDashboardPage() {
             );
           })}
         </div>
+
+        {/* Phase 2: Central Commerce, Governance & Financial Tabs */}
+        {activeTab === 'finances' && <FinancialSummaryView />}
+        {activeTab === 'suppliers' && <SupplierManagementView />}
+        {activeTab === 'subscriptions' && <CaregiverSubscriptionsView />}
+        {activeTab === 'expiry_alerts' && (
+          <DocumentExpiryAlertsView
+            onNavigateToCredential={(credId) => {
+              setSelectedCred({ _id: credId });
+              setActiveTab('credentials');
+            }}
+          />
+        )}
+        {activeTab === 'professionals' && <HealthcareProfessionalsView />}
 
         {/* ========================================================================= */}
         {/* TAB 1: OVERVIEW */}
@@ -2186,23 +2304,49 @@ export default function AdminDashboardPage() {
                         {h.accreditationLevel}
                       </div>
                     )}
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <span className="text-[10px] uppercase font-bold text-slate-400">Verification:</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                        h.verificationStatus === 'verified'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : h.verificationStatus === 'rejected'
+                          ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                          : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      }`}>
+                        {h.verificationStatus ? h.verificationStatus.toUpperCase() : 'PENDING VERIFICATION'}
+                      </span>
+                    </div>
                   </div>
 
-                  <div className="pt-3 border-t border-border flex items-center justify-between text-xs">
+                  <div className="pt-3 border-t border-border flex items-center justify-between text-xs gap-2">
                     <span className="text-slate-500">
                       Beds: {h.bedCapacity || 100}+
                     </span>
-                    <button
-                      onClick={() => handleToggleHospitalStatus(h._id, h.isActive !== false)}
-                      disabled={actionLoading}
-                      className={`px-3 py-1 rounded-lg font-semibold text-xs transition-colors ${
-                        h.isActive === false
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                          : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
-                      }`}
-                    >
-                      {h.isActive === false ? 'Activate Partner' : 'Suspend Organization'}
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          setSelectedHospitalForVerify(h);
+                          setHospitalVerifyStatus(h.verificationStatus === 'verified' ? 'verified' : 'verified');
+                          setHospitalVerifyNotes(h.verificationNotes || '');
+                          setHospitalLicenseExpiry(h.licenseExpiryDate ? new Date(h.licenseExpiryDate).toISOString().slice(0, 10) : '');
+                          setShowHospitalVerifyModal(true);
+                        }}
+                        className="px-2.5 py-1 rounded-lg font-semibold text-xs bg-navy text-white hover:bg-navy-light transition"
+                      >
+                        Verify / Review
+                      </button>
+                      <button
+                        onClick={() => handleToggleHospitalStatus(h._id, h.isActive !== false)}
+                        disabled={actionLoading}
+                        className={`px-2.5 py-1 rounded-lg font-semibold text-xs transition-colors ${
+                          h.isActive === false
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                            : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
+                        }`}
+                      >
+                        {h.isActive === false ? 'Activate' : 'Suspend'}
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -3484,6 +3628,24 @@ export default function AdminDashboardPage() {
                         />
                         {selectedOrder.paymentStatus} ({selectedOrder.paymentMethod})
                       </div>
+                      {(selectedOrder.refundAmount || 0) > 0 && (
+                        <div className="text-[10px] text-rose-600 font-bold mt-0.5">
+                          Refunded: ₹{selectedOrder.refundAmount.toLocaleString('en-IN')}
+                        </div>
+                      )}
+                      {(selectedOrder.paymentStatus === 'paid' || selectedOrder.paymentStatus === 'partially_refunded') && (
+                        <button
+                          onClick={() => {
+                            const maxRefund = selectedOrder.totalAmount - (selectedOrder.refundAmount || 0);
+                            setRefundAmount(maxRefund);
+                            setRefundReason('');
+                            setShowRefundModal(true);
+                          }}
+                          className="mt-2 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 text-[11px] font-bold transition flex items-center gap-1"
+                        >
+                          Process Refund
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -3735,6 +3897,201 @@ export default function AdminDashboardPage() {
                   >
                     Confirm Reassignment &amp; Audit
                   </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+        {/* ========================================================================= */}
+        {/* MODAL: ORDER REFUND PROCESSING */}
+        {/* ========================================================================= */}
+        {showRefundModal && selectedOrder && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl border border-border animate-scale-up">
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100">
+                    <CreditCard size={22} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-navy">Process Order Refund</h3>
+                    <p className="text-xs text-slate-500">Order: {selectedOrder.orderNumber}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowRefundModal(false)}
+                  className="text-slate-400 hover:text-slate-600 transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl p-3.5 mb-4 border border-border text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Total Order Amount:</span>
+                  <span className="font-bold text-slate-900">₹{selectedOrder.totalAmount?.toLocaleString('en-IN')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Already Refunded:</span>
+                  <span className="font-semibold text-rose-600">₹{(selectedOrder.refundAmount || 0).toLocaleString('en-IN')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Max Refund Available:</span>
+                  <span className="font-bold text-emerald-600">
+                    ₹{(selectedOrder.totalAmount - (selectedOrder.refundAmount || 0)).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              <form onSubmit={handleProcessRefundSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Refund Amount (₹) *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={selectedOrder.totalAmount - (selectedOrder.refundAmount || 0)}
+                    value={refundAmount}
+                    onChange={(e) => setRefundAmount(Number(e.target.value))}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-border text-xs bg-white text-slate-800 focus:ring-2 focus:ring-navy/20 focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Reason for Refund *
+                  </label>
+                  <textarea
+                    value={refundReason}
+                    onChange={(e) => setRefundReason(e.target.value)}
+                    placeholder="Enter return reason, damaged item details, cancellation note..."
+                    rows={3}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-border text-xs bg-white text-slate-800 focus:ring-2 focus:ring-navy/20 focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-3 border-t border-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowRefundModal(false)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={actionLoading || refundAmount <= 0}
+                    className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition disabled:opacity-50 inline-flex items-center gap-2"
+                  >
+                    {actionLoading ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    Confirm &amp; Issue Refund
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: HOSPITAL PARTNER VERIFICATION */}
+        {/* ========================================================================= */}
+        {showHospitalVerifyModal && selectedHospitalForVerify && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl border border-border animate-scale-up">
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-2xl bg-teal-50 text-teal-600 border border-teal-100">
+                    <Building2 size={22} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-navy">Verify Healthcare Partner</h3>
+                    <p className="text-xs text-slate-500">{selectedHospitalForVerify.hospitalName}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowHospitalVerifyModal(false)}
+                  className="text-slate-400 hover:text-slate-600 transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl p-3.5 mb-4 border border-border text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Reg Number:</span>
+                  <span className="font-mono font-bold text-slate-900">{selectedHospitalForVerify.registrationNumber}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Accreditation:</span>
+                  <span className="font-semibold text-slate-800">{selectedHospitalForVerify.accreditationLevel || 'NABH'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Location:</span>
+                  <span className="text-slate-700">{selectedHospitalForVerify.address?.city}, {selectedHospitalForVerify.address?.state}</span>
+                </div>
+              </div>
+
+              <form onSubmit={handleVerifyHospitalSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Verification Decision *
+                  </label>
+                  <select
+                    value={hospitalVerifyStatus}
+                    onChange={(e) => setHospitalVerifyStatus(e.target.value as any)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-border text-xs bg-white text-slate-800 focus:ring-2 focus:ring-navy/20 focus:outline-none"
+                    required
+                  >
+                    <option value="verified">Verified &amp; Certified (Authentic partner)</option>
+                    <option value="rejected">Rejected (Disqualified / Invalid licensing)</option>
+                    <option value="pending">Pending Further Audit Documentation</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    License / Accreditation Expiry Date
+                  </label>
+                  <input
+                    type="date"
+                    value={hospitalLicenseExpiry}
+                    onChange={(e) => setHospitalLicenseExpiry(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-border text-xs bg-white text-slate-800 focus:ring-2 focus:ring-navy/20 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Verification Notes &amp; Clinical Audit Reference
+                  </label>
+                  <textarea
+                    value={hospitalVerifyNotes}
+                    onChange={(e) => setHospitalVerifyNotes(e.target.value)}
+                    placeholder="Enter director approval reference, NABH verification report ID..."
+                    rows={3}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-border text-xs bg-white text-slate-800 focus:ring-2 focus:ring-navy/20 focus:outline-none"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-3 border-t border-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowHospitalVerifyModal(false)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={actionLoading}
+                    className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-navy hover:bg-navy-light transition disabled:opacity-50 inline-flex items-center gap-2"
+                  >
+                    {actionLoading ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    Save Verification Decision
+                  </button>
                 </div>
               </form>
             </div>

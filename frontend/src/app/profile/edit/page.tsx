@@ -22,8 +22,10 @@ import {
   TrendingUp,
   X
 } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
 
-const API_BASE = 'http://127.0.0.1:3001';
+const API_BASE = getApiBaseUrl();
+
 
 export default function EditProfilePage() {
   const router = useRouter();

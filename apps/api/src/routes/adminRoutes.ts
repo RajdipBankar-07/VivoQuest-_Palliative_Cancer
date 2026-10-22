@@ -27,7 +27,30 @@ import {
   updateOrderStatusAdmin,
   assignInstallationSpecialistAdmin,
   addOrderTrackingEventAdmin,
+  getFinancialSummaryAdmin,
+  processOrderRefundAdmin,
+  listDocumentExpiryAlertsAdmin,
+  reviewHospitalOrganizationVerification,
+  listHealthcareProfessionalsAdmin,
 } from '../services/adminService.js';
+import {
+  listSuppliers,
+  getSupplierById,
+  onboardSupplier,
+  reviewSupplierVerification,
+  listPurchaseOrders,
+  createPurchaseOrder,
+  updatePurchaseOrderStatus,
+} from '../services/supplierService.js';
+import {
+  listCaregiverPlans,
+  createCaregiverPlan,
+  listCaregiverSubscriptions,
+  assignCaregiverToSubscription,
+  recordSubscriptionVisit,
+  activateCaregiverSubscription,
+  cancelCaregiverSubscription,
+} from '../services/caregiverPlanService.js';
 import {
   listAdminFieldVisits,
   getAdminFieldOperationsStats,
@@ -938,3 +961,514 @@ adminRoutes.get(
     }
   }
 );
+
+/**
+ * -----------------------------------------------------------------------------
+ * 6. FINANCIAL REPORTING & REFUND RECONCILIATION
+ * -----------------------------------------------------------------------------
+ */
+
+/**
+ * GET /api/v1/admin/finances/summary
+ * Authoritative financial overview calculated on the server.
+ * Separates customer sales revenue, procurement cost, supplier liabilities, refunds, and gross profit.
+ */
+adminRoutes.get(
+  '/finances/summary',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      const summary = await getFinancialSummaryAdmin();
+      res.json({
+        success: true,
+        data: summary,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/orders/:id/refund
+ * Safely process customer order return or cancellation refund
+ */
+adminRoutes.post(
+  '/orders/:id/refund',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { refundAmount, reason } = req.body;
+      if (!refundAmount || !reason) {
+        throw new AppError('refundAmount and reason are mandatory for refund processing', 400);
+      }
+      const order = await processOrderRefundAdmin(
+        req.params.id,
+        Number(refundAmount),
+        reason,
+        req.user!
+      );
+      res.json({
+        success: true,
+        message: 'Order refund recorded and marked as processed',
+        data: order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * -----------------------------------------------------------------------------
+ * 7. DOCUMENT VERIFICATION, CREDENTIALS & EXPIRY ALERTS
+ * -----------------------------------------------------------------------------
+ */
+
+/**
+ * GET /api/v1/admin/credentials/expiry-alerts
+ * Document expiry alerts for clinical licenses and hospital accreditation
+ */
+adminRoutes.get(
+  '/credentials/expiry-alerts',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      const alerts = await listDocumentExpiryAlertsAdmin();
+      res.json({
+        success: true,
+        data: alerts,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/hospitals/:id/verify
+ * Review and verify or reject a hospital or healthcare partner
+ */
+adminRoutes.post(
+  '/hospitals/:id/verify',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { status, notes, licenseExpiryDate } = req.body;
+      if (!['pending', 'verified', 'rejected'].includes(status)) {
+        throw new AppError("status must be 'pending', 'verified', or 'rejected'", 400);
+      }
+      const profile = await reviewHospitalOrganizationVerification(
+        req.params.id,
+        status,
+        notes || '',
+        licenseExpiryDate,
+        req.user!
+      );
+      res.json({
+        success: true,
+        message: `Hospital partner verification updated to ${status}`,
+        data: profile,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/professionals
+ * List doctors, nurses, and caregivers with verification credentials and statistics
+ */
+adminRoutes.get(
+  '/professionals',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { professionType, verificationStatus, search, page, limit } = req.query;
+      const result = await listHealthcareProfessionalsAdmin({
+        professionType: professionType as string,
+        verificationStatus: verificationStatus as string,
+        search: search as string,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 20,
+      });
+      res.json({
+        success: true,
+        data: result.professionals,
+        pagination: result.pagination,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * -----------------------------------------------------------------------------
+ * 8. SUPPLIER COMMERCE & PROCUREMENT PURCHASE ORDERS
+ * -----------------------------------------------------------------------------
+ */
+
+/**
+ * GET /api/v1/admin/suppliers
+ * List suppliers with filters and search
+ */
+adminRoutes.get(
+  '/suppliers',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { status, sourcingType, search, page, limit } = req.query;
+      const result = await listSuppliers({
+        status: status as string,
+        sourcingType: sourcingType as string,
+        search: search as string,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 20,
+      });
+      res.json({
+        success: true,
+        data: result.suppliers,
+        pagination: result.pagination,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/suppliers
+ * Onboard a new medical equipment supplier
+ */
+adminRoutes.post(
+  '/suppliers',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const supplier = await onboardSupplier(req.body, req.user!);
+      res.status(201).json({
+        success: true,
+        message: 'Supplier onboarded successfully in pending review state',
+        data: supplier,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/suppliers/:id
+ * Get supplier details
+ */
+adminRoutes.get(
+  '/suppliers/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const supplier = await getSupplierById(req.params.id);
+      res.json({
+        success: true,
+        data: supplier,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/suppliers/:id/verify
+ * Review supplier verification (verify or reject)
+ */
+adminRoutes.post(
+  '/suppliers/:id/verify',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { status, notes } = req.body;
+      if (!['pending_review', 'verified', 'rejected'].includes(status)) {
+        throw new AppError("status must be 'pending_review', 'verified', or 'rejected'", 400);
+      }
+      const supplier = await reviewSupplierVerification(req.params.id, status, notes || '', req.user!);
+      res.json({
+        success: true,
+        message: `Supplier verification updated to ${status}`,
+        data: supplier,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/purchase-orders
+ * List purchase orders with filters
+ */
+adminRoutes.get(
+  '/purchase-orders',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { supplierId, paymentStatus, deliveryStatus, page, limit } = req.query;
+      const result = await listPurchaseOrders({
+        supplierId: supplierId as string,
+        paymentStatus: paymentStatus as string,
+        deliveryStatus: deliveryStatus as string,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 20,
+      });
+      res.json({
+        success: true,
+        data: result.orders,
+        pagination: result.pagination,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/purchase-orders
+ * Create a new purchase order
+ */
+adminRoutes.post(
+  '/purchase-orders',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const po = await createPurchaseOrder(req.body, req.user!);
+      res.status(201).json({
+        success: true,
+        message: 'Purchase order created successfully',
+        data: po,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/admin/purchase-orders/:id
+ * Update purchase order status (delivery, payment settlement)
+ */
+adminRoutes.put(
+  '/purchase-orders/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const po = await updatePurchaseOrderStatus(req.params.id, req.body, req.user!);
+      res.json({
+        success: true,
+        message: 'Purchase order status updated successfully',
+        data: po,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * -----------------------------------------------------------------------------
+ * 9. CAREGIVER SUBSCRIPTIONS & FIXED VISIT PACKAGES
+ * -----------------------------------------------------------------------------
+ */
+
+/**
+ * GET /api/v1/admin/caregiver-plans
+ * List caregiver care plans and packages
+ */
+adminRoutes.get(
+  '/caregiver-plans',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { category, planType } = req.query;
+      const plans = await listCaregiverPlans({
+        category: category as string,
+        planType: planType as string,
+      });
+      res.json({
+        success: true,
+        count: plans.length,
+        data: plans,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/caregiver-plans
+ * Create a new caregiver subscription package
+ */
+adminRoutes.post(
+  '/caregiver-plans',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const plan = await createCaregiverPlan(req.body, req.user!);
+      res.status(201).json({
+        success: true,
+        message: 'Caregiver plan created successfully',
+        data: plan,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/caregiver-subscriptions
+ * List patient caregiver subscriptions
+ */
+adminRoutes.get(
+  '/caregiver-subscriptions',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { status, patientId, caregiverId, search, page, limit } = req.query;
+      const result = await listCaregiverSubscriptions({
+        status: status as string,
+        patientId: patientId as string,
+        caregiverId: caregiverId as string,
+        search: search as string,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 20,
+      });
+      res.json({
+        success: true,
+        data: result.subscriptions,
+        pagination: result.pagination,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/caregiver-subscriptions/:id/assign
+ * Assign or reassign caregiver to patient subscription
+ */
+adminRoutes.post(
+  '/caregiver-subscriptions/:id/assign',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { caregiverUserId, notes } = req.body;
+      if (!caregiverUserId) {
+        throw new AppError('caregiverUserId is required', 400);
+      }
+      const sub = await assignCaregiverToSubscription(
+        req.params.id,
+        caregiverUserId,
+        notes,
+        req.user!
+      );
+      res.json({
+        success: true,
+        message: 'Caregiver assigned to subscription successfully',
+        data: sub,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/caregiver-subscriptions/:id/record-visit
+ * Record a visit against a subscription balance
+ */
+adminRoutes.post(
+  '/caregiver-subscriptions/:id/record-visit',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { notes, visitIdempotencyKey } = req.body;
+      const sub = await recordSubscriptionVisit(req.params.id, notes, req.user!, visitIdempotencyKey);
+      res.json({
+        success: true,
+        message: 'Visit recorded against subscription balance',
+        data: sub,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/caregiver-subscriptions/activate
+ * Activate a caregiver subscription for a patient
+ */
+adminRoutes.post(
+  '/caregiver-subscriptions/activate',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const sub = await activateCaregiverSubscription(req.body, req.user!);
+      res.status(201).json({
+        success: true,
+        message: 'Caregiver subscription activated successfully',
+        data: sub,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/caregiver-subscriptions/:id/cancel
+ * Cancel a caregiver subscription
+ */
+adminRoutes.post(
+  '/caregiver-subscriptions/:id/cancel',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { reason } = req.body;
+      if (!reason) {
+        throw new AppError('Cancellation reason is required', 400);
+      }
+      const sub = await cancelCaregiverSubscription(req.params.id, reason, req.user!);
+      res.json({
+        success: true,
+        message: 'Caregiver subscription cancelled successfully',
+        data: sub,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+

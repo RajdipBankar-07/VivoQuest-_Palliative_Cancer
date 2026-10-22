@@ -7,14 +7,13 @@
  * Patient and clinical offline storage is handled strictly via client-controlled IndexedDB.
  */
 
-const CACHE_NAME = 'vivoquest-app-v1';
+const CACHE_NAME = 'vivoquest-app-v2';
 const STATIC_ASSETS = [
-  '/',
-  '/favicon.ico',
+  '/favicon.svg',
   '/manifest.json',
 ];
 
-// Install: Cache core static assets
+// Install: Cache essential static shell assets only (do NOT precache '/' to avoid stale index)
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -26,7 +25,7 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate: Clean up previous cache versions
+// Activate: Purge all stale caches from previous versions (including vivoquest-app-v1)
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -43,26 +42,39 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch: Network-first for dynamic content, cache-first for static assets
+// Fetch: Strict Network-First for HTML navigation; never serve stale HTML
 // ALWAYS bypass CacheStorage for API calls (/api/*) to safeguard patient data
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   // STRICT PRIVACY RULE: Never intercept or cache API endpoints or auth tokens
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/v1/')) {
-    return; // Let browser perform direct network fetch without caching
+    return; // Direct network fetch without caching
   }
 
-  // Handle static page and asset navigation
+  // Handle HTML navigation (page loads): ALWAYS NETWORK-FIRST
+  if (
+    event.request.mode === 'navigate' ||
+    (event.request.method === 'GET' && event.request.headers.get('accept')?.includes('text/html'))
+  ) {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          return networkResponse;
+        })
+        .catch(() => {
+          // Offline fallback only when network completely fails
+          return caches.match(event.request).then((cached) => cached || caches.match('/'));
+        })
+    );
+    return;
+  }
+
+  // Handle static assets (images, css, js): Stale-while-revalidate or Network-first
   if (event.request.method === 'GET') {
     event.respondWith(
-      caches.match(event.request).then((cachedResponse) => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-
-        return fetch(event.request).then((networkResponse) => {
-          // Cache successful responses for static assets (images, css, js)
+      fetch(event.request)
+        .then((networkResponse) => {
           if (
             networkResponse &&
             networkResponse.status === 200 &&
@@ -78,13 +90,9 @@ self.addEventListener('fetch', (event) => {
             });
           }
           return networkResponse;
-        }).catch(() => {
-          // If offline and request is HTML navigation, fallback to root or cached page
-          if (event.request.headers.get('accept')?.includes('text/html')) {
-            return caches.match('/');
-          }
-        });
-      })
+        })
+        .catch(() => caches.match(event.request))
     );
   }
 });
+

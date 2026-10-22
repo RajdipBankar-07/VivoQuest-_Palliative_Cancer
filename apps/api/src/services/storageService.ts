@@ -4,6 +4,8 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { env } from '../config/environment.js';
 import { UploadedFile, FileCategory, AccessTier } from '../models/UploadedFile.js';
+import { FieldVisit } from '../models/FieldVisit.js';
+import { Appointment } from '../models/Appointment.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 export interface UploadIntentDTO {
@@ -12,6 +14,7 @@ export interface UploadIntentDTO {
   fileSizeBytes: number;
   fileCategory: FileCategory;
   userId: string;
+  patientId?: string;
 }
 
 export interface PresignedUploadResponse {
@@ -73,7 +76,7 @@ const s3Client = isAwsConfigured
 export const createUploadIntent = async (
   data: UploadIntentDTO
 ): Promise<PresignedUploadResponse> => {
-  const { filename, mimeType, fileSizeBytes, fileCategory, userId } = data;
+  const { filename, mimeType, fileSizeBytes, fileCategory, userId, patientId } = data;
 
   // 1. Validate Category
   if (!ALLOWED_MIME_TYPES[fileCategory]) {
@@ -107,6 +110,10 @@ export const createUploadIntent = async (
   const s3Key = `uploads/${fileCategory}/${userId}/${Date.now()}_${sanitizedFilename}`;
   const accessTier = CATEGORY_ACCESS_TIER[fileCategory];
 
+  const parsedPatientId = patientId && mongoose.Types.ObjectId.isValid(patientId)
+    ? new mongoose.Types.ObjectId(patientId)
+    : (['prescription', 'clinical_report'].includes(fileCategory) ? new mongoose.Types.ObjectId(userId) : undefined);
+
   // 5. Create File Metadata Document in MongoDB
   // Storing ONLY metadata, bucket, s3Key, size. ZERO Base64 binaries in MongoDB.
   await UploadedFile.create({
@@ -117,6 +124,7 @@ export const createUploadIntent = async (
     mimeType: mimeType.toLowerCase(),
     fileSizeBytes,
     uploadedBy: new mongoose.Types.ObjectId(userId),
+    patientId: parsedPatientId,
     fileCategory,
     accessTier,
     uploadStatus: 'pending_upload',
@@ -206,8 +214,33 @@ export const getSecureDownloadUrl = async (fileId: string, requestingUserId: str
   }
 
   if (file.accessTier === 'PATIENT_CLINICIAN_CONFIDENTIAL') {
-    if (file.uploadedBy.toString() !== requestingUserId && !['admin', 'super_admin'].includes(requestingUserRole) && requestingUserRole !== 'professional') {
-      throw new AppError('Confidential medical records are accessible only to the patient and verified clinicians.', 403);
+    const isOwner = file.uploadedBy.toString() === requestingUserId;
+    const isTargetPatient = file.patientId && file.patientId.toString() === requestingUserId;
+    const isAdmin = ['admin', 'super_admin'].includes(requestingUserRole);
+
+    if (!isOwner && !isTargetPatient && !isAdmin) {
+      const isClinicianOrCaregiver = ['professional', 'doctor', 'nurse', 'caregiver'].includes(requestingUserRole);
+      if (!isClinicianOrCaregiver) {
+        throw new AppError('Forbidden: Confidential medical records are accessible only to the patient, assigned clinicians, and administrators.', 403);
+      }
+
+      // Target patient is either explicit patientId or uploader (if patient uploaded)
+      const targetPatientId = file.patientId || file.uploadedBy;
+
+      const [assignedVisit, assignedAppointment] = await Promise.all([
+        FieldVisit.exists({
+          providerId: new mongoose.Types.ObjectId(requestingUserId),
+          patientId: targetPatientId,
+        }),
+        Appointment.exists({
+          doctorId: new mongoose.Types.ObjectId(requestingUserId),
+          patientId: targetPatientId,
+        }),
+      ]);
+
+      if (!assignedVisit && !assignedAppointment) {
+        throw new AppError('Forbidden: Access denied. You are not an assigned clinician or caregiver for this patient.', 403);
+      }
     }
   }
 

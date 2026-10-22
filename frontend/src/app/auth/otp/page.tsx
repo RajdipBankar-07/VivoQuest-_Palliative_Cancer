@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ShieldCheck, AlertCircle, ArrowRight, Clock } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
 
 function OTPVerificationForm() {
   const router = useRouter();
@@ -97,7 +98,7 @@ function OTPVerificationForm() {
     setLoading(true);
 
     try {
-      const res = await fetch('http://127.0.0.1:3001/api/auth/verify-otp/', {
+      const res = await fetch(`${getApiBaseUrl()}/api/auth/verify-otp/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

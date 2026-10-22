@@ -3,8 +3,10 @@
 import { useState, useEffect } from 'react';
 import AppLayout from '../../components/AppLayout';
 import { Check, ShieldCheck, CreditCard, Sparkles, Building2, Flame, X, CheckCircle } from 'lucide-react';
+import { getApiBaseUrl } from '@/lib/api';
 
-const API_BASE = 'http://127.0.0.1:3001';
+const API_BASE = getApiBaseUrl();
+
 
 export default function SubscriptionPage() {
   const [currentTier, setCurrentTier] = useState('FREE');

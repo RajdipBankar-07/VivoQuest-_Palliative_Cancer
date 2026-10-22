@@ -927,10 +927,11 @@ export const createProductOrder = async (
 
   // Authoritative revalidation of items and inventory deduction
   let subtotal = 0;
+  let procurementCostTotal = 0;
   let setupRequired = false;
   let recommendedRole: string | undefined;
   const populatedItems: any[] = [];
-  const productsToUpdate: Array<{ product: IMedicalProduct; deductQty: number }> = [];
+  const itemsToReserve: Array<{ productId: mongoose.Types.ObjectId; title: string; qty: number }> = [];
 
   for (const item of data.items) {
     const prod = await MedicalProduct.findById(item.productId);
@@ -939,14 +940,6 @@ export const createProductOrder = async (
     }
 
     const qty = Math.max(1, item.quantity || 1);
-
-    // Stock verification
-    if (prod.stockQuantity < qty) {
-      throw new AppError(
-        `Insufficient stock for "${prod.title}". Available: ${prod.stockQuantity}, Requested: ${qty}`,
-        400
-      );
-    }
 
     const isRental = Boolean(item.isRental && prod.isRentalAvailable);
     const rentalDurationMonths = isRental ? Math.min(24, Math.max(1, item.rentalDurationMonths || 1)) : undefined;
@@ -957,6 +950,8 @@ export const createProductOrder = async (
       : prod.price;
 
     subtotal += unitPrice * qty;
+    const itemProcurement = (prod.procurementCost || 0) * qty;
+    procurementCostTotal += itemProcurement;
 
     if (prod.setupRequiredByClinician) {
       setupRequired = true;
@@ -973,24 +968,79 @@ export const createProductOrder = async (
       isRental,
       rentalDurationMonths,
       setupRequired: prod.setupRequiredByClinician,
+      sourcingType: prod.sourcingType || 'own_stock',
+      supplierId: prod.supplierId,
+      procurementCost: prod.procurementCost || 0,
     });
 
-    productsToUpdate.push({ product: prod, deductQty: qty });
+    itemsToReserve.push({ productId: prod._id, title: prod.title, qty });
   }
 
-  // Deduct inventory
-  for (const { product, deductQty } of productsToUpdate) {
-    product.stockQuantity = Math.max(0, product.stockQuantity - deductQty);
-    if (product.depots && product.depots.length > 0) {
-      // Deduct from first depot with available stock
-      for (const depot of product.depots) {
-        if (depot.inStockCount >= deductQty) {
-          depot.inStockCount -= deductQty;
-          break;
+  // Safe Atomic Inventory Reservation with Concurrency Control
+  const reservedItems: Array<{ productId: mongoose.Types.ObjectId; qty: number; depotCity?: string }> = [];
+
+  for (const item of itemsToReserve) {
+    const reservedProduct = await MedicalProduct.findOneAndUpdate(
+      {
+        _id: item.productId,
+        isActive: true,
+        stockQuantity: { $gte: item.qty },
+      },
+      {
+        $inc: {
+          stockQuantity: -item.qty,
+          reservedQuantity: item.qty,
+        },
+      },
+      { new: true }
+    );
+
+    if (!reservedProduct) {
+      // Rollback any earlier reservations made in this transaction to prevent partial reservation leaks
+      for (const prior of reservedItems) {
+        await MedicalProduct.findByIdAndUpdate(prior.productId, {
+          $inc: {
+            stockQuantity: prior.qty,
+            reservedQuantity: -prior.qty,
+          },
+        });
+        if (prior.depotCity) {
+          await MedicalProduct.findOneAndUpdate(
+            { _id: prior.productId, 'depots.city': prior.depotCity },
+            { $inc: { 'depots.$.inStockCount': prior.qty } }
+          );
         }
       }
+      throw new AppError(
+        `Insufficient stock for "${item.title}". Requested quantity (${item.qty}) exceeds available inventory.`,
+        400
+      );
     }
-    await product.save();
+
+    // Atomically deduct from regional depot if depot stock exists
+    let deductedDepotCity: string | undefined;
+    if (reservedProduct.depots && reservedProduct.depots.length > 0) {
+      const depotUpdate = await MedicalProduct.findOneAndUpdate(
+        {
+          _id: item.productId,
+          'depots.inStockCount': { $gte: item.qty },
+        },
+        {
+          $inc: { 'depots.$.inStockCount': -item.qty },
+        },
+        { new: true }
+      );
+      if (depotUpdate) {
+        const matched = reservedProduct.depots.find((d) => d.inStockCount >= item.qty);
+        deductedDepotCity = matched?.city;
+      }
+    }
+
+    reservedItems.push({
+      productId: item.productId,
+      qty: item.qty,
+      depotCity: deductedDepotCity,
+    });
   }
 
   const deliveryFee = subtotal >= 2000 ? 0 : 150; // Free delivery over ₹2000
@@ -1018,6 +1068,9 @@ export const createProductOrder = async (
       deliveryFee,
       taxGst,
       totalAmount,
+      procurementCostTotal,
+      refundAmount: 0,
+      gatewayFee: paymentMethod === 'online' ? Math.round(totalAmount * 0.02) : 0,
     },
     deliveryAddress: {
       street: data.deliveryAddress.street.trim(),
@@ -1117,52 +1170,70 @@ export const cancelPatientOrder = async (
   }
 
   // Defined Order Policy: Only orders in 'placed' or 'confirmed' status may be cancelled by the patient
-  if (!['placed', 'confirmed'].includes(order.orderStatus)) {
+  // Atomically transition order status to 'cancelled' so double-cancellation cannot race
+  const updatedOrder = await ProductOrder.findOneAndUpdate(
+    {
+      _id: order._id,
+      orderStatus: { $in: ['placed', 'confirmed'] },
+    },
+    {
+      $set: {
+        orderStatus: 'cancelled',
+        cancellation: {
+          isCancelled: true,
+          cancelledAt: new Date(),
+          cancelledBy: 'patient',
+          cancellationReason: reason || 'Cancelled by patient prior to dispatch',
+          refundStatus: order.paymentStatus === 'paid' ? 'pending' : 'none',
+        },
+      },
+      $push: {
+        trackingUpdates: {
+          timestamp: new Date(),
+          status: 'cancelled',
+          message: `Order cancelled by patient. Reason: ${reason || 'Patient cancellation'}. Reserved stock restored.`,
+          location: 'Patient Portal',
+        },
+      },
+    },
+    { new: true }
+  );
+
+  if (!updatedOrder) {
     throw new AppError(
-      `Order cannot be cancelled in status '${order.orderStatus}'. As shipment is already dispatched or completed, please request a return upon delivery.`,
+      `Order cannot be cancelled in status '${order.orderStatus}' or has already been cancelled.`,
       400
     );
   }
 
-  // Restore inventory
-  for (const item of order.items) {
+  // Atomically restore inventory and release reservedQuantity
+  for (const item of updatedOrder.items) {
     await MedicalProduct.findByIdAndUpdate(item.productId, {
-      $inc: { stockQuantity: item.quantity },
+      $inc: {
+        stockQuantity: item.quantity,
+        reservedQuantity: -item.quantity,
+      },
     });
+    await MedicalProduct.findOneAndUpdate(
+      { _id: item.productId, 'depots.0': { $exists: true } },
+      { $inc: { 'depots.0.inStockCount': item.quantity } }
+    );
   }
-
-  order.orderStatus = 'cancelled';
-  order.cancellation = {
-    isCancelled: true,
-    cancelledAt: new Date(),
-    cancelledBy: 'patient',
-    cancellationReason: reason || 'Cancelled by patient prior to dispatch',
-    refundStatus: order.paymentStatus === 'paid' ? 'pending' : 'none',
-  };
-
-  order.trackingUpdates.push({
-    timestamp: new Date(),
-    status: 'cancelled',
-    message: `Order cancelled by patient. Reason: ${reason || 'Patient cancellation'}. Reserved stock restored.`,
-    location: 'Patient Portal',
-  });
-
-  await order.save();
 
   // Audit record
   await AuditLog.create({
     action: 'CANCEL_PRODUCT_ORDER',
     category: 'order_fulfillment',
-    actorId: order.patientId,
-    actorName: order.patientName,
+    actorId: updatedOrder.patientId,
+    actorName: updatedOrder.patientName,
     actorRole: 'patient',
     targetType: 'PRODUCT_ORDER',
-    targetId: order.orderNumber,
+    targetId: updatedOrder.orderNumber,
     details: { reason, previousStatus: order.orderStatus },
     severity: 'info',
   });
 
-  return order;
+  return updatedOrder;
 };
 
 /**

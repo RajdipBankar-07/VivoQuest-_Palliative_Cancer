@@ -21,12 +21,14 @@ import {
   HeartPulse,
   Package,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/Button';
 import { hospitalsApi, authApi, ApiClientError } from '@/lib/api';
 
 export default function HospitalReferralsListPage() {
+  const router = useRouter();
   const [referrals, setReferrals] = useState<any[]>([]);
   const [pagination, setPagination] = useState<any>({ total: 0, page: 1, limit: 15, totalPages: 1 });
   const [isLoading, setIsLoading] = useState(true);
@@ -45,13 +47,9 @@ export default function HospitalReferralsListPage() {
       // Ensure token exists
       const currentToken = localStorage.getItem('vivo_token');
       if (!currentToken) {
-        const loginRes = await authApi.login({
-          identifier: '9822011111',
-          otp: '123456',
-          role: 'hospital',
-        });
-        localStorage.setItem('vivo_token', loginRes.token);
-        localStorage.setItem('vivo_role', 'hospital');
+        setIsLoading(false);
+        router.push('/sign-in');
+        return;
       }
 
       const res = await hospitalsApi.getReferrals({

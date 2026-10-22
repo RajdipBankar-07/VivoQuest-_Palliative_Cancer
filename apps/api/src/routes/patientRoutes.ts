@@ -1,14 +1,22 @@
 import { Router, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import mongoose from 'mongoose';
-import { authenticateUser, AuthRequest } from '../middleware/auth.js';
+import { authenticateUser, optionalAuthenticateUser, requireRole, AuthRequest } from '../middleware/auth.js';
 import { validateRequest } from '../middleware/validate.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { DailyHealthUpdate } from '../models/DailyHealthUpdate.js';
 import { Appointment } from '../models/Appointment.js';
 import { evaluateClinicalRisk } from '../services/clinicalRiskService.js';
+import {
+  getPatientSubscriptions,
+  getPublicCaregiverPlans,
+  getPatientCareReports,
+  getCaregiverAssignedPatients,
+  getAuthorizedPatientDetails,
+} from '../services/patientService.js';
 
 const router = Router();
+
 
 const createHealthUpdateSchema = z.object({
   patientId: z.string().optional(),
@@ -116,4 +124,130 @@ router.get('/health-updates/me', authenticateUser, async (req: AuthRequest, res:
   }
 });
 
+// -----------------------------------------------------------------------------
+// 3. GET /api/v1/patients/caregiver-plans - Active Caregiver Subscription Plans
+// -----------------------------------------------------------------------------
+router.get(
+  '/caregiver-plans',
+  optionalAuthenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { category, planType } = req.query;
+      const plans = await getPublicCaregiverPlans({
+        category: category as string,
+        planType: planType as string,
+      });
+
+      res.status(200).json({
+        success: true,
+        count: plans.length,
+        data: plans,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 4. GET /api/v1/patients/me/subscriptions - Authenticated Patient Subscriptions
+// -----------------------------------------------------------------------------
+router.get(
+  '/me/subscriptions',
+  authenticateUser,
+  requireRole(['patient', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { status } = req.query;
+
+      const subscriptions = await getPatientSubscriptions(user._id.toString(), status as string);
+
+      res.status(200).json({
+        success: true,
+        count: subscriptions.length,
+        data: subscriptions,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 5. GET /api/v1/patients/me/care-reports - Patient Care Reports & Bedside Vitals
+// -----------------------------------------------------------------------------
+router.get(
+  '/me/care-reports',
+  authenticateUser,
+  requireRole(['patient', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const result = await getPatientCareReports(user._id.toString(), user.phone);
+
+      res.status(200).json({
+        success: true,
+        count: result.count,
+        summary: {
+          fieldVisits: result.fieldVisitsCount,
+          dailyUpdates: result.dailyUpdatesCount,
+        },
+        data: result.reports,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 6. GET /api/v1/patients/assigned-to-me - Caregiver Assigned Patients Listing
+// -----------------------------------------------------------------------------
+router.get(
+  '/assigned-to-me',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const includeInactive = req.query.includeInactive === 'true';
+
+      const result = await getCaregiverAssignedPatients(user._id.toString(), user.role, {
+        includeInactive,
+      });
+
+      res.status(200).json({
+        success: true,
+        count: result.count,
+        data: result.patients,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 7. GET /api/v1/patients/:id - Authorized Patient Profile & Care Overview
+// -----------------------------------------------------------------------------
+router.get(
+  '/:id',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const result = await getAuthorizedPatientDetails(req.params.id, user);
+
+      res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 export const patientRoutes = router;
+

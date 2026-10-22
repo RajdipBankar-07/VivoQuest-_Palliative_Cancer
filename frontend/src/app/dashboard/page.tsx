@@ -29,12 +29,14 @@ import {
   UserCheck,
   HeartPulse,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/Button';
 import { appointmentsApi, productsApi, authApi, patientsApi, ApiClientError } from '@/lib/api';
 
 export default function PatientDashboardPage() {
+  const router = useRouter();
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [recommendedProducts, setRecommendedProducts] = useState<any[]>([]);
@@ -45,13 +47,13 @@ export default function PatientDashboardPage() {
   const [activeTab, setActiveTab] = useState<'care_plan' | 'products' | 'orders' | 'health_log'>('care_plan');
 
   // Daily health update state
-  const [spO2Input, setSpO2Input] = useState<string>('97');
-  const [bpInput, setBpInput] = useState<string>('120/80');
-  const [pulseInput, setPulseInput] = useState<string>('76');
-  const [tempInput, setTempInput] = useState<string>('98.4');
-  const [painInput, setPainInput] = useState<string>('2');
-  const [symptomsInput, setSymptomsInput] = useState<string>('Mild joint stiffness in morning');
-  const [notesInput, setNotesInput] = useState<string>('Feeling comfortable after physical therapy exercises.');
+  const [spO2Input, setSpO2Input] = useState<string>('');
+  const [bpInput, setBpInput] = useState<string>('');
+  const [pulseInput, setPulseInput] = useState<string>('');
+  const [tempInput, setTempInput] = useState<string>('');
+  const [painInput, setPainInput] = useState<string>('');
+  const [symptomsInput, setSymptomsInput] = useState<string>('');
+  const [notesInput, setNotesInput] = useState<string>('');
   const [isSubmittingHealthUpdate, setIsSubmittingHealthUpdate] = useState(false);
   const [healthUpdateSuccessMsg, setHealthUpdateSuccessMsg] = useState<string | null>(null);
 
@@ -59,9 +61,9 @@ export default function PatientDashboardPage() {
   const [selectedProductForOrder, setSelectedProductForOrder] = useState<any | null>(null);
   const [orderQuantity, setOrderQuantity] = useState(1);
   const [orderIsRental, setOrderIsRental] = useState(false);
-  const [orderStreet, setOrderStreet] = useState('Flat 402, Mayur Residency, Kothrud');
-  const [orderCity, setOrderCity] = useState('Pune');
-  const [orderPincode, setOrderPincode] = useState('411038');
+  const [orderStreet, setOrderStreet] = useState('');
+  const [orderCity, setOrderCity] = useState('');
+  const [orderPincode, setOrderPincode] = useState('');
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [orderSuccessMsg, setOrderSuccessMsg] = useState<string | null>(null);
 
@@ -69,17 +71,14 @@ export default function PatientDashboardPage() {
     setIsLoading(true);
     setError(null);
     try {
-      let storedUser = authApi.getStoredUser();
-      let token = authApi.getToken();
+      const storedUser = authApi.getStoredUser();
+      const token = authApi.getToken();
 
-      // Auto-authenticate as demo patient if no session
+      // Enforce authenticated session: redirect to /sign-in if missing
       if (!token || !storedUser) {
-        const loginRes = await authApi.login({
-          identifier: '9810011111', // Seeded Patient Ramesh Kulkarni
-          otp: '123456',
-          role: 'patient',
-        });
-        storedUser = loginRes.user;
+        setIsLoading(false);
+        router.push('/sign-in');
+        return;
       }
 
       setCurrentUser(storedUser);
@@ -242,11 +241,11 @@ export default function PatientDashboardPage() {
               Book Care Appointment
             </Link>
             <Button
-              variant="outline"
+              variant="outline-white"
               size="sm"
               onClick={loadPatientData}
               disabled={isLoading}
-              className="bg-navy-light/50 border-white/20 text-white hover:bg-white/10 flex items-center gap-1.5"
+              className="flex items-center gap-1.5"
             >
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
               Sync Dossier

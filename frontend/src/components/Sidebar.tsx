@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { getApiBaseUrl } from '@/lib/api';
 import { 
   Home, 
   Compass, 
@@ -95,7 +96,7 @@ export default function Sidebar() {
   const handleLogout = async () => {
     const token = localStorage.getItem('vivo_token');
     try {
-      await fetch('http://127.0.0.1:3001/api/auth/logout/', {
+      await fetch(`${getApiBaseUrl()}/api/auth/logout/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

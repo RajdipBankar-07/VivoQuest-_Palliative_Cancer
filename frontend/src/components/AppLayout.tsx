@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from './Sidebar';
+import { getApiBaseUrl } from '@/lib/api';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -18,8 +19,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Fetch personalization details from Django Backend (Port 3001)
-    fetch('http://127.0.0.1:3001/api/auth/personalization/', {
+    // Fetch personalization details from API
+    fetch(`${getApiBaseUrl()}/api/auth/personalization/`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }

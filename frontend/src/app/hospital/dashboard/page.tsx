@@ -26,12 +26,14 @@ import {
   ExternalLink,
   SlidersHorizontal,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/Button';
 import { hospitalsApi, authApi, ApiClientError } from '@/lib/api';
 
 export default function HospitalDashboardPage() {
+  const router = useRouter();
   const [profile, setProfile] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
   const [referrals, setReferrals] = useState<any[]>([]);
@@ -42,26 +44,18 @@ export default function HospitalDashboardPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
-  const [activeHospitalPhone, setActiveHospitalPhone] = useState('9822011111');
-  const [isSwitchingOrg, setIsSwitchingOrg] = useState(false);
 
   const loadDashboardData = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      // 1. Check or auto-login with demo hospital credentials if no token
       const currentToken = localStorage.getItem('vivo_token');
       const currentRole = localStorage.getItem('vivo_role');
 
       if (!currentToken || currentRole !== 'hospital') {
-        const loginRes = await authApi.login({
-          identifier: activeHospitalPhone,
-          otp: '123456',
-          role: 'hospital',
-        });
-        localStorage.setItem('vivo_token', loginRes.token);
-        localStorage.setItem('vivo_role', 'hospital');
-        window.dispatchEvent(new Event('personalization_loaded'));
+        setIsLoading(false);
+        router.push('/sign-in');
+        return;
       }
 
       // 2. Fetch Profile, Stats, and Referrals in parallel
@@ -92,32 +86,11 @@ export default function HospitalDashboardPage() {
 
   useEffect(() => {
     loadDashboardData();
-  }, [statusFilter, priorityFilter, activeHospitalPhone]);
+  }, [statusFilter, priorityFilter]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     loadDashboardData();
-  };
-
-  const handleSwitchHospitalOrg = async (phone: string) => {
-    setIsSwitchingOrg(true);
-    try {
-      const loginRes = await authApi.login({
-        identifier: phone,
-        otp: '123456',
-        role: 'hospital',
-      });
-      localStorage.setItem('vivo_token', loginRes.token);
-      localStorage.setItem('vivo_role', 'hospital');
-      window.dispatchEvent(new Event('personalization_loaded'));
-      setActiveHospitalPhone(phone);
-      setSearchQuery('');
-      setStatusFilter('all');
-    } catch (err: any) {
-      setError(`Failed to switch organization: ${err.message}`);
-    } finally {
-      setIsSwitchingOrg(false);
-    }
   };
 
   const getStatusBadge = (status: string) => {
@@ -253,36 +226,8 @@ export default function HospitalDashboardPage() {
             </div>
           </div>
 
-          {/* Quick Org Switcher & Primary Action */}
+          {/* Primary Action */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
-            {/* Demo Switcher Dropdown / Buttons */}
-            <div className="flex items-center bg-background rounded-2xl p-1 border border-border">
-              <button
-                type="button"
-                onClick={() => handleSwitchHospitalOrg('9822011111')}
-                disabled={isSwitchingOrg}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                  activeHospitalPhone === '9822011111'
-                    ? 'bg-navy text-white shadow-sm'
-                    : 'text-navy hover:text-primary'
-                }`}
-              >
-                Ruby Hall Clinic
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSwitchHospitalOrg('9822022222')}
-                disabled={isSwitchingOrg}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                  activeHospitalPhone === '9822022222'
-                    ? 'bg-navy text-white shadow-sm'
-                    : 'text-navy hover:text-primary'
-                }`}
-              >
-                Sahyadri Hospital
-              </button>
-            </div>
-
             <Button
               href="/hospital/referrals/new"
               variant="primary"
