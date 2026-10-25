@@ -124,13 +124,32 @@ export interface AssignedPatientSummaryDTO {
 // 1. Patient Subscriptions (Strict Cross-Patient Isolation)
 // -----------------------------------------------------------------------------
 
+// Helper to generate standard Indian mobile phone variants for robust database querying
+const getPhoneVariants = (phone?: string): string[] => {
+  if (!phone) return [];
+  const cleanDigits = phone.replace(/\D/g, '');
+  const variants = new Set<string>([phone.trim(), cleanDigits]);
+  if (cleanDigits.length === 10) {
+    variants.add(`+91${cleanDigits}`);
+    variants.add(`+91 ${cleanDigits}`);
+    variants.add(`91${cleanDigits}`);
+  } else if (cleanDigits.length === 12 && cleanDigits.startsWith('91')) {
+    const tenDigits = cleanDigits.slice(2);
+    variants.add(tenDigits);
+    variants.add(`+${cleanDigits}`);
+    variants.add(`+91 ${tenDigits}`);
+  }
+  return Array.from(variants);
+};
+
 /**
  * Retrieve subscriptions belonging strictly to the authenticated patient.
  * Strips internal caregiver payouts and platform commissions.
  */
 export const getPatientSubscriptions = async (
   patientUserId: string,
-  statusFilter?: string
+  statusFilter?: string,
+  patientPhone?: string
 ): Promise<PatientSubscriptionDTO[]> => {
   if (!mongoose.Types.ObjectId.isValid(patientUserId)) {
     throw new AppError('Invalid patient identifier', 400);
@@ -139,7 +158,17 @@ export const getPatientSubscriptions = async (
   // Ensure demo plans are seeded if system is in initial state
   await seedCaregiverPlansDemoData();
 
-  const query: any = { patientId: new mongoose.Types.ObjectId(patientUserId) };
+  const patientObjId = new mongoose.Types.ObjectId(patientUserId);
+  const orConditions: any[] = [{ patientId: patientObjId }];
+
+  if (patientPhone) {
+    const variants = getPhoneVariants(patientPhone);
+    if (variants.length > 0) {
+      orConditions.push({ patientPhone: { $in: variants } });
+    }
+  }
+
+  const query: any = { $or: orConditions };
   if (statusFilter && statusFilter !== 'all') {
     query.status = statusFilter;
   }
@@ -242,7 +271,10 @@ export const getPatientCareReports = async (
   // 1. Completed or in-progress clinical visits conducted for this patient
   const visitQueryOr: any[] = [{ patientId: patientObjId }];
   if (patientPhone) {
-    visitQueryOr.push({ 'patientDetails.phone': patientPhone });
+    const variants = getPhoneVariants(patientPhone);
+    if (variants.length > 0) {
+      visitQueryOr.push({ 'patientDetails.phone': { $in: variants } });
+    }
   }
 
   const visits = await FieldVisit.find({

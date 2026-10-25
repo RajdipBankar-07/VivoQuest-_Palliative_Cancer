@@ -23,7 +23,11 @@ import {
 } from 'lucide-react';
 import { adminApi } from '@/lib/api';
 
-export function CaregiverSubscriptionsView() {
+interface CaregiverSubscriptionsViewProps {
+  onNavigateToAccounts?: (searchQuery?: string) => void;
+}
+
+export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSubscriptionsViewProps = {}) {
   const [subTab, setSubTab] = useState<'subscriptions' | 'plans'>('subscriptions');
   const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [subPagination, setSubPagination] = useState({ total: 0, page: 1, limit: 10, totalPages: 1 });
@@ -48,6 +52,19 @@ export function CaregiverSubscriptionsView() {
   const [selectedSubForVisit, setSelectedSubForVisit] = useState<any>(null);
   const [visitNotes, setVisitNotes] = useState('');
 
+  const [showActivateModal, setShowActivateModal] = useState(false);
+  const [patientsList, setPatientsList] = useState<any[]>([]);
+  const [activateForm, setActivateForm] = useState({
+    patientId: '',
+    planId: '',
+    assignedCaregiverId: '',
+    carePlanNotes: '',
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    emergencyContactRelation: '',
+    paymentMethod: 'online',
+  });
+
   const [showCreatePlanModal, setShowCreatePlanModal] = useState(false);
   const [newPlanForm, setNewPlanForm] = useState({
     title: '',
@@ -67,18 +84,22 @@ export function CaregiverSubscriptionsView() {
     setError(null);
     try {
       if (subTab === 'subscriptions') {
-        const res = await adminApi.getCaregiverSubscriptions({
-          status: statusFilter,
-          search: search.trim() || undefined,
-          page: subPagination.page,
-          limit: 10,
-        });
+        const [res, profRes, plansRes, patientsRes] = await Promise.all([
+          adminApi.getCaregiverSubscriptions({
+            status: statusFilter,
+            search: search.trim() || undefined,
+            page: subPagination.page,
+            limit: 10,
+          }),
+          adminApi.getHealthcareProfessionals({ limit: 50 }),
+          adminApi.getCaregiverPlans(),
+          adminApi.getUsers({ role: 'patient', limit: 100 }),
+        ]);
         setSubscriptions(res.data);
         setSubPagination(res.pagination);
-
-        // Also fetch active professionals for assignment dropdown
-        const profRes = await adminApi.getHealthcareProfessionals({ limit: 50 });
         setCaregiversList(profRes.data || []);
+        setPlans(plansRes.data || []);
+        setPatientsList(patientsRes.data || []);
       } else {
         const plansRes = await adminApi.getCaregiverPlans();
         setPlans(plansRes.data || []);
@@ -94,16 +115,85 @@ export function CaregiverSubscriptionsView() {
     loadData();
   }, [subTab, statusFilter]);
 
+  const matchingRegisteredPatient = search.trim()
+    ? patientsList.find((p) => {
+        const q = search.trim().toLowerCase();
+        const cleanDigits = q.replace(/\D/g, '');
+        const pDigits = (p.phone || '').replace(/\D/g, '');
+        return (
+          p.fullName?.toLowerCase().includes(q) ||
+          p.email?.toLowerCase().includes(q) ||
+          (p.id && p.id.toLowerCase() === q) ||
+          (p._id && p._id.toLowerCase() === q) ||
+          (cleanDigits.length >= 5 && pDigits.includes(cleanDigits))
+        );
+      })
+    : null;
+
+  const handleActivateSubscriptionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activateForm.patientId || !activateForm.planId) {
+      setError('Please select both a registered patient and a care plan package.');
+      return;
+    }
+    setActionLoading(true);
+    setError(null);
+    try {
+      const assignedCg =
+        activateForm.assignedCaregiverId &&
+        activateForm.assignedCaregiverId !== 'undefined' &&
+        activateForm.assignedCaregiverId.trim()
+          ? activateForm.assignedCaregiverId.trim()
+          : undefined;
+
+      await adminApi.activateCaregiverSubscription({
+        patientId: activateForm.patientId.trim(),
+        planId: activateForm.planId.trim(),
+        assignedCaregiverId: assignedCg,
+        carePlanNotes: activateForm.carePlanNotes?.trim() || undefined,
+        emergencyContact: activateForm.emergencyContactName?.trim()
+          ? {
+              name: activateForm.emergencyContactName.trim(),
+              phone: (activateForm.emergencyContactPhone || '').trim(),
+              relation: (activateForm.emergencyContactRelation || '').trim(),
+            }
+          : undefined,
+        paymentMethod: activateForm.paymentMethod || 'online',
+      });
+      setSuccessMsg('Caregiver subscription activated successfully for patient.');
+      setShowActivateModal(false);
+      setActivateForm({
+        patientId: '',
+        planId: '',
+        assignedCaregiverId: '',
+        carePlanNotes: '',
+        emergencyContactName: '',
+        emergencyContactPhone: '',
+        emergencyContactRelation: '',
+        paymentMethod: 'online',
+      });
+      loadData();
+    } catch (err: any) {
+      setError(err.message || 'Failed to activate caregiver subscription');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleAssignSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSubForAssign || !assignCaregiverUserId) return;
+    if (assignCaregiverUserId === 'undefined' || !assignCaregiverUserId.trim()) {
+      setError('Please select a valid licensed caregiver.');
+      return;
+    }
     setActionLoading(true);
     setError(null);
     try {
       await adminApi.assignCaregiverToSubscription(
         selectedSubForAssign.id || selectedSubForAssign._id,
-        assignCaregiverUserId,
-        assignNotes
+        assignCaregiverUserId.trim(),
+        assignNotes?.trim() || undefined
       );
       setSuccessMsg('Caregiver successfully assigned to subscription.');
       setShowAssignModal(false);
@@ -202,9 +292,19 @@ export function CaregiverSubscriptionsView() {
           <button
             onClick={() => loadData()}
             className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+            title="Refresh subscriptions"
           >
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
           </button>
+          {subTab === 'subscriptions' && (
+            <button
+              onClick={() => setShowActivateModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold shadow-sm transition"
+            >
+              <Plus size={14} />
+              <span>Activate Patient Subscription</span>
+            </button>
+          )}
           {subTab === 'plans' && (
             <button
               onClick={() => setShowCreatePlanModal(true)}
@@ -216,6 +316,27 @@ export function CaregiverSubscriptionsView() {
           )}
         </div>
       </div>
+
+      {/* Informational Guidance Banner */}
+      {subTab === 'subscriptions' && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between text-xs text-slate-500 bg-blue-50/70 border border-blue-100 rounded-xl px-4 py-2.5 mb-2 gap-2">
+          <div className="flex items-center gap-2">
+            <HeartPulse size={15} className="text-primary shrink-0" />
+            <span>
+              Tracking active bedside caregiver plans. Newly registered mobile patients appear in{' '}
+              <strong className="text-slate-800">Accounts &amp; Users</strong> until an active caregiver subscription is enrolled.
+            </span>
+          </div>
+          {onNavigateToAccounts && (
+            <button
+              onClick={() => onNavigateToAccounts()}
+              className="text-primary font-semibold hover:underline shrink-0 text-xs text-left"
+            >
+              Open Accounts &amp; Users →
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Sub-Tab Views */}
       {subTab === 'subscriptions' ? (
@@ -229,13 +350,21 @@ export function CaregiverSubscriptionsView() {
                 placeholder="Search by patient name, phone, subscription #, or caregiver..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && loadData()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setSubPagination((p) => ({ ...p, page: 1 }));
+                    setTimeout(() => loadData(), 0);
+                  }
+                }}
                 className="bg-transparent text-xs w-full focus:outline-none text-slate-800 placeholder-slate-400"
               />
             </div>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setSubPagination((p) => ({ ...p, page: 1 }));
+              }}
               className="text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none"
             >
               <option value="all">All Statuses</option>
@@ -263,8 +392,89 @@ export function CaregiverSubscriptionsView() {
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {subscriptions.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400">
-                      No caregiver subscriptions active.
+                    <td colSpan={7} className="py-12 text-center text-slate-500">
+                      <div className="max-w-md mx-auto space-y-2">
+                        {matchingRegisteredPatient ? (
+                          <div className="p-4 bg-amber-50/90 border border-amber-200 rounded-2xl text-left max-w-lg mx-auto mb-3 shadow-xs">
+                            <div className="flex items-start gap-3">
+                              <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+                                <User size={18} />
+                              </div>
+                              <div className="space-y-1 text-xs">
+                                <div className="font-bold text-slate-900 flex items-center gap-2">
+                                  <span>Registered Patient Found: {matchingRegisteredPatient.fullName}</span>
+                                  <span className="px-2 py-0.5 text-[10px] bg-emerald-100 text-emerald-800 rounded font-semibold">Active Account</span>
+                                </div>
+                                <p className="text-slate-600 text-[11px]">
+                                  Phone: <span className="font-mono font-medium">+91 {matchingRegisteredPatient.phone}</span>
+                                  {matchingRegisteredPatient.email ? ` • Email: ${matchingRegisteredPatient.email}` : ''}
+                                </p>
+                                <p className="text-slate-500 text-[11px] leading-relaxed">
+                                  This patient has registered an account on the platform, but has not yet been enrolled in an active Caregiver Plan. Subscriptions appear in this table only after plan enrollment.
+                                </p>
+                                <div className="pt-2 flex flex-wrap items-center gap-2">
+                                  <button
+                                    onClick={() => {
+                                      setActivateForm({ ...activateForm, patientId: matchingRegisteredPatient.id || matchingRegisteredPatient._id });
+                                      setShowActivateModal(true);
+                                    }}
+                                    className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold shadow-xs transition"
+                                  >
+                                    + Activate Caregiver Plan for {matchingRegisteredPatient.fullName}
+                                  </button>
+                                  {onNavigateToAccounts && (
+                                    <button
+                                      onClick={() => onNavigateToAccounts(matchingRegisteredPatient.phone || matchingRegisteredPatient.fullName)}
+                                      className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold transition"
+                                    >
+                                      View in Accounts &amp; Users →
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <HeartPulse size={32} className="mx-auto text-slate-300" />
+                            <p className="font-semibold text-slate-700">
+                              {search ? `No subscriptions found matching "${search}"` : 'No caregiver subscriptions active'}
+                            </p>
+                            <p className="text-xs text-slate-500 leading-relaxed">
+                              Note: This table exclusively lists active care subscriptions. To find newly registered patients who do not yet have an active subscription, navigate to{' '}
+                              <span className="font-semibold text-slate-800">Accounts &amp; Users</span>.
+                            </p>
+                          </>
+                        )}
+                        <div className="pt-2 flex items-center justify-center gap-2">
+                          {search && (
+                            <button
+                              onClick={() => {
+                                setSearch('');
+                                setSubPagination((p) => ({ ...p, page: 1 }));
+                                setTimeout(() => loadData(), 0);
+                              }}
+                              className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold"
+                            >
+                              Clear Search
+                            </button>
+                          )}
+                          {onNavigateToAccounts && search && (
+                            <button
+                              onClick={() => onNavigateToAccounts(search.trim())}
+                              className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-primary rounded-lg text-xs font-semibold"
+                            >
+                              Search in Accounts &amp; Users →
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setShowActivateModal(true)}
+                            className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-semibold"
+                          >
+                            + Activate Subscription for Patient
+                          </button>
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 ) : (
@@ -358,6 +568,37 @@ export function CaregiverSubscriptionsView() {
               </tbody>
             </table>
           </div>
+
+          {/* Subscriptions Pagination Controls */}
+          {subPagination.totalPages > 1 && (
+            <div className="flex items-center justify-between p-4 border-t border-slate-100 text-xs text-slate-500 bg-slate-50/40">
+              <span>
+                Showing page {subPagination.page} of {subPagination.totalPages} ({subPagination.total} total subscriptions)
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={subPagination.page <= 1}
+                  onClick={() => {
+                    setSubPagination((prev) => ({ ...prev, page: prev.page - 1 }));
+                    setTimeout(() => loadData(), 0);
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-white bg-white font-medium"
+                >
+                  Previous
+                </button>
+                <button
+                  disabled={subPagination.page >= subPagination.totalPages}
+                  onClick={() => {
+                    setSubPagination((prev) => ({ ...prev, page: prev.page + 1 }));
+                    setTimeout(() => loadData(), 0);
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-white bg-white font-medium"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -432,11 +673,13 @@ export function CaregiverSubscriptionsView() {
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
                 >
                   <option value="">-- Choose Caregiver --</option>
-                  {caregiversList.map((c) => (
-                    <option key={c.userId} value={c.userId}>
-                      {c.fullName} ({c.professionType}) - {c.registrationNumber}
-                    </option>
-                  ))}
+                  {caregiversList
+                    .filter((c) => Boolean(c.userId))
+                    .map((c) => (
+                      <option key={c.userId} value={c.userId}>
+                        {c.fullName} ({c.professionType}) - {c.registrationNumber || 'N/A'}
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -669,6 +912,148 @@ export function CaregiverSubscriptionsView() {
                   className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-semibold shadow-sm"
                 >
                   {actionLoading ? 'Saving...' : 'Create Plan Package'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Activate Patient Subscription Modal */}
+      {showActivateModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Activate Patient Caregiver Subscription
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Enroll an authorized registered patient into a home nursing and bedside support plan.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowActivateModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleActivateSubscriptionSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Select Registered Patient *</label>
+                <select
+                  required
+                  value={activateForm.patientId}
+                  onChange={(e) => setActivateForm({ ...activateForm, patientId: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white"
+                >
+                  <option value="">-- Choose Registered Patient Account --</option>
+                  {patientsList.map((p) => (
+                    <option key={p.id || p._id} value={p.id || p._id}>
+                      {p.fullName} • +91 {p.phone} {p.email ? `(${p.email})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Patients must first create an account or be registered in Accounts &amp; Users.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Select Caregiver Package / Plan *</label>
+                <select
+                  required
+                  value={activateForm.planId}
+                  onChange={(e) => setActivateForm({ ...activateForm, planId: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white"
+                >
+                  <option value="">-- Choose Care Plan Package --</option>
+                  {plans.map((pl) => (
+                    <option key={pl.id || pl._id} value={pl.id || pl._id}>
+                      {pl.title} — ₹{pl.customerPrice?.toLocaleString()} ({pl.totalVisitsIncluded} visits / {pl.durationDays} days)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Assign Licensed Caregiver (Optional)</label>
+                <select
+                  value={activateForm.assignedCaregiverId}
+                  onChange={(e) => setActivateForm({ ...activateForm, assignedCaregiverId: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white"
+                >
+                  <option value="">-- Allocate Nurse / Caregiver Later (Clinical Dispatch Desk) --</option>
+                  {caregiversList
+                    .filter((cg) => Boolean(cg.userId))
+                    .map((cg) => (
+                      <option key={cg.userId} value={cg.userId}>
+                        {cg.fullName} ({cg.professionType}) • Reg: {cg.registrationNumber || 'N/A'}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Emergency Contact Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Spouse / Sibling"
+                    value={activateForm.emergencyContactName}
+                    onChange={(e) => setActivateForm({ ...activateForm, emergencyContactName: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Contact Phone</label>
+                  <input
+                    type="text"
+                    placeholder="10-digit number"
+                    value={activateForm.emergencyContactPhone}
+                    onChange={(e) => setActivateForm({ ...activateForm, emergencyContactPhone: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Relationship</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Daughter"
+                    value={activateForm.emergencyContactRelation}
+                    onChange={(e) => setActivateForm({ ...activateForm, emergencyContactRelation: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Clinical Care Plan Notes</label>
+                <textarea
+                  rows={2}
+                  placeholder="Specific palliative instructions, shift timings, or attending clinician notes..."
+                  value={activateForm.carePlanNotes}
+                  onChange={(e) => setActivateForm({ ...activateForm, carePlanNotes: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowActivateModal(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl font-semibold hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-semibold shadow-sm transition disabled:opacity-50"
+                >
+                  {actionLoading ? 'Activating...' : 'Activate Subscription'}
                 </button>
               </div>
             </form>

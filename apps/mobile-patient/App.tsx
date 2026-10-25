@@ -213,7 +213,15 @@ export default function PatientApp() {
 
   // Active subscription (if any)
   const activeSub = subscriptions.find((s) => s.status === 'active') || subscriptions[0];
-  const latestReport = careReports[0];
+  const latestReport =
+    careReports.find(
+      (r) =>
+        r.vitals &&
+        (r.vitals.bloodPressure ||
+          r.vitals.pulseRate ||
+          r.vitals.oxygenSaturation ||
+          r.vitals.temperature)
+    ) || careReports[0];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -394,7 +402,12 @@ export default function PatientApp() {
                 <View style={styles.vitalCard}>
                   <Text style={styles.vitalLabel}>Body Temp</Text>
                   <Text style={styles.vitalValue}>
-                    {latestReport.vitals.temperature ? `${latestReport.vitals.temperature} °F` : '—'}
+                    {latestReport.vitals.temperature
+                      ? String(latestReport.vitals.temperature).includes('F') ||
+                        String(latestReport.vitals.temperature).includes('C')
+                        ? latestReport.vitals.temperature
+                        : `${latestReport.vitals.temperature} °F`
+                      : '—'}
                   </Text>
                   <Text style={styles.vitalStatus}>Digital Oral</Text>
                 </View>

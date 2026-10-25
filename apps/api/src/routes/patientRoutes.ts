@@ -160,8 +160,11 @@ router.get(
     try {
       const user = req.user!;
       const { status } = req.query;
-
-      const subscriptions = await getPatientSubscriptions(user._id.toString(), status as string);
+      const subscriptions = await getPatientSubscriptions(
+        user._id.toString(),
+        status as string,
+        user.phone
+      );
 
       res.status(200).json({
         success: true,

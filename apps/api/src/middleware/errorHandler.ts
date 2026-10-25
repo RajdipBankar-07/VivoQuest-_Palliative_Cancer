@@ -22,8 +22,9 @@ export const errorHandler = (
 ): void => {
   // 1. Zod Schema Validation Error
   if (err instanceof ZodError) {
-    const formattedErrors = err.errors.map((e) => ({
-      field: e.path.join('.'),
+    const issues = (err as any).issues || (err as any).errors || [];
+    const formattedErrors = issues.map((e: any) => ({
+      field: e.path ? e.path.join('.') : '',
       message: e.message,
     }));
     res.status(400).json({
@@ -54,7 +55,20 @@ export const errorHandler = (
     return;
   }
 
-  // 3. Mongoose Duplicate Key Error (Code 11000)
+  // 3. Mongoose Cast Error (Invalid ObjectId or type cast failure)
+  if (err instanceof mongoose.Error.CastError || err.name === 'CastError') {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_IDENTIFIER',
+        message: `Invalid format or identifier provided for field: ${err.path || 'id'}`,
+        field: err.path,
+      },
+    });
+    return;
+  }
+
+  // 4. Mongoose Duplicate Key Error (Code 11000)
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue || {})[0] || 'field';
     const value = err.keyValue ? err.keyValue[field] : '';

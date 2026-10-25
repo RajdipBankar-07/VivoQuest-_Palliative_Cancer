@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { CaregiverPlan, ICaregiverPlan, PlanCategory, PlanType } from '../models/CaregiverPlan.js';
 import { CaregiverSubscription, ICaregiverSubscription, SubscriptionStatus } from '../models/CaregiverSubscription.js';
 import { User, IUser } from '../models/User.js';
-import { logAdminAction } from './adminService.js';
+import { logAdminAction, escapeRegex, extractPhoneSearchVariants } from './adminService.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 export const seedCaregiverPlansDemoData = async () => {
@@ -308,14 +308,30 @@ export const listCaregiverSubscriptions = async (filters: {
     query.assignedCaregiverId = new mongoose.Types.ObjectId(filters.caregiverId);
   }
   if (filters.search && filters.search.trim()) {
-    const searchRegex = new RegExp(filters.search.trim(), 'i');
-    query.$or = [
+    const rawSearch = filters.search.trim();
+    const searchRegex = new RegExp(escapeRegex(rawSearch), 'i');
+    const orConditions: any[] = [
       { subscriptionNumber: searchRegex },
       { patientName: searchRegex },
       { patientPhone: searchRegex },
       { assignedCaregiverName: searchRegex },
       { planTitle: searchRegex },
     ];
+
+    if (mongoose.Types.ObjectId.isValid(rawSearch)) {
+      orConditions.push({ _id: new mongoose.Types.ObjectId(rawSearch) });
+      orConditions.push({ patientId: new mongoose.Types.ObjectId(rawSearch) });
+    }
+
+    const phoneVariants = extractPhoneSearchVariants(rawSearch);
+    for (const pv of phoneVariants) {
+      orConditions.push(
+        { patientPhone: new RegExp(escapeRegex(pv), 'i') },
+        { assignedCaregiverPhone: new RegExp(escapeRegex(pv), 'i') }
+      );
+    }
+
+    query.$or = orConditions;
   }
 
   const page = Math.max(1, filters.page || 1);
@@ -327,8 +343,13 @@ export const listCaregiverSubscriptions = async (filters: {
     CaregiverSubscription.countDocuments(query),
   ]);
 
+  const mappedSubscriptions = subscriptions.map((s: any) => ({
+    ...s,
+    id: s._id ? s._id.toString() : undefined,
+  }));
+
   return {
-    subscriptions,
+    subscriptions: mappedSubscriptions,
     pagination: {
       total,
       page,
@@ -339,15 +360,23 @@ export const listCaregiverSubscriptions = async (filters: {
 };
 
 /**
+ * Helper to find caregiver subscription by Mongo ObjectId or Subscription Number (e.g. SUB-202610-001)
+ */
+const findSubscriptionDoc = async (idOrNumber: string): Promise<ICaregiverSubscription | null> => {
+  if (!idOrNumber || typeof idOrNumber !== 'string') return null;
+  const trimmed = idOrNumber.trim();
+  if (mongoose.Types.ObjectId.isValid(trimmed)) {
+    const doc = await CaregiverSubscription.findById(trimmed);
+    if (doc) return doc;
+  }
+  return await CaregiverSubscription.findOne({ subscriptionNumber: trimmed.toUpperCase() });
+};
+
+/**
  * Get caregiver subscription by ID or number
  */
 export const getSubscriptionById = async (idOrNumber: string): Promise<ICaregiverSubscription> => {
-  let query: any = { _id: idOrNumber };
-  if (!mongoose.Types.ObjectId.isValid(idOrNumber)) {
-    query = { subscriptionNumber: idOrNumber.toUpperCase() };
-  }
-
-  const sub = await CaregiverSubscription.findOne(query);
+  const sub = await findSubscriptionDoc(idOrNumber);
   if (!sub) {
     throw new AppError('Caregiver subscription not found', 404);
   }
@@ -363,20 +392,41 @@ export const assignCaregiverToSubscription = async (
   notes?: string,
   actorUser?: IUser
 ): Promise<ICaregiverSubscription> => {
-  const sub = await CaregiverSubscription.findById(subscriptionId);
+  const sub = await findSubscriptionDoc(subscriptionId);
   if (!sub) {
     throw new AppError('Subscription not found', 404);
   }
 
-  const caregiver = await User.findById(caregiverUserId);
+  if (sub.status === 'cancelled') {
+    throw new AppError('Cannot assign caregiver: Subscription is cancelled', 400);
+  }
+
+  if (sub.status === 'completed') {
+    throw new AppError('Cannot assign caregiver: Subscription is already completed', 400);
+  }
+
+  const cgId = typeof caregiverUserId === 'string' ? caregiverUserId.trim() : '';
+  if (!cgId || cgId === 'undefined' || cgId === 'null' || !mongoose.Types.ObjectId.isValid(cgId)) {
+    throw new AppError('Valid caregiver account ID is required', 400);
+  }
+
+  const caregiver = await User.findById(cgId);
   if (!caregiver) {
     throw new AppError('Caregiver account not found', 404);
+  }
+
+  if (caregiver.status !== 'active') {
+    throw new AppError('Caregiver account is not active', 400);
+  }
+
+  if (!['professional', 'caregiver', 'nurse'].includes(caregiver.role)) {
+    throw new AppError('Selected user is not a caregiver or healthcare professional', 400);
   }
 
   sub.assignedCaregiverId = caregiver._id;
   sub.assignedCaregiverName = caregiver.fullName;
   sub.assignedCaregiverPhone = caregiver.phone;
-  if (notes) {
+  if (notes !== undefined && notes !== null) {
     sub.carePlanNotes = notes.trim();
   }
 
@@ -417,29 +467,116 @@ export const activateCaregiverSubscription = async (
   },
   actorUser?: IUser
 ): Promise<ICaregiverSubscription> => {
-  const patient = await User.findById(data.patientId);
+  // 1. Validate Patient ID
+  if (!data.patientId || typeof data.patientId !== 'string' || !mongoose.Types.ObjectId.isValid(data.patientId.trim())) {
+    throw new AppError('Valid patient ID is required for subscription activation', 400);
+  }
+
+  const patient = await User.findById(data.patientId.trim());
   if (!patient) {
     throw new AppError('Patient account not found', 404);
   }
 
-  const plan = await CaregiverPlan.findById(data.planId);
+  if (patient.role !== 'patient') {
+    throw new AppError('Selected account is not a registered patient', 400);
+  }
+
+  if (patient.status !== 'active') {
+    throw new AppError('Patient account is suspended or inactive', 400);
+  }
+
+  // 2. Validate Care Plan ID
+  if (!data.planId || typeof data.planId !== 'string' || !mongoose.Types.ObjectId.isValid(data.planId.trim())) {
+    throw new AppError('Valid care plan package ID is required', 400);
+  }
+
+  const plan = await CaregiverPlan.findById(data.planId.trim());
   if (!plan || !plan.isActive) {
     throw new AppError('Care plan not found or inactive', 404);
   }
 
-  let caregiverUser: any = null;
-  if (data.assignedCaregiverId) {
-    caregiverUser = await User.findById(data.assignedCaregiverId);
+  // 3. Make subscription activation safe against duplicate requests & replay attacks
+  if (data.razorpayPaymentId) {
+    const existingPaymentSub = await CaregiverSubscription.findOne({
+      'pricing.razorpayPaymentId': data.razorpayPaymentId.trim(),
+    });
+    if (existingPaymentSub) {
+      throw new AppError('A subscription has already been activated with this payment transaction ID', 409);
+    }
   }
 
+  // Prevent rapid duplicate submissions for the same patient and plan (e.g. double-clicking activate button)
+  const recentDuplicate = await CaregiverSubscription.findOne({
+    patientId: patient._id,
+    planId: plan._id,
+    createdAt: { $gte: new Date(Date.now() - 5000) },
+  });
+  if (recentDuplicate) {
+    throw new AppError(
+      `Duplicate subscription activation detected for this patient. Subscription ${recentDuplicate.subscriptionNumber} was just processed.`,
+      409
+    );
+  }
+
+  // 4. Validate Assigned Caregiver if specified
+  let caregiverUser: any = null;
+  const rawCgId = typeof data.assignedCaregiverId === 'string' ? data.assignedCaregiverId.trim() : '';
+  if (rawCgId && rawCgId !== 'undefined' && rawCgId !== 'null') {
+    if (!mongoose.Types.ObjectId.isValid(rawCgId)) {
+      throw new AppError('Invalid caregiver account ID provided', 400);
+    }
+    caregiverUser = await User.findById(rawCgId);
+    if (!caregiverUser) {
+      throw new AppError('Assigned caregiver account not found', 404);
+    }
+    if (caregiverUser.status !== 'active') {
+      throw new AppError('Assigned caregiver account is not active', 400);
+    }
+    if (!['professional', 'caregiver', 'nurse'].includes(caregiverUser.role)) {
+      throw new AppError('Selected user is not a licensed caregiver or healthcare professional', 400);
+    }
+  }
+
+  // 5. Calculate Subscription Dates and Visits
   const durationDays = plan.planType === 'monthly_subscription' ? 30 : (plan.durationDays || 60);
   const startDate = new Date();
   const endDate = new Date(startDate.getTime() + durationDays * 24 * 3600 * 1000);
   const visits = plan.totalVisitsIncluded || 10;
 
-  const count = await CaregiverSubscription.countDocuments();
-  const subscriptionNumber = `SUB-${new Date().toISOString().slice(0, 7).replace('-', '')}-${String(count + 1).padStart(3, '0')}`;
+  // 6. Generate collision-safe sequential subscription number
+  const monthPrefix = `SUB-${new Date().toISOString().slice(0, 7).replace('-', '')}`;
+  const lastSub = await CaregiverSubscription.findOne({
+    subscriptionNumber: new RegExp(`^${monthPrefix}-\\d+`),
+  })
+    .sort({ subscriptionNumber: -1 })
+    .lean();
 
+  let nextSeq = 1;
+  if (lastSub && lastSub.subscriptionNumber) {
+    const parts = lastSub.subscriptionNumber.split('-');
+    const lastNum = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(lastNum)) {
+      nextSeq = lastNum + 1;
+    }
+  }
+
+  let subscriptionNumber = `${monthPrefix}-${String(nextSeq).padStart(3, '0')}`;
+  while (await CaregiverSubscription.exists({ subscriptionNumber })) {
+    nextSeq += 1;
+    subscriptionNumber = `${monthPrefix}-${String(nextSeq).padStart(3, '0')}`;
+  }
+
+  // 7. Sanitize Emergency Contact
+  let emergencyContact: { name: string; phone: string; relation: string } | undefined;
+  if (data.emergencyContact && data.emergencyContact.name?.trim()) {
+    emergencyContact = {
+      name: data.emergencyContact.name.trim(),
+      phone: (data.emergencyContact.phone || '').trim(),
+      relation: (data.emergencyContact.relation || '').trim(),
+    };
+  }
+
+  // 8. Create Subscription in MongoDB
   const sub = await CaregiverSubscription.create({
     subscriptionNumber,
     patientId: patient._id,
@@ -464,8 +601,8 @@ export const activateCaregiverSubscription = async (
       paymentMethod: data.paymentMethod || 'online',
       razorpayPaymentId: data.razorpayPaymentId || `pay_sub_${Date.now()}`,
     },
-    emergencyContact: data.emergencyContact,
-    carePlanNotes: data.carePlanNotes,
+    emergencyContact,
+    carePlanNotes: data.carePlanNotes ? data.carePlanNotes.trim() : undefined,
     isDemo: false,
   });
 
@@ -498,7 +635,7 @@ export const cancelCaregiverSubscription = async (
   reason: string,
   actorUser?: IUser
 ): Promise<ICaregiverSubscription> => {
-  const sub = await CaregiverSubscription.findById(subscriptionId);
+  const sub = await findSubscriptionDoc(subscriptionId);
   if (!sub) {
     throw new AppError('Subscription not found', 404);
   }
@@ -540,7 +677,7 @@ export const recordSubscriptionVisit = async (
   actorUser?: IUser,
   visitIdempotencyKey?: string
 ): Promise<ICaregiverSubscription> => {
-  const sub = await CaregiverSubscription.findById(subscriptionId);
+  const sub = await findSubscriptionDoc(subscriptionId);
   if (!sub) {
     throw new AppError('Subscription not found', 404);
   }

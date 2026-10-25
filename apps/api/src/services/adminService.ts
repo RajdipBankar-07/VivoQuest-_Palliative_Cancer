@@ -341,24 +341,27 @@ export const getAdminDashboardOverview = async () => {
     CaregiverSubscription.countDocuments({ status: 'active' }),
   ]);
 
+  const overviewMetrics = {
+    totalUsers,
+    patientCount,
+    professionalCount,
+    hospitalCount,
+    adminCount,
+    totalBookings,
+    totalAppointments,
+    totalReferrals,
+    pendingCredentialsCount,
+    activeHospitalsCount,
+    openTicketsCount,
+    activeServicesCount,
+    totalProductOrders,
+    supplierCount,
+    activeSubscriptionsCount,
+  };
+
   return {
-    overview: {
-      totalUsers,
-      patientCount,
-      professionalCount,
-      hospitalCount,
-      adminCount,
-      totalBookings,
-      totalAppointments,
-      totalReferrals,
-      pendingCredentialsCount,
-      activeHospitalsCount,
-      openTicketsCount,
-      activeServicesCount,
-      totalProductOrders,
-      supplierCount,
-      activeSubscriptionsCount,
-    },
+    ...overviewMetrics,
+    overview: overviewMetrics,
     recentAuditLogs: recentAuditLogs.map((log: any) => ({
       id: log._id.toString(),
       action: log.action,
@@ -371,6 +374,30 @@ export const getAdminDashboardOverview = async () => {
       timestamp: log.timestamp,
     })),
   };
+};
+
+// -----------------------------------------------------------------------------
+// Search & Phone Query Normalization Helpers
+// -----------------------------------------------------------------------------
+
+export const escapeRegex = (str: string): string => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+export const extractPhoneSearchVariants = (rawInput: string): string[] => {
+  const digits = rawInput.replace(/\D/g, '');
+  if (!digits || digits.length < 3) return [];
+  const variants = new Set<string>([digits]);
+  if (digits.length === 12 && digits.startsWith('91')) {
+    variants.add(digits.slice(2)); // 10-digit without country code
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    variants.add(digits.slice(1)); // 10-digit without leading 0
+  } else if (digits.length === 10) {
+    variants.add(`+91${digits}`);
+    variants.add(`+91 ${digits}`);
+    variants.add(`91${digits}`);
+  }
+  return Array.from(variants);
 };
 
 /**
@@ -387,14 +414,34 @@ export const listPlatformUsers = async (filters: {
 
   const query: any = {};
   if (filters.role && filters.role !== 'all') {
-    query.role = filters.role;
+    if (filters.role === 'hospital_staff') {
+      query.role = 'hospital';
+    } else {
+      query.role = filters.role;
+    }
   }
   if (filters.status && filters.status !== 'all') {
     query.status = filters.status;
   }
-  if (filters.search) {
-    const searchRegex = new RegExp(filters.search.trim(), 'i');
-    query.$or = [{ fullName: searchRegex }, { phone: searchRegex }, { email: searchRegex }];
+  if (filters.search && filters.search.trim()) {
+    const rawSearch = filters.search.trim();
+    const searchRegex = new RegExp(escapeRegex(rawSearch), 'i');
+    const orConditions: any[] = [
+      { fullName: searchRegex },
+      { email: searchRegex },
+      { phone: searchRegex },
+    ];
+
+    if (mongoose.Types.ObjectId.isValid(rawSearch)) {
+      orConditions.push({ _id: new mongoose.Types.ObjectId(rawSearch) });
+    }
+
+    const phoneVariants = extractPhoneSearchVariants(rawSearch);
+    for (const pv of phoneVariants) {
+      orConditions.push({ phone: new RegExp(escapeRegex(pv), 'i') });
+    }
+
+    query.$or = orConditions;
   }
 
   const page = Math.max(1, filters.page || 1);
@@ -409,6 +456,7 @@ export const listPlatformUsers = async (filters: {
   // Privacy protection: Exclude password hashes (handled by schema) and format cleanly
   const sanitized = users.map((u: any) => ({
     id: u._id.toString(),
+    _id: u._id.toString(),
     fullName: u.fullName,
     phone: u.phone,
     phoneMasked: `+91 ******${u.phone.slice(-4)}`,
@@ -638,8 +686,8 @@ export const listHospitalOrganizations = async (filters: { search?: string; stat
   if (filters.status && filters.status !== 'all') {
     query.isActive = filters.status === 'active';
   }
-  if (filters.search) {
-    const searchRegex = new RegExp(filters.search.trim(), 'i');
+  if (filters.search && filters.search.trim()) {
+    const searchRegex = new RegExp(escapeRegex(filters.search.trim()), 'i');
     query.$or = [{ hospitalName: searchRegex }, { registrationNumber: searchRegex }, { cluster: searchRegex }];
   }
 
@@ -1000,8 +1048,8 @@ export const listAuditLogs = async (filters: {
   const query: any = {};
   if (filters.category && filters.category !== 'all') query.category = filters.category;
   if (filters.severity && filters.severity !== 'all') query.severity = filters.severity;
-  if (filters.search) {
-    const searchRegex = new RegExp(filters.search.trim(), 'i');
+  if (filters.search && filters.search.trim()) {
+    const searchRegex = new RegExp(escapeRegex(filters.search.trim()), 'i');
     query.$or = [{ action: searchRegex }, { actorName: searchRegex }, { targetType: searchRegex }];
   }
 
@@ -1297,13 +1345,21 @@ export const listProductOrdersAdmin = async (filters: {
   }
 
   if (filters.search && filters.search.trim()) {
-    const searchRegex = new RegExp(filters.search.trim(), 'i');
-    query.$or = [
+    const rawSearch = filters.search.trim();
+    const searchRegex = new RegExp(escapeRegex(rawSearch), 'i');
+    const orConditions: any[] = [
       { orderNumber: searchRegex },
       { patientName: searchRegex },
       { patientPhone: searchRegex },
       { 'deliveryAddress.city': searchRegex },
     ];
+
+    const phoneVariants = extractPhoneSearchVariants(rawSearch);
+    for (const pv of phoneVariants) {
+      orConditions.push({ patientPhone: new RegExp(escapeRegex(pv), 'i') });
+    }
+
+    query.$or = orConditions;
   }
 
   const page = Math.max(1, filters.page || 1);
@@ -1923,13 +1979,15 @@ export const listHealthcareProfessionalsAdmin = async (filters: {
     })
   );
 
+  const validEnriched = enriched.filter((p: any) => Boolean(p.userId));
+
   return {
-    professionals: enriched,
+    professionals: validEnriched,
     pagination: {
-      total,
+      total: validEnriched.length,
       page,
       limit,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.max(1, Math.ceil(validEnriched.length / limit)),
     },
   };
 };

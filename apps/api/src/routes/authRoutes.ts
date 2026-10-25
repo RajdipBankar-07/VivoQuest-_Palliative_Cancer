@@ -2,13 +2,15 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { validateRequest } from '../middleware/validate.js';
 import { authRateLimiter } from '../middleware/rateLimiter.js';
-import { registerUser, loginUser } from '../services/authService.js';
+import { registerUser, loginUser, normalizePhoneNumber } from '../services/authService.js';
 
 const router = Router();
 
 const registerSchema = z.object({
   fullName: z.string().min(2, 'Full name must be at least 2 characters').max(100),
-  phone: z.string().regex(/^[6-9]\d{9}$/, 'Must be a valid 10-digit Indian mobile number'),
+  phone: z.string().transform((val) => normalizePhoneNumber(val)).pipe(
+    z.string().regex(/^[6-9]\d{9}$/, 'Must be a valid 10-digit Indian mobile number')
+  ),
   email: z.string().email('Invalid email address').optional().or(z.literal('')),
   password: z.string().min(6, 'Password must be at least 6 characters').optional(),
   role: z.enum(['patient', 'caregiver', 'professional', 'hospital', 'supplier', 'admin']).optional(),
@@ -23,11 +25,16 @@ const registerSchema = z.object({
 });
 
 const loginSchema = z.object({
-  identifier: z.string().min(1, 'Mobile number or email is required'),
+  identifier: z.string().optional(),
+  phone: z.string().optional(),
+  email: z.string().optional(),
   password: z.string().optional(),
   otp: z.string().regex(/^\d{6}$/, 'OTP must be exactly 6 digits').optional(),
   role: z.string().optional(),
-});
+}).refine(
+  (data) => Boolean((data.identifier && data.identifier.trim()) || (data.phone && data.phone.trim()) || (data.email && data.email.trim())),
+  { message: 'Mobile number or email is required', path: ['identifier'] }
+);
 
 router.post(
   '/register',

@@ -50,7 +50,15 @@ describe('Milestone 3.2: Patient Mobile App Integration & Client Service Verific
     await connectDatabase();
 
     // 1. Clean up test users and records
-    const testPhones = [patientAPhone, patientBPhone, patientEmptyPhone, caregiverPhone];
+    const testPhones = [
+      patientAPhone,
+      patientBPhone,
+      patientEmptyPhone,
+      caregiverPhone,
+      '9876530099',
+      '9876530098',
+      '9876530088',
+    ];
     await User.deleteMany({ phone: { $in: testPhones } });
     await CaregiverSubscription.deleteMany({ subscriptionNumber: { $regex: 'TEST-M32-SUB' } });
     await FieldVisit.deleteMany({ visitNumber: { $regex: 'TEST-M32-VST' } });
@@ -243,7 +251,15 @@ describe('Milestone 3.2: Patient Mobile App Integration & Client Service Verific
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     // Clean up test records
-    const testPhones = [patientAPhone, patientBPhone, patientEmptyPhone, caregiverPhone];
+    const testPhones = [
+      patientAPhone,
+      patientBPhone,
+      patientEmptyPhone,
+      caregiverPhone,
+      '9876530099',
+      '9876530098',
+      '9876530088',
+    ];
     await User.deleteMany({ phone: { $in: testPhones } });
     await PatientProfile.deleteMany({ 'emergencyContact.phone': '9820044552' });
     await CaregiverSubscription.deleteMany({ subscriptionNumber: { $regex: 'TEST-M32-SUB' } });
@@ -293,17 +309,176 @@ describe('Milestone 3.2: Patient Mobile App Integration & Client Service Verific
       );
     });
 
-    it('rejects unknown phone number with 401 ApiError', async () => {
+    it('rejects unknown phone number with 404 ApiError and advises registration', async () => {
       await assert.rejects(
         async () => {
           await patientApi.login('9999900000', 'Password123!', undefined, baseUrl);
         },
         (err: any) => {
           assert.ok(err instanceof ApiError);
-          assert.ok(err.status === 404 || err.status === 401);
+          assert.strictEqual(err.status, 404);
+          assert.match(err.message, /no account found with this phone number or email/i);
           return true;
         }
       );
+    });
+
+    it('rejects unknown email with 404 ApiError and advises registration', async () => {
+      await assert.rejects(
+        async () => {
+          await patientApi.login('unknown.patient@vivoquest.in', 'Password123!', undefined, baseUrl);
+        },
+        (err: any) => {
+          assert.ok(err instanceof ApiError);
+          assert.strictEqual(err.status, 404);
+          assert.match(err.message, /no account found with this phone number or email/i);
+          return true;
+        }
+      );
+    });
+
+    it('normalizes phone numbers seamlessly during patient login (with +91, spaces, 0, and dashes)', async () => {
+      // Test +91 prefix
+      const resPlus = await patientApi.login('+91' + patientAPhone, 'Password123!', undefined, baseUrl);
+      assert.ok(resPlus.token);
+      assert.strictEqual(resPlus.user.phone, patientAPhone);
+
+      // Test +91 with spaces
+      const resSpaces = await patientApi.login('+91 ' + patientAPhone.slice(0, 5) + ' ' + patientAPhone.slice(5), 'Password123!', undefined, baseUrl);
+      assert.ok(resSpaces.token);
+      assert.strictEqual(resSpaces.user.phone, patientAPhone);
+
+      // Test leading 0
+      const resZero = await patientApi.login('0' + patientAPhone, 'Password123!', undefined, baseUrl);
+      assert.ok(resZero.token);
+      assert.strictEqual(resZero.user.phone, patientAPhone);
+
+      // Test whitespace padded
+      const resTrim = await patientApi.login('  ' + patientAPhone + '  ', 'Password123!', undefined, baseUrl);
+      assert.ok(resTrim.token);
+      assert.strictEqual(resTrim.user.phone, patientAPhone);
+    });
+
+    it('accepts login request payload with phone property instead of identifier', async () => {
+      const res = await request(app)
+        .post('/api/v1/auth/login')
+        .send({
+          phone: '+91 ' + patientAPhone,
+          password: 'Password123!',
+        });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.body.success, true);
+      assert.ok(res.body.data.token);
+      assert.strictEqual(res.body.data.user.phone, patientAPhone);
+      assert.strictEqual(res.body.data.user.role, 'patient');
+    });
+
+    it('normalizes phone numbers during registration without altering stored DB structure', async () => {
+      const newPhone = '9876530099';
+      await User.deleteOne({ phone: newPhone });
+
+      const res = await request(app)
+        .post('/api/v1/auth/register')
+        .send({
+          fullName: 'Suresh Patil',
+          phone: '+91 ' + newPhone.slice(0, 5) + ' ' + newPhone.slice(5),
+          password: 'Password123!',
+          email: 'suresh.patil.test@vivoquest.in',
+          consentAccepted: true,
+        });
+      assert.strictEqual(res.status, 201);
+      assert.strictEqual(res.body.data.user.phone, newPhone);
+
+      // Verify canonical 10-digit storage in MongoDB directly
+      const storedUser = await User.findOne({ phone: newPhone });
+      assert.ok(storedUser, 'User document must be queryable via canonical 10-digit phone');
+      assert.strictEqual(storedUser.phone, newPhone, 'Must store exactly 10 digits without +91 or spaces');
+    });
+
+    it('rejects duplicate registration with 409 Conflict', async () => {
+      const duplicateRes = await request(app)
+        .post('/api/v1/auth/register')
+        .send({
+          fullName: 'Duplicate Patient',
+          phone: '+91 98765 30099',
+          password: 'Password123!',
+          consentAccepted: true,
+        });
+      assert.strictEqual(duplicateRes.status, 409);
+      assert.match(duplicateRes.body.error.message, /already exists/i);
+    });
+
+    it('provides working end-to-end patient registration flow via patientApi.register and immediately logs in', async () => {
+      const regPhone = '9876530098';
+      await User.deleteOne({ phone: regPhone });
+
+      const regResult = await patientApi.register(
+        {
+          fullName: 'Sunita Deshmukh',
+          phone: '+91 ' + regPhone,
+          password: 'Password123!',
+          email: 'sunita.deshmukh.reg@vivoquest.in',
+          city: 'Pune',
+          pincode: '411001',
+          consentAccepted: true,
+        },
+        baseUrl
+      );
+
+      assert.ok(regResult.token, 'Must return JWT token upon patient registration');
+      assert.strictEqual(regResult.user.fullName, 'Sunita Deshmukh');
+      assert.strictEqual(regResult.user.phone, regPhone);
+      assert.strictEqual(regResult.user.role, 'patient');
+      assert.strictEqual(regResult.user.status, 'active');
+
+      // Verify session stored in authStorage
+      const savedToken = await authStorage.getToken();
+      assert.strictEqual(savedToken, regResult.token);
+      const savedUser = await authStorage.getUser();
+      assert.deepStrictEqual(savedUser, regResult.user);
+    });
+
+    it('rejects unauthorized roles from logging into the Patient App with 403 ApiError', async () => {
+      const hospitalPhone = '9876530088';
+      await User.deleteOne({ phone: hospitalPhone });
+
+      // Create a hospital administrator user
+      const resHosp = await request(app)
+        .post('/api/v1/auth/register')
+        .send({
+          fullName: 'Ruby Hall Administrator',
+          phone: hospitalPhone,
+          password: 'Password123!',
+          role: 'hospital',
+          consentAccepted: true,
+        });
+      assert.strictEqual(resHosp.status, 201);
+
+      // Attempt to sign in via patientApi client
+      await assert.rejects(
+        async () => {
+          await patientApi.login(hospitalPhone, 'Password123!', undefined, baseUrl);
+        },
+        (err: any) => {
+          assert.ok(err instanceof ApiError);
+          assert.strictEqual(err.status, 403);
+          assert.match(err.message, /not authorized for the patient app/i);
+          return true;
+        }
+      );
+    });
+
+    it('confirms registered patient has patient role and is permitted to access patient endpoints', async () => {
+      // Patient A signs in
+      const patSession = await patientApi.login(patientAPhone, 'Password123!', undefined, baseUrl);
+      assert.strictEqual(patSession.user.role, 'patient');
+
+      // Patient accesses their subscriptions and care reports without rejection
+      const subs = await patientApi.getSubscriptions(baseUrl);
+      assert.ok(Array.isArray(subs));
+
+      const reports = await patientApi.getCareReports(baseUrl);
+      assert.ok(Array.isArray(reports));
     });
 
     it('restores existing session from secure storage', async () => {
@@ -419,6 +594,81 @@ describe('Milestone 3.2: Patient Mobile App Integration & Client Service Verific
     it('filters caregiver plans by category parameter', async () => {
       const palliativePlans = await patientApi.getCaregiverPlans('palliative', baseUrl);
       assert.ok(palliativePlans.every((p) => p.category === 'palliative'));
+    });
+
+    it('allows patient to submit daily health update and reflects it in care reports', async () => {
+      await patientApi.login(patientAPhone, 'Password123!', undefined, baseUrl);
+
+      const updateRes = await patientApi.submitHealthUpdate(
+        {
+          submitterName: 'Anand Kulkarni',
+          relationship: 'patient',
+          symptoms: ['Mild fatigue after morning walk'],
+          notes: 'Feeling better than yesterday. Took morning medication.',
+          vitals: {
+            bloodPressure: '120/80',
+            pulse: 74,
+            temperature: 98.6,
+            spO2: 99,
+          },
+        },
+        baseUrl
+      );
+
+      assert.ok(updateRes);
+      assert.strictEqual(updateRes.reviewStatus, 'new');
+
+      // Now query care reports - must include the newly submitted update
+      const reports = await patientApi.getCareReports(baseUrl);
+      assert.ok(reports.length >= 2, 'Reports must contain both visit and daily health update');
+
+      const healthUpdateReport = reports.find((r) => r.sourceType === 'daily_health_update');
+      assert.ok(healthUpdateReport, 'Must contain self-reported health update');
+      assert.strictEqual(healthUpdateReport.vitals?.bloodPressure, '120/80');
+      assert.strictEqual(healthUpdateReport.vitals?.pulseRate, 74);
+      assert.strictEqual(healthUpdateReport.vitals?.oxygenSaturation, 99);
+      assert.strictEqual(healthUpdateReport.comfortLevel, 'Patient Self-Reported');
+    });
+
+    it('resolves subscription when matched via patient phone variant', async () => {
+      // Create a subscription linked to patientB's phone (+91 format)
+      const phoneLinkedSub = await CaregiverSubscription.create({
+        subscriptionNumber: 'TEST-M32-SUB-PHONE-001',
+        patientId: new mongoose.Types.ObjectId(), // Unlinked placeholder ID
+        patientName: 'Kavita Patil',
+        patientPhone: `+91 ${patientBPhone}`,
+        planId: new mongoose.Types.ObjectId(testPlanId),
+        planTitle: 'Monthly Palliative Nursing Support',
+        status: 'active',
+        startDate: new Date(),
+        endDate: new Date(Date.now() + 30 * 86400 * 1000),
+        assignedCaregiverId: new mongoose.Types.ObjectId(caregiverId),
+        assignedCaregiverName: 'Nurse Priya Sharma',
+        assignedCaregiverPhone: caregiverPhone,
+        totalVisitsIncluded: 15,
+        visitsCompleted: 2,
+        visitsRemaining: 13,
+        pricing: {
+          customerPrice: 15000,
+          caregiverPayout: 10000,
+          platformCommission: 5000,
+          paymentStatus: 'paid',
+        },
+        isDemo: true,
+      });
+
+      // Sign in as Patient B
+      await patientApi.login(patientBPhone, 'Password123!', undefined, baseUrl);
+
+      // Fetch subscriptions - must resolve phoneLinkedSub despite different patientId
+      const subs = await patientApi.getSubscriptions(baseUrl);
+      assert.ok(subs.length >= 1, 'Must find subscription matched via phone variant');
+      const foundSub = subs.find((s) => s.subscriptionNumber === 'TEST-M32-SUB-PHONE-001');
+      assert.ok(foundSub, 'Must find phone-linked subscription');
+      assert.strictEqual(foundSub.assignedCaregiver?.name, 'Nurse Priya Sharma');
+      assert.strictEqual(foundSub.visitsRemaining, 13);
+
+      await CaregiverSubscription.deleteOne({ _id: phoneLinkedSub._id });
     });
   });
 

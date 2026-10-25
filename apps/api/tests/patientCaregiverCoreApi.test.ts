@@ -64,8 +64,9 @@ describe('Phase 3 — Milestone 3.1: Patient & Caregiver Core API Exposure and S
       supplierPhone,
       adminPhone,
     ];
+    const testUsersBefore = await User.find({ phone: { $in: phones } }, '_id');
+    await PatientProfile.deleteMany({ userId: { $in: testUsersBefore.map(u => u._id) } });
     await User.deleteMany({ phone: { $in: phones } });
-    await PatientProfile.deleteMany({});
     await CaregiverSubscription.deleteMany({ subscriptionNumber: { $regex: 'TEST-M31-SUB' } });
     await FieldVisit.deleteMany({ visitNumber: { $regex: 'TEST-M31-VST' } });
     await DailyHealthUpdate.deleteMany({ 'submittedBy.name': { $regex: 'Milestone 3.1' } });
@@ -365,8 +366,9 @@ describe('Phase 3 — Milestone 3.1: Patient & Caregiver Core API Exposure and S
       supplierPhone,
       adminPhone,
     ];
+    const testUsersAfter = await User.find({ phone: { $in: phones } }, '_id');
+    await PatientProfile.deleteMany({ userId: { $in: testUsersAfter.map(u => u._id) } });
     await User.deleteMany({ phone: { $in: phones } });
-    await PatientProfile.deleteMany({});
     await CaregiverSubscription.deleteMany({ subscriptionNumber: { $regex: 'TEST-M31-SUB' } });
     await FieldVisit.deleteMany({ visitNumber: { $regex: 'TEST-M31-VST' } });
     await DailyHealthUpdate.deleteMany({ 'submittedBy.name': { $regex: 'Milestone 3.1' } });

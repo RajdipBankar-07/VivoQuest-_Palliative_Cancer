@@ -85,11 +85,13 @@ describe('Phase 5 — Patient Appointments & Doctor Scheduling Test Suite', () =
       });
     doctorToken = docLoginRes.body.data.token;
 
-    // Calculate a safe future weekday (e.g. 7 days ahead, if Sunday shift to Monday)
+    // Calculate a safe future weekday (Monday to Friday, avoiding weekends)
     const target = new Date();
     target.setDate(target.getDate() + 7);
     if (target.getDay() === 0) {
       target.setDate(target.getDate() + 1); // Shift Sunday to Monday
+    } else if (target.getDay() === 6) {
+      target.setDate(target.getDate() + 2); // Shift Saturday to Monday
     }
     futureWorkingDate = `${target.getFullYear()}-${(target.getMonth() + 1).toString().padStart(2, '0')}-${target.getDate().toString().padStart(2, '0')}`;
 
@@ -487,7 +489,7 @@ describe('Phase 5 — Patient Appointments & Doctor Scheduling Test Suite', () =
     const cancelSlot = { startTime: '15:00', endTime: '15:30' };
 
     before(async () => {
-      await DoctorAvailability.updateOne({ doctorId: doctorUserId }, { slotDurationMinutes: 30 });
+      await DoctorAvailability.updateOne({ doctorId: doctorUserId }, { slotDurationMinutes: 30, bufferMinutes: 0 });
       // Create a fresh appointment to cancel
       const bRes = await request(app)
         .post('/api/v1/appointments')

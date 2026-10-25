@@ -22,11 +22,36 @@ export interface RegisterDTO {
 }
 
 export interface LoginDTO {
-  identifier: string; // phone or email
+  identifier?: string; // phone or email
+  phone?: string;
+  email?: string;
   password?: string;
   otp?: string;
   role?: string;
 }
+
+/**
+ * Normalizes Indian mobile phone numbers by stripping whitespace, hyphens,
+ * and optional country code (+91, 91) or leading trunk zero (0).
+ * Returns canonical 10-digit number.
+ */
+export const normalizePhoneNumber = (input: string): string => {
+  if (!input) return '';
+  const trimmed = input.trim();
+  let digits = trimmed.replace(/\D/g, '');
+
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+
+  return digits;
+};
+
+export const isValidIndianMobile = (phone: string): boolean => {
+  return /^[6-9]\d{9}$/.test(phone);
+};
 
 // Designated development test numbers permitted for mock OTP in development mode
 export const DESIGNATED_TEST_PHONES = new Set([
@@ -74,9 +99,9 @@ export const generateAuthToken = (user: IUser): string => {
 };
 
 export const registerUser = async (data: RegisterDTO) => {
-  // Normalize phone (strip non-digits)
-  const cleanPhone = data.phone.replace(/\D/g, '');
-  if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+  // Normalize phone (strip non-digits, optional +91, spaces)
+  const cleanPhone = normalizePhoneNumber(data.phone);
+  if (!isValidIndianMobile(cleanPhone)) {
     throw new AppError('A valid 10-digit Indian mobile number is required', 400);
   }
 
@@ -179,18 +204,24 @@ export const registerUser = async (data: RegisterDTO) => {
 };
 
 export const loginUser = async (data: LoginDTO) => {
-  const identifier = data.identifier.trim();
-  if (!identifier) {
+  const rawIdentifier = (data.identifier || data.phone || data.email || '').trim();
+  if (!rawIdentifier) {
     throw new AppError('Phone number or email is required', 400);
   }
 
-  const cleanPhone = identifier.replace(/\D/g, '');
-  const isPhone = /^[6-9]\d{9}$/.test(cleanPhone);
+  const isEmail = rawIdentifier.includes('@');
+  let user: IUser | null = null;
 
-  // Find user by phone or email, explicitly selecting passwordHash
-  const user = await User.findOne(
-    isPhone ? { phone: cleanPhone } : { email: identifier.toLowerCase() }
-  ).select('+passwordHash');
+  if (isEmail) {
+    const cleanEmail = rawIdentifier.toLowerCase();
+    user = await User.findOne({ email: cleanEmail }).select('+passwordHash');
+  } else {
+    const cleanPhone = normalizePhoneNumber(rawIdentifier);
+    if (!isValidIndianMobile(cleanPhone)) {
+      throw new AppError('Please enter a valid 10-digit mobile number or email address', 400);
+    }
+    user = await User.findOne({ phone: cleanPhone }).select('+passwordHash');
+  }
 
   if (!user) {
     // If testing in prototype mode and user doesn't exist yet, we can create or advise

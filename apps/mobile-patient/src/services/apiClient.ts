@@ -149,6 +149,17 @@ async function apiRequest<T>(
   return data;
 }
 
+export const normalizeMobilePhone = (input: string): string => {
+  if (!input) return '';
+  let digits = input.trim().replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  return digits;
+};
+
 export const patientApi = {
   /**
    * Authenticate patient via phone + password/OTP
@@ -159,8 +170,12 @@ export const patientApi = {
     otp?: string,
     baseUrl?: string
   ): Promise<{ token: string; user: UserSession }> {
+    const cleanIdentifier = identifier.includes('@')
+      ? identifier.trim().toLowerCase()
+      : normalizeMobilePhone(identifier);
+
     const payload: Record<string, any> = {
-      identifier: identifier.trim(),
+      identifier: cleanIdentifier,
       role: 'patient',
     };
     if (password) payload.password = password;
@@ -172,16 +187,77 @@ export const patientApi = {
     }, baseUrl);
 
     const token = res.data.token;
+    const rawUser = res.data.user;
+
+    // Strict role validation: Ensure user is authorized for patient portal
+    const allowedRoles = ['patient', 'caregiver', 'admin', 'super_admin'];
+    if (!allowedRoles.includes(rawUser.role)) {
+      throw new ApiError(
+        'Access denied. Your account is not authorized for the Patient App. Please sign in with a registered patient account.',
+        403
+      );
+    }
+
     const user: UserSession = {
-      id: res.data.user.id || res.data.user._id,
-      fullName: res.data.user.fullName,
-      phone: res.data.user.phone,
-      email: res.data.user.email,
-      role: res.data.user.role,
-      status: res.data.user.status,
+      id: rawUser.id || rawUser._id,
+      fullName: rawUser.fullName,
+      phone: rawUser.phone,
+      email: rawUser.email,
+      role: rawUser.role,
+      status: rawUser.status,
     };
 
     // Save token and user into secure storage
+    await authStorage.setToken(token);
+    await authStorage.setUser(user);
+
+    return { token, user };
+  },
+
+  /**
+   * Register a new patient account with DPDP Act consent
+   */
+  async register(
+    data: {
+      fullName: string;
+      phone: string;
+      password?: string;
+      email?: string;
+      city?: string;
+      pincode?: string;
+      consentAccepted: boolean;
+    },
+    baseUrl?: string
+  ): Promise<{ token: string; user: UserSession }> {
+    const cleanPhone = normalizeMobilePhone(data.phone);
+
+    const payload = {
+      fullName: data.fullName.trim(),
+      phone: cleanPhone,
+      email: data.email?.trim() || undefined,
+      password: data.password,
+      role: 'patient',
+      city: data.city?.trim() || 'Pune',
+      pincode: data.pincode?.trim() || '411001',
+      consentAccepted: data.consentAccepted,
+    };
+
+    const res = await apiRequest<any>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }, baseUrl);
+
+    const token = res.data.token;
+    const rawUser = res.data.user;
+    const user: UserSession = {
+      id: rawUser.id || rawUser._id,
+      fullName: rawUser.fullName,
+      phone: rawUser.phone,
+      email: rawUser.email,
+      role: rawUser.role,
+      status: rawUser.status,
+    };
+
     await authStorage.setToken(token);
     await authStorage.setUser(user);
 
@@ -286,6 +362,34 @@ export const patientApi = {
       method: 'GET',
     }, baseUrl);
 
+    return res.data;
+  },
+
+  /**
+   * Submit daily self-reported health update and vitals
+   */
+  async submitHealthUpdate(
+    data: {
+      submitterName: string;
+      relationship: 'patient' | 'family_member' | 'caregiver' | 'primary_caregiver';
+      symptoms?: string[];
+      notes?: string;
+      vitals?: {
+        bloodPressure?: string;
+        pulse?: number;
+        temperature?: number;
+        spO2?: number;
+        glucose?: number;
+        weight?: number;
+        painScale?: number;
+      };
+    },
+    baseUrl?: string
+  ): Promise<any> {
+    const res = await apiRequest<any>('/patients/health-updates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, baseUrl);
     return res.data;
   },
 

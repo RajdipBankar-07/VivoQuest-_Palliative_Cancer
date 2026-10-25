@@ -260,6 +260,27 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const loadUsersData = async (opts?: { page?: number; role?: string; status?: string; search?: string }) => {
+    try {
+      const page = opts?.page ?? usersPagination.page;
+      const role = opts?.role ?? userRoleFilter;
+      const status = opts?.status ?? userStatusFilter;
+      const search = opts?.search ?? userSearch;
+
+      const res = await adminApi.getUsers({
+        role: role,
+        status: status,
+        search: search.trim() || undefined,
+        page,
+        limit: 10,
+      });
+      setUsers(res.data);
+      setUsersPagination(res.pagination);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load user accounts');
+    }
+  };
+
   const loadTabData = async (tab: TabType) => {
     setError(null);
     try {
@@ -312,15 +333,7 @@ export default function AdminDashboardPage() {
         setOrders(res.data);
         setOrdersPagination(res.pagination);
       } else if (tab === 'accounts') {
-        const res = await adminApi.getUsers({
-          role: userRoleFilter,
-          status: userStatusFilter,
-          search: userSearch.trim() || undefined,
-          page: usersPagination.page,
-          limit: 10,
-        });
-        setUsers(res.data);
-        setUsersPagination(res.pagination);
+        await loadUsersData();
       } else if (tab === 'credentials') {
         const res = await adminApi.getCredentials({
           status: credStatusFilter,
@@ -887,7 +900,19 @@ export default function AdminDashboardPage() {
         {/* Phase 2: Central Commerce, Governance & Financial Tabs */}
         {activeTab === 'finances' && <FinancialSummaryView />}
         {activeTab === 'suppliers' && <SupplierManagementView />}
-        {activeTab === 'subscriptions' && <CaregiverSubscriptionsView />}
+        {activeTab === 'subscriptions' && (
+          <CaregiverSubscriptionsView
+            onNavigateToAccounts={(searchQuery) => {
+              setActiveTab('accounts');
+              if (searchQuery) {
+                setUserSearch(searchQuery);
+                loadUsersData({ page: 1, search: searchQuery });
+              } else {
+                loadUsersData({ page: 1 });
+              }
+            }}
+          />
+        )}
         {activeTab === 'expiry_alerts' && (
           <DocumentExpiryAlertsView
             onNavigateToCredential={(credId) => {
@@ -1916,34 +1941,37 @@ export default function AdminDashboardPage() {
                   <Search size={16} className="absolute left-3 top-2.5 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Search name, phone, email..."
+                    placeholder="Search name, phone (+91...), email, account ID..."
                     value={userSearch}
                     onChange={(e) => setUserSearch(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && loadTabData('accounts')}
-                    className="pl-9 pr-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary w-48 sm:w-60"
+                    onKeyDown={(e) => e.key === 'Enter' && loadUsersData({ page: 1, search: userSearch })}
+                    className="pl-9 pr-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary w-48 sm:w-64"
                   />
                 </div>
 
                 <select
                   value={userRoleFilter}
                   onChange={(e) => {
-                    setUserRoleFilter(e.target.value);
-                    setTimeout(() => loadTabData('accounts'), 0);
+                    const val = e.target.value;
+                    setUserRoleFilter(val);
+                    loadUsersData({ page: 1, role: val });
                   }}
                   className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
                 >
                   <option value="all">All Roles</option>
-                  <option value="patient">Patients</option>
+                  <option value="patient">Patients (Registered Mobile Users)</option>
+                  <option value="caregiver">Family Caregivers</option>
                   <option value="professional">Professionals (Doctors/Nurses)</option>
-                  <option value="hospital_staff">Hospital Staff</option>
+                  <option value="hospital">Hospital Staff</option>
                   <option value="admin">Administrators</option>
                 </select>
 
                 <select
                   value={userStatusFilter}
                   onChange={(e) => {
-                    setUserStatusFilter(e.target.value);
-                    setTimeout(() => loadTabData('accounts'), 0);
+                    const val = e.target.value;
+                    setUserStatusFilter(val);
+                    loadUsersData({ page: 1, status: val });
                   }}
                   className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
                 >
@@ -1956,7 +1984,7 @@ export default function AdminDashboardPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => loadTabData('accounts')}
+                  onClick={() => loadUsersData({ page: 1 })}
                   disabled={isLoading}
                 >
                   Filter
@@ -1979,52 +2007,80 @@ export default function AdminDashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-border bg-white">
                   {users.length > 0 ? (
-                    users.map((u) => (
-                      <tr key={u._id} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="py-3.5 px-4">
-                          <div className="font-bold text-navy">{u.fullName}</div>
-                          <div className="text-[11px] text-slate-500">{u.email || 'No email specified'}</div>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 capitalize">
-                            {u.role?.replace('_', ' ')}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 font-mono text-[11px] text-slate-600">
-                          {u.phone}
-                        </td>
-                        <td className="py-3.5 px-4">
-                          {getStatusBadge(u.status || (u.isActive === false ? 'suspended' : 'active'))}
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-500">
-                          {new Date(u.createdAt).toLocaleDateString()}
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          {u.role !== 'super_admin' && (
-                            <button
-                              onClick={() =>
-                                handleToggleUserStatus(
-                                  u._id,
-                                  u.status || (u.isActive === false ? 'suspended' : 'active')
-                                )
-                              }
-                              disabled={actionLoading}
-                              className={`px-3 py-1 rounded-lg font-semibold text-xs transition-colors ${
-                                u.status === 'suspended' || u.isActive === false
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                                  : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
-                              }`}
-                            >
-                              {u.status === 'suspended' || u.isActive === false ? 'Activate' : 'Suspend'}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))
+                    users.map((u) => {
+                      const userId = u._id || u.id;
+                      const isPatient = u.role === 'patient';
+                      return (
+                        <tr key={userId} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="py-3.5 px-4">
+                            <div className="font-bold text-navy flex items-center gap-1.5">
+                              {u.fullName}
+                              {isPatient && (
+                                <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.2 rounded font-medium">
+                                  App Patient
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500">{u.email || 'No email specified'}</div>
+                            <div className="text-[10px] font-mono text-slate-400 mt-0.5">ID: {userId}</div>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-semibold capitalize ${
+                              isPatient ? 'bg-primary-light/50 text-primary' : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {u.role?.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-[11px] text-slate-600">
+                            {u.phone}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            {getStatusBadge(u.status || (u.isActive === false ? 'suspended' : 'active'))}
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-500">
+                            {new Date(u.createdAt).toLocaleDateString()}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {isPatient && (
+                                <button
+                                  onClick={() => setActiveTab('subscriptions')}
+                                  className="px-2.5 py-1 rounded-lg text-xs font-semibold text-primary bg-primary-light/40 border border-primary/20 hover:bg-primary-light/70 transition-colors"
+                                  title="View or activate Caregiver Plan in Caregiver Plans tab"
+                                >
+                                  Care Plan
+                                </button>
+                              )}
+                              {u.role !== 'super_admin' && (
+                                <button
+                                  onClick={() =>
+                                    handleToggleUserStatus(
+                                      userId,
+                                      u.status || (u.isActive === false ? 'suspended' : 'active')
+                                    )
+                                  }
+                                  disabled={actionLoading}
+                                  className={`px-3 py-1 rounded-lg font-semibold text-xs transition-colors ${
+                                    u.status === 'suspended' || u.isActive === false
+                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                      : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
+                                  }`}
+                                >
+                                  {u.status === 'suspended' || u.isActive === false ? 'Activate' : 'Suspend'}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td colSpan={6} className="py-12 text-center text-slate-400">
-                        No user accounts match the selected criteria.
+                        <p className="font-medium text-slate-600">No user accounts match the selected criteria.</p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Newly registered patients from the Patient Mobile App appear here under the &apos;Patients&apos; role filter.
+                        </p>
                       </td>
                     </tr>
                   )}
@@ -2044,8 +2100,7 @@ export default function AdminDashboardPage() {
                     variant="outline"
                     disabled={usersPagination.page <= 1}
                     onClick={() => {
-                      setUsersPagination((prev) => ({ ...prev, page: prev.page - 1 }));
-                      setTimeout(() => loadTabData('accounts'), 0);
+                      loadUsersData({ page: usersPagination.page - 1 });
                     }}
                   >
                     <ChevronLeft size={14} /> Previous
@@ -2055,8 +2110,7 @@ export default function AdminDashboardPage() {
                     variant="outline"
                     disabled={usersPagination.page >= usersPagination.totalPages}
                     onClick={() => {
-                      setUsersPagination((prev) => ({ ...prev, page: prev.page + 1 }));
-                      setTimeout(() => loadTabData('accounts'), 0);
+                      loadUsersData({ page: usersPagination.page + 1 });
                     }}
                   >
                     Next <ChevronRight size={14} />

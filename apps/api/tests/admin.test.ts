@@ -10,6 +10,8 @@ import { HospitalProfile } from '../src/models/HospitalProfile.js';
 import { HealthcareService } from '../src/models/HealthcareService.js';
 import { AuditLog } from '../src/models/AuditLog.js';
 import { SupportTicket } from '../src/models/SupportTicket.js';
+import { CaregiverPlan } from '../src/models/CaregiverPlan.js';
+import { CaregiverSubscription } from '../src/models/CaregiverSubscription.js';
 import { seedAdminDemoData } from '../src/services/adminService.js';
 
 describe('Phase 7 — Admin and Super Admin Dashboards & Governance Test Suite', () => {
@@ -92,7 +94,7 @@ describe('Phase 7 — Admin and Super Admin Dashboards & Governance Test Suite',
   });
 
   after(async () => {
-    await User.deleteMany({ phone: patientPhone });
+    await User.deleteMany({ phone: { $in: [patientPhone, '9822334455'] } });
     await disconnectDatabase();
   });
 
@@ -187,6 +189,155 @@ describe('Phase 7 — Admin and Super Admin Dashboards & Governance Test Suite',
         .send({ status: 'suspended' });
 
       assert.equal(res.status, 403, 'Regular admin cannot modify Super Admin');
+    });
+
+    it('should list newly registered patient in authorized admin users directory', async () => {
+      const newPhone = '9822334455';
+      await User.deleteMany({ phone: newPhone });
+
+      const regRes = await request(app)
+        .post('/api/v1/auth/register')
+        .send({
+          fullName: 'Aarav Patel',
+          phone: newPhone,
+          role: 'patient',
+          consentAccepted: true,
+        });
+      assert.equal(regRes.status, 201, 'Patient registration should succeed');
+
+      // Admin accesses users directory filtered by role=patient
+      const listRes = await request(app)
+        .get('/api/v1/admin/users?role=patient')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      assert.equal(listRes.status, 200);
+      assert.equal(listRes.body.success, true);
+      const found = listRes.body.data.find((u: any) => u.phone === newPhone);
+      assert.ok(found, 'Newly registered patient must be discoverable in Accounts & Users');
+      assert.equal(found.fullName, 'Aarav Patel');
+      assert.equal(found.role, 'patient');
+      assert.ok(found.id && found._id, 'Both id and _id must be returned for frontend compatibility');
+      assert.strictEqual(found.passwordHash, undefined);
+    });
+
+    it('should discover patient when searching by phone with and without country code (+91, space, raw 10 digits)', async () => {
+      const newPhone = '9822334455';
+
+      // 1. Raw 10 digits
+      const resRaw = await request(app)
+        .get(`/api/v1/admin/users?search=${newPhone}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(resRaw.status, 200);
+      assert.ok(resRaw.body.data.some((u: any) => u.phone === newPhone));
+
+      // 2. With +91 prefix
+      const resCountry = await request(app)
+        .get(`/api/v1/admin/users?search=%2B91${newPhone}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(resCountry.status, 200, 'Search with +91 must not trigger regex syntax error');
+      assert.ok(resCountry.body.data.some((u: any) => u.phone === newPhone));
+
+      // 3. With +91 and space
+      const resCountrySpace = await request(app)
+        .get(`/api/v1/admin/users?search=%2B91%20${newPhone}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(resCountrySpace.status, 200);
+      assert.ok(resCountrySpace.body.data.some((u: any) => u.phone === newPhone));
+
+      // 4. By 24-character MongoDB ObjectId (Account ID)
+      const userDoc = await User.findOne({ phone: newPhone });
+      assert.ok(userDoc);
+      const resId = await request(app)
+        .get(`/api/v1/admin/users?search=${userDoc._id.toString()}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(resId.status, 200, 'Search by Account ID (_id) must succeed');
+      assert.equal(resId.body.data.length, 1);
+      assert.equal(resId.body.data[0].id, userDoc._id.toString());
+
+      // 5. By Patient Full Name (case-insensitive)
+      const resName = await request(app)
+        .get(`/api/v1/admin/users?search=aarav`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(resName.status, 200);
+      assert.ok(resName.body.data.some((u: any) => u.phone === newPhone));
+    });
+
+    it('should discover newly registered patient Rajdip in admin Accounts & Users while having 0 subscriptions in caregiver subscriptions', async () => {
+      // 1. Search for Rajdip in Accounts & Users by phone
+      const usersByPhone = await request(app)
+        .get('/api/v1/admin/users?search=8788392624')
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(usersByPhone.status, 200);
+      const rajdipUser = usersByPhone.body.data.find((u: any) => u.phone === '8788392624');
+      assert.ok(rajdipUser, 'Rajdip must be discoverable in Accounts & Users by phone');
+      assert.equal(rajdipUser.role, 'patient');
+
+      // 2. Search for Rajdip by Account ID
+      const usersById = await request(app)
+        .get(`/api/v1/admin/users?search=${rajdipUser.id}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(usersById.status, 200);
+      assert.ok(usersById.body.data.some((u: any) => u.id === rajdipUser.id));
+
+      // 3. Search for Rajdip by +91 phone format
+      const usersByPlusPhone = await request(app)
+        .get('/api/v1/admin/users?search=%2B91%208788392624')
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(usersByPlusPhone.status, 200);
+      assert.ok(usersByPlusPhone.body.data.some((u: any) => u.phone === '8788392624'));
+
+      // 4. Verify Rajdip has 0 subscriptions in Caregiver Subscriptions table (not yet subscribed)
+      const subsRes = await request(app)
+        .get('/api/v1/admin/caregiver-subscriptions?search=8788392624')
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(subsRes.status, 200);
+      assert.equal(subsRes.body.data.length, 0, 'Un-subscribed registered patient must have 0 subscriptions');
+
+      // 5. Verify existing subscriptions for Ramesh Kulkarni remain intact
+      const existingSubs = await request(app)
+        .get('/api/v1/admin/caregiver-subscriptions')
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(existingSubs.status, 200);
+      assert.ok(existingSubs.body.data.length > 0);
+      assert.ok(existingSubs.body.data.some((s: any) => s.patientName === 'Ramesh Kulkarni' || s.subscriptionNumber.includes('SUB-')));
+    });
+
+    it('should verify patient with no subscription returns 0 results in caregiver-subscriptions search while preserving existing subscriptions', async () => {
+      const newPhone = '9822334455';
+
+      // Search subscriptions by new patient's phone
+      const subRes = await request(app)
+        .get(`/api/v1/admin/caregiver-subscriptions?search=${newPhone}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(subRes.status, 200);
+      assert.equal(subRes.body.data.length, 0, 'Patient with no subscription must have 0 caregiver subscriptions');
+
+      // Search with +91 prefix
+      const subResCountry = await request(app)
+        .get(`/api/v1/admin/caregiver-subscriptions?search=%2B91${newPhone}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(subResCountry.status, 200, 'Caregiver subscriptions search with +91 must not throw regex error');
+      assert.equal(subResCountry.body.data.length, 0);
+
+      // Verify existing subscriptions list remains intact
+      const allSubsRes = await request(app)
+        .get('/api/v1/admin/caregiver-subscriptions')
+        .set('Authorization', `Bearer ${adminToken}`);
+      assert.equal(allSubsRes.status, 200);
+      assert.ok(allSubsRes.body.data.length > 0, 'Existing subscriptions must remain intact');
+      assert.ok(allSubsRes.body.data.some((s: any) => s.patientPhone === '9810011111' || s.patientDetails?.phone === '9810011111' || s.subscriptionNumber));
+    });
+
+    it('CRITICAL: should FORBID unauthorized users (such as patient) from accessing admin users and subscriptions (403 Forbidden)', async () => {
+      const usersRes = await request(app)
+        .get('/api/v1/admin/users')
+        .set('Authorization', `Bearer ${patientToken}`);
+      assert.equal(usersRes.status, 403, 'Patient cannot access admin users list');
+
+      const subsRes = await request(app)
+        .get('/api/v1/admin/caregiver-subscriptions')
+        .set('Authorization', `Bearer ${patientToken}`);
+      assert.equal(subsRes.status, 403, 'Patient cannot access caregiver subscriptions admin list');
     });
   });
 
@@ -481,6 +632,205 @@ describe('Phase 7 — Admin and Super Admin Dashboards & Governance Test Suite',
 
       assert.equal(res.status, 200);
       assert.ok(Array.isArray(res.body.data));
+    });
+  });
+
+  describe('8. Caregiver Subscription Activation & Assignment Governance', () => {
+    let syntheticPatientId: string;
+    let syntheticPatientPhone: string;
+    let testPlanId: string;
+    let activatedSubId: string;
+    let activatedSubNumber: string;
+    let validCaregiverUserId: string;
+
+    before(async () => {
+      // Create dedicated synthetic test patient
+      syntheticPatientPhone = `9876${Math.floor(100000 + Math.random() * 900000)}`;
+      const regRes = await request(app)
+        .post('/api/v1/auth/register')
+        .send({
+          fullName: 'Synthetic Activation Patient',
+          phone: syntheticPatientPhone,
+          role: 'patient',
+          consentAccepted: true,
+        });
+      syntheticPatientId = regRes.body.data.user.id;
+
+      // Find an active caregiver plan
+      const plan = await CaregiverPlan.findOne({ isActive: true });
+      assert.ok(plan, 'An active CaregiverPlan must exist');
+      testPlanId = plan._id.toString();
+
+      // Find an active professional/caregiver
+      const cg = await User.findOne({ role: 'professional', status: 'active' });
+      assert.ok(cg, 'An active professional user must exist');
+      validCaregiverUserId = cg._id.toString();
+    });
+
+    after(async () => {
+      // Clean up only the synthetic patient and their created subscriptions
+      if (syntheticPatientId) {
+        await CaregiverSubscription.deleteMany({ patientId: syntheticPatientId });
+        await User.deleteOne({ _id: syntheticPatientId });
+      }
+    });
+
+    it('should REJECT subscription activation if unauthorized (missing token: 401)', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .send({ patientId: syntheticPatientId, planId: testPlanId });
+
+      assert.equal(res.status, 401);
+      assert.equal(res.body.success, false);
+    });
+
+    it('should FORBID subscription activation if requested by standard patient role (403)', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .set('Authorization', `Bearer ${patientToken}`)
+        .send({ patientId: syntheticPatientId, planId: testPlanId });
+
+      assert.equal(res.status, 403);
+      assert.equal(res.body.success, false);
+    });
+
+    it('should REJECT activation with missing or invalid patient ID (400)', async () => {
+      // Missing patientId
+      const resMissing = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ patientId: '', planId: testPlanId });
+      assert.equal(resMissing.status, 400);
+      assert.equal(resMissing.body.success, false);
+      assert.match(resMissing.body.error.message, /patient id/i);
+
+      // Malformed / invalid ObjectId
+      const resInvalid = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ patientId: 'invalid-hex-12345', planId: testPlanId });
+      assert.equal(resInvalid.status, 400);
+      assert.equal(resInvalid.body.success, false);
+    });
+
+    it('should REJECT activation with non-existent or invalid plan ID (400/404)', async () => {
+      // Malformed planId
+      const resMalformed = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ patientId: syntheticPatientId, planId: 'bad-plan-id' });
+      assert.equal(resMalformed.status, 400);
+
+      // Valid ObjectId but non-existent plan
+      const nonExistentPlanId = new mongoose.Types.ObjectId().toString();
+      const resNotFound = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ patientId: syntheticPatientId, planId: nonExistentPlanId });
+      assert.equal(resNotFound.status, 404);
+      assert.match(resNotFound.body.error.message, /care plan/i);
+    });
+
+    it('should ACTIVATATE a valid caregiver subscription for synthetic patient (201)', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          patientId: syntheticPatientId,
+          planId: testPlanId,
+          emergencyContact: {
+            name: 'Kavita Deshmukh',
+            phone: '9822998877',
+            relation: 'Daughter',
+          },
+          carePlanNotes: 'Bedside palliative monitoring and medication assistance.',
+          paymentMethod: 'online',
+        });
+
+      assert.equal(res.status, 201);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.data.status, 'active');
+      assert.equal(res.body.data.patientName, 'Synthetic Activation Patient');
+      assert.equal(res.body.data.patientPhone, syntheticPatientPhone);
+      assert.ok(res.body.data.visitsRemaining > 0);
+      assert.match(res.body.data.subscriptionNumber, /^SUB-\d{6}-\d{3}$/);
+
+      activatedSubId = res.body.data.id || res.body.data._id;
+      activatedSubNumber = res.body.data.subscriptionNumber;
+    });
+
+    it('should PREVENT duplicate activation of the same care plan for the same patient (409)', async () => {
+      const res = await request(app)
+        .post('/api/v1/admin/caregiver-subscriptions/activate')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          patientId: syntheticPatientId,
+          planId: testPlanId,
+        });
+
+      assert.equal(res.status, 409);
+      assert.equal(res.body.success, false);
+      assert.match(res.body.error.message, /duplicate/i);
+    });
+
+    it('should REJECT caregiver assignment if caregiverUserId is invalid (400)', async () => {
+      const res = await request(app)
+        .post(`/api/v1/admin/caregiver-subscriptions/${activatedSubId}/assign`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ caregiverUserId: 'invalid-cg-user-id' });
+
+      assert.equal(res.status, 400);
+      assert.equal(res.body.success, false);
+    });
+
+    it('should ASSIGN a valid caregiver to the active subscription (200)', async () => {
+      const res = await request(app)
+        .post(`/api/v1/admin/caregiver-subscriptions/${activatedSubId}/assign`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          caregiverUserId: validCaregiverUserId,
+          notes: 'Assigned for daily morning shift 8am-4pm.',
+        });
+
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.data.assignedCaregiverId.toString(), validCaregiverUserId);
+      assert.ok(res.body.data.assignedCaregiverName);
+    });
+
+    it('should REJECT caregiver assignment to a cancelled subscription (400)', async () => {
+      // Cancel the synthetic subscription
+      const resCancel = await request(app)
+        .post(`/api/v1/admin/caregiver-subscriptions/${activatedSubId}/cancel`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ reason: 'Patient condition stabilized, discharged to outpatient' });
+      assert.equal(resCancel.status, 200);
+      assert.equal(resCancel.body.data.status, 'cancelled');
+
+      // Attempting to assign caregiver to cancelled subscription must fail with 400
+      const resAssignToCancelled = await request(app)
+        .post(`/api/v1/admin/caregiver-subscriptions/${activatedSubId}/assign`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          caregiverUserId: validCaregiverUserId,
+          notes: 'Attempt assignment post-cancel',
+        });
+
+      assert.equal(resAssignToCancelled.status, 400);
+      assert.match(resAssignToCancelled.body.error.message, /cancelled/i);
+    });
+
+    it('should PRESERVE existing subscriptions for Ramesh Kulkarni untouched', async () => {
+      const res = await request(app)
+        .get('/api/v1/admin/caregiver-subscriptions')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      assert.equal(res.status, 200);
+      const subs = res.body.data;
+      const rameshSubs = subs.filter((s: any) => s.patientName === 'Ramesh Kulkarni');
+      assert.ok(rameshSubs.length > 0, 'Ramesh Kulkarni subscriptions must remain intact in database');
+      assert.ok(rameshSubs.some((s: any) => s.subscriptionNumber === 'SUB-202610-001'));
+      assert.ok(rameshSubs.some((s: any) => s.subscriptionNumber === 'SUB-202610-002'));
     });
   });
 });

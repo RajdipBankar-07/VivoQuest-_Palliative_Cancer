@@ -1034,29 +1034,13 @@ export const hospitalsApi = {
 // -----------------------------------------------------------------------------
 export const adminApi = {
   async getOverview() {
-    const res = await request<{
-      success: boolean;
-      data: {
-        totalUsers: number;
-        totalPatients: number;
-        totalProfessionals: number;
-        totalHospitals: number;
-        totalBookings: number;
-        activeBookings: number;
-        completedBookings: number;
-        totalReferrals: number;
-        activeReferrals: number;
-        emergencyReferrals: number;
-        pendingCredentialsCount: number;
-        openSupportTicketsCount: number;
-        recentAuditLogs: any[];
-        recentExceptions: {
-          unassignedBookings: any[];
-          urgentPendingReferrals: any[];
-        };
-        lastUpdated: string;
+    const res = await request<any>('/api/v1/admin/dashboard/overview');
+    if (res.data?.overview) {
+      return {
+        ...res.data.overview,
+        ...res.data,
       };
-    }>('/api/v1/admin/dashboard/overview');
+    }
     return res.data;
   },
 
@@ -1834,6 +1818,26 @@ export const adminApi = {
     }>(`/api/v1/admin/caregiver-subscriptions/${id}/record-visit`, {
       method: 'POST',
       body: JSON.stringify({ notes }),
+    });
+    return res;
+  },
+
+  async activateCaregiverSubscription(data: {
+    patientId: string;
+    planId: string;
+    assignedCaregiverId?: string;
+    carePlanNotes?: string;
+    emergencyContact?: { name: string; phone: string; relation: string };
+    paymentMethod?: string;
+    razorpayPaymentId?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/caregiver-subscriptions/activate', {
+      method: 'POST',
+      body: JSON.stringify(data),
     });
     return res;
   },
