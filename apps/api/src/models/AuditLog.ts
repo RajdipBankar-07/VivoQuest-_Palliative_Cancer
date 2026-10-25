@@ -9,6 +9,7 @@ export type AuditLogCategory =
   | 'booking_referral'
   | 'order_fulfillment'
   | 'field_operations'
+  | 'clinical_governance'
   | 'security_governance'
   | 'system';
 
@@ -50,6 +51,7 @@ const AuditLogSchema = new Schema<IAuditLog>(
         'booking_referral',
         'order_fulfillment',
         'field_operations',
+        'clinical_governance',
         'security_governance',
         'system',
       ],
@@ -115,10 +117,19 @@ const AuditLogSchema = new Schema<IAuditLog>(
   }
 );
 
-// High-speed compound queries for security exploration
+// High-speed compound queries for security exploration and subscription audit history
 AuditLogSchema.index({ category: 1, timestamp: -1 });
 AuditLogSchema.index({ severity: 1, timestamp: -1 });
 AuditLogSchema.index({ actorRole: 1, timestamp: -1 });
+AuditLogSchema.index({ targetType: 1, targetId: 1, timestamp: -1 });
+AuditLogSchema.index({ 'details.subscriptionId': 1, timestamp: -1 });
+AuditLogSchema.index({ 'details.subscriptionNumber': 1, timestamp: -1 });
+
+// Safeguard against modifying audit records (immutable audit trail)
+AuditLogSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], function (next) {
+  next(new Error('Audit logs are append-only and cannot be updated or modified.'));
+});
 
 export const AuditLog: Model<IAuditLog> =
   mongoose.models.AuditLog || mongoose.model<IAuditLog>('AuditLog', AuditLogSchema);
+

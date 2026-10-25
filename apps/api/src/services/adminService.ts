@@ -105,13 +105,15 @@ export const seedAdminDemoData = async () => {
       console.log('[Seed] Admin account initialized (+91 98990 09900).');
     }
 
-    // 3. Seed Professional Credentials with explicit states (pending, approved, rejected, expired)
-    const existingCreds = await ProfessionalCredentials.countDocuments();
-    if (existingCreds === 0) {
-      // Find a doctor profile or create one
-      let doctorProfile = await HealthcareProfessionalProfile.findOne();
-      if (!doctorProfile) {
-        const docUser = await User.create({
+    // Ensure at least one HealthcareProfessionalProfile exists with a valid linked user
+    const validUserIds = await User.distinct('_id');
+    await HealthcareProfessionalProfile.deleteMany({ userId: { $nin: validUserIds } });
+
+    let doctorProfile = await HealthcareProfessionalProfile.findOne();
+    if (!doctorProfile) {
+      let docUser = await User.findOne({ phone: '9820099887' });
+      if (!docUser) {
+        docUser = await User.create({
           fullName: 'Dr. Ramesh Iyer',
           phone: '9820099887',
           email: 'ramesh.iyer@example.com',
@@ -120,18 +122,23 @@ export const seedAdminDemoData = async () => {
           isPhoneVerified: true,
           dpdpConsent: { accepted: true, consentedAt: new Date(), policyVersion: 'DPDP-2023-V1.0' },
         });
-        doctorProfile = await HealthcareProfessionalProfile.create({
-          userId: docUser._id,
-          title: 'Dr.',
-          professionType: 'physician',
-          specializations: ['Neurology', 'Stroke Rehabilitation'],
-          registrationNumber: 'MMC-2015-08129',
-          registrationCouncil: 'Maharashtra Medical Council',
-          yearsOfExperience: 11,
-          serviceClusters: ['Pune Central', 'Kothrud'],
-          verificationStatus: 'pending_review',
-        });
       }
+      doctorProfile = await HealthcareProfessionalProfile.create({
+        userId: docUser._id,
+        title: 'Dr.',
+        professionType: 'physician',
+        specializations: ['Neurology', 'Stroke Rehabilitation'],
+        registrationNumber: 'MMC-2015-08129',
+        registrationCouncil: 'Maharashtra Medical Council',
+        yearsOfExperience: 11,
+        serviceClusters: ['Pune Central', 'Kothrud'],
+        verificationStatus: 'pending_review',
+      });
+    }
+
+    // 3. Seed Professional Credentials with explicit states (pending, approved, rejected, expired)
+    const existingCreds = await ProfessionalCredentials.countDocuments();
+    if (existingCreds === 0 && doctorProfile) {
 
       const mockFileId = new mongoose.Types.ObjectId();
 

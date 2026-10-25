@@ -58,7 +58,9 @@ export interface PatientDetails {
   fullName: string;
   phone: string;
   address: string;
+  street?: string;
   city?: string;
+  state?: string;
   pincode?: string;
   cluster?: string;
   instructions?: string;
@@ -88,6 +90,8 @@ export interface FieldVisit {
     completedAt?: string | Date;
     cancelledAt?: string | Date;
   };
+  subscriptionId?: string;
+  subscriptionNumber?: string;
 }
 
 export interface AssignedPatient {
@@ -154,4 +158,39 @@ export interface ClinicalDocInput {
   recommendations?: string;
   followUpDate?: string;
   markAsCompleted?: boolean;
+}
+
+export type RescheduleRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export interface VisitRescheduleRequest {
+  id: string;
+  visitId: string;
+  visitNumber: string;
+  patientId: string;
+  patientName: string;
+  patientPhone: string;
+  providerId: string;
+  providerName: string;
+  providerRole?: string;
+  providerPhone?: string;
+  requestedBy: string;
+  requesterRole: string;
+  requesterName: string;
+  originalSchedule: {
+    scheduledDate: string;
+    timeSlot: string;
+  };
+  requestedSchedule: {
+    scheduledDate: string;
+    timeSlot: string;
+  };
+  reason: string;
+  status: RescheduleRequestStatus;
+  rejectionReason?: string;
+  resolvedBy?: string;
+  resolverRole?: string;
+  resolverName?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }

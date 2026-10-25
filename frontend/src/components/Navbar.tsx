@@ -6,10 +6,12 @@ import { usePathname } from 'next/navigation';
 import { Menu, X, Activity, ChevronRight, User, HeartHandshake, ShoppingBag } from 'lucide-react';
 import { Button } from './Button';
 import { useCart } from '@/context/CartContext';
+import { authApi } from '@/lib/api';
 
 export const Navbar: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [hasAdminSession, setHasAdminSession] = useState(false);
   const pathname = usePathname();
   const { totalItemCount, openCart } = useCart();
 
@@ -20,6 +22,29 @@ export const Navbar: React.FC = () => {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Update admin authentication state dynamically
+  useEffect(() => {
+    const updateAdminStatus = () => {
+      const user = authApi.getStoredUser();
+      const token = authApi.getToken();
+      const isValidAdmin = Boolean(
+        token &&
+        !authApi.isTokenExpired(token) &&
+        user &&
+        ['admin', 'super_admin'].includes(user.role?.toLowerCase())
+      );
+      setHasAdminSession(isValidAdmin);
+    };
+
+    updateAdminStatus();
+    window.addEventListener('storage', updateAdminStatus);
+    window.addEventListener('vivo_auth_change', updateAdminStatus);
+    return () => {
+      window.removeEventListener('storage', updateAdminStatus);
+      window.removeEventListener('vivo_auth_change', updateAdminStatus);
+    };
+  }, [pathname]);
 
   // Close mobile drawer on route change
   useEffect(() => {
@@ -32,13 +57,17 @@ export const Navbar: React.FC = () => {
     { label: 'Caregiver Plans', href: '/caregiver-plans' },
     { label: 'My Orders', href: '/orders' },
     { label: 'Palliative Services', href: '/services' },
-    { label: 'Admin Portal', href: '/admin/dashboard' },
+    {
+      label: 'Admin Portal',
+      href: hasAdminSession ? '/admin/dashboard' : '/admin/login?returnUrl=/admin/dashboard',
+    },
   ];
 
   const isActive = (href: string) => {
-    if (href === '/') return pathname === '/';
-    if (href.startsWith('/#')) return false;
-    return pathname.startsWith(href);
+    const baseHref = href.split('?')[0];
+    if (baseHref === '/') return pathname === '/';
+    if (baseHref.startsWith('/#')) return false;
+    return pathname.startsWith(baseHref);
   };
 
   return (

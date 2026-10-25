@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
-export type NotificationChannel = 'sms' | 'whatsapp';
+export type NotificationChannel = 'sms' | 'whatsapp' | 'in_app';
 
 export type NotificationTemplateId =
   | 'APPOINTMENT_REMINDER'
@@ -9,25 +9,39 @@ export type NotificationTemplateId =
   | 'CLINICIAN_ARRIVED'
   | 'VISIT_COMPLETED'
   | 'DME_SETUP_SCHEDULED'
-  | 'CARE_LOOP_CLOSED';
+  | 'CARE_LOOP_CLOSED'
+  | 'SUBSCRIPTION_ACTIVATED_TEST_MODE'
+  | 'NEW_CAREGIVER_SUBSCRIPTION_TEST_MODE'
+  | 'VISIT_RESCHEDULE_REQUESTED'
+  | 'VISIT_RESCHEDULE_APPROVED'
+  | 'VISIT_RESCHEDULE_REJECTED'
+  | 'DAILY_CARE_REPORT_SUBMITTED'
+  | 'CAREGIVER_ASSIGNED'
+  | 'CAREGIVER_ASSIGNED_NEW'
+  | 'CAREGIVER_REASSIGNED'
+  | 'CAREGIVER_REASSIGNED_PATIENT'
+  | 'CAREGIVER_REASSIGNED_REMOVED'
+  | 'FIELD_VISIT_SCHEDULED';
 
 export type NotificationStatus = 'sent' | 'delivered' | 'failed' | 'simulated';
 
 export interface INotificationLog extends Document {
   recipientPhone: string;
   recipientName: string;
-  recipientRole: 'patient' | 'caregiver' | 'professional' | 'hospital';
+  recipientRole: 'patient' | 'caregiver' | 'professional' | 'hospital' | 'admin' | 'super_admin';
   channel: NotificationChannel;
   templateId: NotificationTemplateId;
   messageBody: string;
   consentChecked: boolean;
   status: NotificationStatus;
-  provider: string; // e.g. 'simulated_gateway', 'gupshup', 'twilio'
+  provider: string; // e.g. 'simulated_gateway', 'gupshup', 'twilio', 'in_app_system'
   providerRef?: string;
   idempotencyKey?: string;
   retryCount: number;
   failureReason?: string;
   metadata?: {
+    subscriptionId?: string;
+    subscriptionNumber?: string;
     visitId?: string;
     visitNumber?: string;
     referralId?: string;
@@ -36,6 +50,8 @@ export interface INotificationLog extends Document {
     appointmentId?: string;
     [key: string]: any;
   };
+  isRead?: boolean;
+  readAt?: Date;
   sentAt?: Date;
   deliveredAt?: Date;
   failedAt?: Date;
@@ -58,12 +74,12 @@ const NotificationLogSchema = new Schema<INotificationLog>(
     },
     recipientRole: {
       type: String,
-      enum: ['patient', 'caregiver', 'professional', 'hospital'],
+      enum: ['patient', 'caregiver', 'professional', 'hospital', 'admin', 'super_admin'],
       default: 'patient',
     },
     channel: {
       type: String,
-      enum: ['sms', 'whatsapp'],
+      enum: ['sms', 'whatsapp', 'in_app'],
       required: true,
       index: true,
     },
@@ -77,6 +93,18 @@ const NotificationLogSchema = new Schema<INotificationLog>(
         'VISIT_COMPLETED',
         'DME_SETUP_SCHEDULED',
         'CARE_LOOP_CLOSED',
+        'SUBSCRIPTION_ACTIVATED_TEST_MODE',
+        'NEW_CAREGIVER_SUBSCRIPTION_TEST_MODE',
+        'VISIT_RESCHEDULE_REQUESTED',
+        'VISIT_RESCHEDULE_APPROVED',
+        'VISIT_RESCHEDULE_REJECTED',
+        'DAILY_CARE_REPORT_SUBMITTED',
+        'CAREGIVER_ASSIGNED',
+        'CAREGIVER_ASSIGNED_NEW',
+        'CAREGIVER_REASSIGNED',
+        'CAREGIVER_REASSIGNED_PATIENT',
+        'CAREGIVER_REASSIGNED_REMOVED',
+        'FIELD_VISIT_SCHEDULED',
       ],
       required: true,
       index: true,
@@ -121,6 +149,14 @@ const NotificationLogSchema = new Schema<INotificationLog>(
     metadata: {
       type: Schema.Types.Mixed,
     },
+    isRead: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    readAt: {
+      type: Date,
+    },
     sentAt: {
       type: Date,
       default: Date.now,
@@ -134,11 +170,20 @@ const NotificationLogSchema = new Schema<INotificationLog>(
   },
   {
     timestamps: true,
+    toJSON: {
+      transform(_doc, ret: Record<string, any>) {
+        ret.id = ret._id.toString();
+        delete ret._id;
+        delete ret.__v;
+        return ret;
+      },
+    },
   }
 );
 
 NotificationLogSchema.index({ channel: 1, status: 1, createdAt: -1 });
 NotificationLogSchema.index({ recipientPhone: 1, createdAt: -1 });
+NotificationLogSchema.index({ recipientRole: 1, isRead: 1, createdAt: -1 });
 
 export const NotificationLog: Model<INotificationLog> =
   mongoose.models.NotificationLog || mongoose.model<INotificationLog>('NotificationLog', NotificationLogSchema);

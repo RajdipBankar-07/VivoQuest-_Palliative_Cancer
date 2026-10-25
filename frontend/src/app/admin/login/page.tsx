@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ShieldCheck,
@@ -22,8 +22,21 @@ import { FormField } from '@/components/FormField';
 import { Button } from '@/components/Button';
 import { authApi, ApiClientError } from '@/lib/api';
 
-export default function AdminLoginPage() {
+function AdminLoginFormContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnUrlParam = searchParams.get('returnUrl');
+  const isSessionExpired = searchParams.get('session') === 'expired';
+
+  // Sanitize returnUrl to prevent open redirects (only allow relative paths)
+  const safeReturnUrl = (() => {
+    if (!returnUrlParam) return '/admin/dashboard';
+    if (returnUrlParam.startsWith('/') && !returnUrlParam.startsWith('//') && !returnUrlParam.includes('\\')) {
+      return returnUrlParam;
+    }
+    return '/admin/dashboard';
+  })();
+
   const [identifier, setIdentifier] = useState('');
   const [authMethod, setAuthMethod] = useState<'otp' | 'password'>('password');
   const [password, setPassword] = useState('');
@@ -34,14 +47,21 @@ export default function AdminLoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [authenticatedAdmin, setAuthenticatedAdmin] = useState<any>(null);
 
-  // If already authenticated as admin, offer instant redirect
+  // If already authenticated as admin, offer instant redirect — or clear expired session
   useEffect(() => {
     const user = authApi.getStoredUser();
     const token = authApi.getToken();
+
+    if (isSessionExpired || (token && authApi.isTokenExpired(token))) {
+      authApi.logout();
+      setAuthenticatedAdmin(null);
+      return;
+    }
+
     if (token && user && ['admin', 'super_admin'].includes(user.role?.toLowerCase())) {
       setAuthenticatedAdmin(user);
     }
-  }, []);
+  }, [isSessionExpired]);
 
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,9 +113,9 @@ export default function AdminLoginPage() {
       setAuthenticatedAdmin(response.user);
       setStep('success');
 
-      // Seamless redirect to Admin Dashboard
+      // Seamless redirect to safe return URL
       setTimeout(() => {
-        router.push('/admin/dashboard');
+        router.push(safeReturnUrl);
       }, 1000);
     } catch (err: any) {
       if (err instanceof ApiClientError) {
@@ -129,6 +149,19 @@ export default function AdminLoginPage() {
             </p>
           </div>
 
+          {/* Session Expired Notice */}
+          {isSessionExpired && (
+            <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 mb-6 flex items-start gap-2.5 animate-in fade-in">
+              <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Session Expired</p>
+                <p className="text-amber-800 text-[11px] mt-0.5">
+                  Your administrative session has expired. Please authenticate again to access the operations dashboard.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Active Session Warning / Quick Continue Banner */}
           {authenticatedAdmin && step === 'input' && (
             <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 mb-6 flex items-start gap-2.5">
@@ -140,7 +173,7 @@ export default function AdminLoginPage() {
                 </p>
                 <div className="mt-2.5 flex gap-2">
                   <Button
-                    href="/admin/dashboard"
+                    href={safeReturnUrl}
                     variant="primary"
                     size="sm"
                     className="text-xs py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700"
@@ -289,7 +322,7 @@ export default function AdminLoginPage() {
 
               <div className="pt-4">
                 <Button
-                  href="/admin/dashboard"
+                  href={safeReturnUrl}
                   variant="primary"
                   size="md"
                   className="w-full justify-center bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
@@ -321,5 +354,26 @@ export default function AdminLoginPage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function AdminLoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="w-full bg-slate-50 min-h-screen flex flex-col font-sans text-navy">
+          <Navbar />
+          <div className="flex-1 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+            <div className="max-w-md w-full bg-white rounded-3xl border border-slate-200/80 shadow-2xl p-7 text-center">
+              <Activity className="animate-spin mx-auto text-primary" size={32} />
+              <p className="text-xs text-slate-500 mt-2">Loading administrative portal...</p>
+            </div>
+          </div>
+          <Footer />
+        </div>
+      }
+    >
+      <AdminLoginFormContent />
+    </Suspense>
   );
 }

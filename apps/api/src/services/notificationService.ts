@@ -222,6 +222,7 @@ export const sendPatientNotification = async (options: {
 export const listNotificationLogs = async (params: {
   channel?: string;
   status?: string;
+  isRead?: boolean;
   search?: string;
   page?: number;
   limit?: number;
@@ -236,6 +237,9 @@ export const listNotificationLogs = async (params: {
   }
   if (params.status && params.status !== 'all') {
     query.status = params.status;
+  }
+  if (typeof params.isRead === 'boolean') {
+    query.isRead = params.isRead;
   }
   if (params.search?.trim()) {
     const s = params.search.trim();
@@ -326,3 +330,22 @@ export const retryFailedNotification = async (
 
   return notification;
 };
+
+/**
+ * Admin Action: Mark an in-app or dispatch notification as read
+ */
+export const markNotificationAsRead = async (
+  notificationId: string
+): Promise<INotificationLog> => {
+  const notification = await NotificationLog.findById(notificationId);
+  if (!notification) {
+    throw new Error(`Notification record '${notificationId}' not found`);
+  }
+
+  notification.isRead = true;
+  notification.readAt = new Date();
+  await notification.save();
+
+  return notification;
+};
+

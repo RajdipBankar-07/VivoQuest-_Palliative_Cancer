@@ -5,6 +5,7 @@ import {
   AssignedPatient,
   ClinicalDocInput,
   FieldVisitStatus,
+  VisitRescheduleRequest,
 } from '../types';
 
 // Detect Android environment safely across Expo native runtime and headless test runners
@@ -246,6 +247,8 @@ export const caregiverApi = {
       timeSlot: v.timeSlot,
       clinicalDocumentation: v.clinicalDocumentation,
       timestamps: v.timestamps || {},
+      subscriptionId: v.subscriptionId ? v.subscriptionId.toString() : undefined,
+      subscriptionNumber: v.subscriptionNumber,
     }));
   },
 
@@ -397,6 +400,59 @@ export const caregiverApi = {
       latestVisit: p.latestVisit || null,
       assignedVisitsCount: p.assignedVisitsCount || 0,
     }));
+  },
+
+  /**
+   * Fetch pending rescheduling requests assigned to the authenticated caregiver
+   */
+  async getPendingRescheduleRequests(
+    status = 'pending',
+    baseUrl?: string
+  ): Promise<VisitRescheduleRequest[]> {
+    const res = await apiRequest<any>(
+      `/visits/reschedule-requests?status=${encodeURIComponent(status)}`,
+      {
+        method: 'GET',
+      },
+      baseUrl
+    );
+    return res.data || [];
+  },
+
+  /**
+   * Approve a visit rescheduling request
+   */
+  async approveRescheduleRequest(
+    requestId: string,
+    baseUrl?: string
+  ): Promise<{ request: VisitRescheduleRequest; visit: FieldVisit }> {
+    const res = await apiRequest<any>(
+      `/visits/reschedule-requests/${requestId}/approve`,
+      {
+        method: 'POST',
+      },
+      baseUrl
+    );
+    return res.data;
+  },
+
+  /**
+   * Reject a visit rescheduling request with a mandatory reason
+   */
+  async rejectRescheduleRequest(
+    requestId: string,
+    rejectionReason: string,
+    baseUrl?: string
+  ): Promise<VisitRescheduleRequest> {
+    const res = await apiRequest<any>(
+      `/visits/reschedule-requests/${requestId}/reject`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ rejectionReason }),
+      },
+      baseUrl
+    );
+    return res.data;
   },
 
   /**

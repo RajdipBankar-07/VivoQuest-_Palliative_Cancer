@@ -4,6 +4,10 @@ import {
   PatientSubscription,
   DailyCareReport,
   SubscriptionPlan,
+  AssignedCaregiverDetails,
+  PatientVisit,
+  PatientVisitsSchedule,
+  VisitRescheduleRequest,
 } from '../types';
 
 // Detect Android environment safely across Expo native runtime and headless test runners
@@ -355,6 +359,62 @@ export const patientApi = {
   },
 
   /**
+   * Activate care plan subscription in explicit TEST MODE for authenticated patient
+   */
+  async activateSubscription(
+    planId: string,
+    options?: {
+      carePlanNotes?: string;
+      emergencyContact?: { name: string; phone: string; relation: string };
+      idempotencyKey?: string;
+    },
+    baseUrl?: string
+  ): Promise<PatientSubscription> {
+    const res = await apiRequest<any>(
+      '/patients/me/subscriptions/activate',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          planId,
+          carePlanNotes: options?.carePlanNotes,
+          emergencyContact: options?.emergencyContact,
+          idempotencyKey: options?.idempotencyKey,
+        }),
+      },
+      baseUrl
+    );
+
+    const s = res.data;
+    return {
+      id: s.id || s._id,
+      subscriptionNumber: s.subscriptionNumber,
+      planId: s.planId,
+      planTitle: s.planTitle,
+      status: s.status,
+      startDate: s.startDate,
+      endDate: s.endDate,
+      assignedCaregiver: s.assignedCaregiver
+        ? {
+            id: s.assignedCaregiver.id,
+            name: s.assignedCaregiver.name,
+            phone: s.assignedCaregiver.phone,
+          }
+        : null,
+      totalVisitsIncluded: s.totalVisitsIncluded || 0,
+      visitsCompleted: s.visitsCompleted || 0,
+      visitsRemaining: s.visitsRemaining || 0,
+      pricing: {
+        customerPrice: s.pricing?.customerPrice || 0,
+        paymentStatus: s.pricing?.paymentStatus || 'test_mode',
+        paymentMethod: s.pricing?.paymentMethod || 'test_mode',
+      },
+      emergencyContact: s.emergencyContact,
+      carePlanNotes: s.carePlanNotes,
+      createdAt: s.createdAt,
+    };
+  },
+
+  /**
    * Fetch authorized patient profile details
    */
   async getPatientDetails(patientId: string, baseUrl?: string): Promise<any> {
@@ -391,6 +451,88 @@ export const patientApi = {
       body: JSON.stringify(data),
     }, baseUrl);
     return res.data;
+  },
+
+  /**
+   * Fetch currently assigned caregiver details for the authenticated patient
+   */
+  async getAssignedCaregiver(baseUrl?: string): Promise<AssignedCaregiverDetails | null> {
+    const res = await apiRequest<any>('/patients/me/caregiver', {
+      method: 'GET',
+    }, baseUrl);
+    return res.data?.assignedCaregiver || null;
+  },
+
+  /**
+   * Fetch upcoming and past visit schedule for the authenticated patient
+   */
+  async getVisits(baseUrl?: string): Promise<PatientVisitsSchedule> {
+    const res = await apiRequest<any>('/patients/me/visits', {
+      method: 'GET',
+    }, baseUrl);
+    return {
+      upcoming: res.data?.upcoming || [],
+      past: res.data?.past || [],
+      upcomingCount: res.data?.upcomingCount || 0,
+      pastCount: res.data?.pastCount || 0,
+      totalCount: res.data?.totalCount || 0,
+    };
+  },
+
+  /**
+   * Submit a visit rescheduling request for an upcoming visit
+   */
+  async requestVisitReschedule(
+    visitId: string,
+    requestedDate: string,
+    requestedTimeSlot: string,
+    reason: string,
+    baseUrl?: string
+  ): Promise<VisitRescheduleRequest> {
+    const res = await apiRequest<any>(
+      `/patients/me/visits/${visitId}/reschedule`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          requestedDate,
+          requestedTimeSlot,
+          reason,
+        }),
+      },
+      baseUrl
+    );
+    return res.data;
+  },
+
+  /**
+   * Cancel an eligible pending rescheduling request
+   */
+  async cancelRescheduleRequest(
+    requestId: string,
+    baseUrl?: string
+  ): Promise<VisitRescheduleRequest> {
+    const res = await apiRequest<any>(
+      `/patients/me/reschedule-requests/${requestId}/cancel`,
+      {
+        method: 'POST',
+      },
+      baseUrl
+    );
+    return res.data;
+  },
+
+  /**
+   * Fetch all rescheduling requests for the authenticated patient
+   */
+  async getRescheduleRequests(baseUrl?: string): Promise<VisitRescheduleRequest[]> {
+    const res = await apiRequest<any>(
+      '/patients/me/reschedule-requests',
+      {
+        method: 'GET',
+      },
+      baseUrl
+    );
+    return res.data || [];
   },
 
   /**

@@ -19,7 +19,7 @@ export interface PatientSubscription {
   subscriptionNumber: string;
   planId: string;
   planTitle: string;
-  status: 'active' | 'paused' | 'completed' | 'cancelled' | 'expired';
+  status: 'active' | 'paused' | 'suspended' | 'completed' | 'cancelled' | 'expired';
   startDate: string;
   endDate: string;
   assignedCaregiver: CaregiverInfo | null;
@@ -81,3 +81,107 @@ export interface SubscriptionPlan {
   isActive: boolean;
   isPopular: boolean;
 }
+
+export interface AssignedCaregiverDetails {
+  id: string;
+  name: string;
+  role: string;
+  roleCategory: 'nurse' | 'anm' | 'caregiver' | 'physician' | 'physiotherapist' | 'other';
+  phone?: string;
+  isPhoneVerified: boolean;
+  profilePhotoUrl?: string;
+  assignmentStatus: 'active' | 'assigned';
+  assignmentSource: 'subscription' | 'field_visit';
+  serviceInfo?: {
+    planTitle?: string;
+    shiftInfo?: string;
+    hoursPerVisit?: number;
+    visitsRemaining?: number;
+    totalVisitsIncluded?: number;
+    validThrough?: string;
+    scheduledDate?: string;
+    timeSlot?: string;
+  };
+  specializations?: string[];
+  yearsOfExperience?: number;
+  bio?: string;
+  rating?: number;
+}
+
+export type RescheduleRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export interface RescheduleRequestSummary {
+  id: string;
+  status: RescheduleRequestStatus;
+  requestedDate: string;
+  requestedTimeSlot: string;
+  reason: string;
+  rejectionReason?: string;
+  createdAt: string;
+  resolvedAt?: string;
+}
+
+export interface PatientVisit {
+  id: string;
+  visitNumber: string;
+  scheduledDate: string; // YYYY-MM-DD
+  timeSlot: string;
+  visitType: string;
+  serviceName: string;
+  status: string;
+  statusLabel: string;
+  assignedCaregiver: {
+    id?: string;
+    name: string;
+    role: string;
+    phone?: string;
+  } | null;
+  rescheduleRequest?: RescheduleRequestSummary;
+  instructions?: string;
+  recommendations?: string;
+  followUpDate?: string;
+  completedAt?: string;
+  cancelledAt?: string;
+}
+
+export interface PatientVisitsSchedule {
+  upcoming: PatientVisit[];
+  past: PatientVisit[];
+  upcomingCount: number;
+  pastCount: number;
+  totalCount: number;
+}
+
+export interface VisitRescheduleRequest {
+  id: string;
+  visitId: string;
+  visitNumber: string;
+  patientId: string;
+  patientName: string;
+  patientPhone: string;
+  providerId: string;
+  providerName: string;
+  providerRole?: string;
+  providerPhone?: string;
+  requestedBy: string;
+  requesterRole: string;
+  requesterName: string;
+  originalSchedule: {
+    scheduledDate: string;
+    timeSlot: string;
+  };
+  requestedSchedule: {
+    scheduledDate: string;
+    timeSlot: string;
+  };
+  reason: string;
+  status: RescheduleRequestStatus;
+  rejectionReason?: string;
+  resolvedBy?: string;
+  resolverRole?: string;
+  resolverName?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+

@@ -50,6 +50,10 @@ import {
   recordSubscriptionVisit,
   activateCaregiverSubscription,
   cancelCaregiverSubscription,
+  suspendCaregiverSubscription,
+  resumeCaregiverSubscription,
+  archiveCaregiverSubscription,
+  getSubscriptionAuditHistory,
 } from '../services/caregiverPlanService.js';
 import {
   listAdminFieldVisits,
@@ -57,13 +61,17 @@ import {
   assignOrReassignFieldVisitProvider,
   listSyncOperations,
   getSyncStats,
+  scheduleVisitForSubscription,
 } from '../services/fieldOperationsService.js';
 import {
   listNotificationLogs,
   retryFailedNotification,
+  markNotificationAsRead,
 } from '../services/notificationService.js';
+import { getAuthorizedPatientDetails } from '../services/patientService.js';
 import { OrderStatus } from '../models/ProductOrder.js';
 import { User } from '../models/User.js';
+import { NotificationLog } from '../models/NotificationLog.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 export const adminRoutes = Router();
@@ -676,18 +684,13 @@ adminRoutes.patch(
     try {
       let { providerId, notes, reason, providerPhone, scheduledDate, timeSlot } = req.body;
       if (!providerId && providerPhone) {
-        const found = await User.findOne({ phone: providerPhone });
+        const found = await User.findOne({ phone: providerPhone.trim() });
         if (found) {
           providerId = found._id.toString();
         }
       }
       if (!providerId) {
-        const anyProf = await User.findOne({ role: 'professional', status: 'active' });
-        if (anyProf) {
-          providerId = anyProf._id.toString();
-        } else {
-          throw new AppError("Field 'providerId' or registered 'providerPhone' is required", 400);
-        }
+        throw new AppError("Valid 'providerId' or registered active 'providerPhone' of an authorized caregiver is required", 400);
       }
 
       const updated = await assignOrReassignFieldVisitProvider(
@@ -764,7 +767,7 @@ adminRoutes.get(
 
 /**
  * GET /api/v1/admin/notifications
- * Administrative audit log of SMS and WhatsApp dispatches
+ * Administrative audit log of in-app, SMS, and WhatsApp dispatches
  */
 adminRoutes.get(
   '/notifications',
@@ -772,10 +775,15 @@ adminRoutes.get(
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
     try {
-      const { channel, status, search, page, limit } = req.query;
+      const { channel, status, isRead, search, page, limit } = req.query;
+      let parsedIsRead: boolean | undefined = undefined;
+      if (isRead === 'true') parsedIsRead = true;
+      if (isRead === 'false') parsedIsRead = false;
+
       const result = await listNotificationLogs({
         channel: channel as string,
         status: status as string,
+        isRead: parsedIsRead,
         search: search as string,
         page: page ? parseInt(page as string, 10) : 1,
         limit: limit ? parseInt(limit as string, 10) : 20,
@@ -787,6 +795,51 @@ adminRoutes.get(
         pagination: result.pagination,
         data: result.logs,
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/notifications/unread-count
+ * Count unread in-app notifications for the notification bell badge.
+ */
+adminRoutes.get(
+  '/notifications/unread-count',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      const { NotificationLog } = await import('../models/NotificationLog.js');
+      const count = await NotificationLog.countDocuments({
+        channel: 'in_app',
+        isRead: false,
+      });
+      res.json({ success: true, data: { unreadCount: count } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/notifications/mark-all-read
+ * Mark all unread in-app notifications as read.
+ */
+adminRoutes.patch(
+  '/notifications/mark-all-read',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      const { NotificationLog } = await import('../models/NotificationLog.js');
+      const now = new Date();
+      const result = await NotificationLog.updateMany(
+        { channel: 'in_app', isRead: false },
+        { $set: { isRead: true, readAt: now } }
+      );
+      res.json({ success: true, message: 'All in-app notifications marked as read', data: { markedRead: result.modifiedCount } });
     } catch (err) {
       next(err);
     }
@@ -808,6 +861,28 @@ adminRoutes.post(
         success: true,
         message: `Notification retry processed with status: ${retried.status}`,
         data: retried,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/notifications/:id/read
+ * Mark an administrative or in-app notification as read
+ */
+adminRoutes.patch(
+  '/notifications/:id/read',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const readNotif = await markNotificationAsRead(req.params.id);
+      res.json({
+        success: true,
+        message: 'Notification marked as read',
+        data: readNotif,
       });
     } catch (err) {
       next(err);
@@ -1447,6 +1522,55 @@ adminRoutes.post(
 );
 
 /**
+ * POST /api/v1/admin/caregiver-subscriptions/:id/suspend
+ * Suspend/pause a caregiver subscription
+ */
+adminRoutes.post(
+  '/caregiver-subscriptions/:id/suspend',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { reason } = req.body;
+      if (!reason || typeof reason !== 'string' || !reason.trim()) {
+        throw new AppError('Suspension reason is required', 400);
+      }
+      const sub = await suspendCaregiverSubscription(req.params.id, reason.trim(), req.user!);
+      res.json({
+        success: true,
+        message: 'Caregiver subscription suspended successfully',
+        data: sub,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/caregiver-subscriptions/:id/resume
+ * Resume an active caregiver subscription
+ */
+adminRoutes.post(
+  '/caregiver-subscriptions/:id/resume',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { reason } = req.body;
+      const sub = await resumeCaregiverSubscription(req.params.id, reason?.trim(), req.user!);
+      res.json({
+        success: true,
+        message: 'Caregiver subscription resumed successfully',
+        data: sub,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * POST /api/v1/admin/caregiver-subscriptions/:id/cancel
  * Cancel a caregiver subscription
  */
@@ -1457,10 +1581,10 @@ adminRoutes.post(
   async (req: AuthRequest, res: Response, next) => {
     try {
       const { reason } = req.body;
-      if (!reason) {
+      if (!reason || typeof reason !== 'string' || !reason.trim()) {
         throw new AppError('Cancellation reason is required', 400);
       }
-      const sub = await cancelCaregiverSubscription(req.params.id, reason, req.user!);
+      const sub = await cancelCaregiverSubscription(req.params.id, reason.trim(), req.user!);
       res.json({
         success: true,
         message: 'Caregiver subscription cancelled successfully',
@@ -1471,4 +1595,552 @@ adminRoutes.post(
     }
   }
 );
+
+/**
+ * POST /api/v1/admin/caregiver-subscriptions/:id/archive
+ * Soft-delete / archive an eligible completed or cancelled subscription
+ */
+adminRoutes.post(
+  '/caregiver-subscriptions/:id/archive',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { reason } = req.body;
+      if (!reason || typeof reason !== 'string' || !reason.trim()) {
+        throw new AppError('Archive reason is required', 400);
+      }
+      const sub = await archiveCaregiverSubscription(req.params.id, reason.trim(), req.user!);
+      res.json({
+        success: true,
+        message: 'Caregiver subscription archived successfully',
+        data: sub,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/caregiver-subscriptions/:id
+ * Prohibit permanent deletion of financial and clinical history
+ */
+adminRoutes.delete(
+  '/caregiver-subscriptions/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, _res: Response, next) => {
+    try {
+      throw new AppError(
+        'Permanent deletion of caregiver subscriptions is prohibited due to regulatory, clinical, and financial retention requirements. Use the archive workflow for eligible records instead.',
+        403
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/caregiver-subscriptions/:id/history
+ * Retrieve authorized chronological audit history for a caregiver subscription
+ */
+adminRoutes.get(
+  '/caregiver-subscriptions/:id/history',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+      const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
+
+      if (isNaN(page) || page < 1) {
+        throw new AppError('Page parameter must be a positive integer', 400);
+      }
+      if (isNaN(limit) || limit < 1 || limit > 100) {
+        throw new AppError('Limit parameter must be an integer between 1 and 100', 400);
+      }
+
+      const result = await getSubscriptionAuditHistory(req.params.id, { page, limit });
+      res.json({
+        success: true,
+        data: result.events,
+        subscription: result.subscription,
+        pagination: result.pagination,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/caregiver-subscriptions/:id/history
+ * Immutable compliance protection: audit logs cannot be deleted
+ */
+adminRoutes.delete(
+  '/caregiver-subscriptions/:id/history',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, _res: Response, next) => {
+    try {
+      throw new AppError(
+        'Subscription audit events are strictly append-only and cannot be deleted or altered.',
+        403
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PUT /api/v1/admin/caregiver-subscriptions/:id/history
+ * Immutable compliance protection: audit logs cannot be modified
+ */
+adminRoutes.put(
+  '/caregiver-subscriptions/:id/history',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, _res: Response, next) => {
+    try {
+      throw new AppError(
+        'Subscription audit events are strictly append-only and cannot be modified.',
+        403
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/caregiver-subscriptions/:id/history
+ * Immutable compliance protection: audit logs cannot be modified
+ */
+adminRoutes.patch(
+  '/caregiver-subscriptions/:id/history',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, _res: Response, next) => {
+    try {
+      throw new AppError(
+        'Subscription audit events are strictly append-only and cannot be modified.',
+        403
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/patients/:id
+ * Retrieve comprehensive authorized patient profile dossier (account, subscriptions, visits, reports, audit history)
+ */
+adminRoutes.get(
+  '/patients/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const result = await getAuthorizedPatientDetails(req.params.id, req.user!);
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/visits/schedule
+ * Schedule and confirm an authorized field visit for an active caregiver subscription
+ */
+adminRoutes.post(
+  '/visits/schedule',
+  authenticateUser,
+  requireRole(['admin', 'super_admin', 'professional']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { subscriptionId, scheduledDate, timeSlot, visitType, providerId, instructions, idempotencyKey } = req.body;
+      const result = await scheduleVisitForSubscription(
+        {
+          subscriptionId,
+          scheduledDate,
+          timeSlot,
+          visitType,
+          providerId,
+          instructions,
+          idempotencyKey,
+        },
+        req.user!
+      );
+
+      res.status(201).json({
+        success: true,
+        message: 'Visit scheduled and confirmed successfully',
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+// =============================================================================
+// ADMIN NOTIFICATIONS — In-App Notification Bell Feed
+// =============================================================================
+
+/**
+ * GET /api/v1/admin/notifications
+ * List notifications for the admin console
+ */
+adminRoutes.get(
+  '/notifications',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const page = parseInt((req.query.page as string) || '1', 10);
+      const limit = parseInt((req.query.limit as string) || '20', 10);
+      const unreadOnly = req.query.unread === 'true';
+
+      const filter: any = {
+        channel: 'in_app',
+        $or: [
+          { recipientPhone: 'ADMIN_DESK' },
+          { recipientRole: { $in: ['admin', 'super_admin'] } },
+        ],
+      };
+      if (unreadOnly) {
+        filter.isRead = { $ne: true };
+      }
+
+      const [notifications, total, unreadCount] = await Promise.all([
+        NotificationLog.find(filter)
+          .sort({ createdAt: -1 })
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .lean(),
+        NotificationLog.countDocuments(filter),
+        NotificationLog.countDocuments({
+          channel: 'in_app',
+          isRead: { $ne: true },
+          $or: [
+            { recipientPhone: 'ADMIN_DESK' },
+            { recipientRole: { $in: ['admin', 'super_admin'] } },
+          ],
+        }),
+      ]);
+
+      res.json({
+        success: true,
+        data: notifications,
+        unreadCount,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit) || 1,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/notifications/unread-count
+ * Return unread count for bell icon
+ */
+adminRoutes.get(
+  '/notifications/unread-count',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      const unreadCount = await NotificationLog.countDocuments({
+        channel: 'in_app',
+        isRead: { $ne: true },
+        $or: [
+          { recipientPhone: 'ADMIN_DESK' },
+          { recipientRole: { $in: ['admin', 'super_admin'] } },
+        ],
+      });
+      res.json({
+        success: true,
+        data: { unreadCount },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/notifications/mark-all-read
+ * Mark all admin notifications as read
+ */
+adminRoutes.patch(
+  '/notifications/mark-all-read',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      await NotificationLog.updateMany(
+        {
+          channel: 'in_app',
+          isRead: { $ne: true },
+          $or: [
+            { recipientPhone: 'ADMIN_DESK' },
+            { recipientRole: { $in: ['admin', 'super_admin'] } },
+          ],
+        },
+        {
+          $set: {
+            isRead: true,
+            readAt: new Date(),
+          },
+        }
+      );
+      res.json({
+        success: true,
+        message: 'All notifications marked as read',
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/notifications/:id/read
+ * Mark a single notification as read
+ */
+adminRoutes.patch(
+  '/notifications/:id/read',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const updated = await NotificationLog.findByIdAndUpdate(
+        req.params.id,
+        {
+          $set: {
+            isRead: true,
+            readAt: new Date(),
+          },
+        },
+        { new: true }
+      );
+      res.json({
+        success: true,
+        data: updated,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+// =============================================================================
+// ADMIN RESCHEDULE REQUESTS — Visibility, Approval, and Rejection
+// =============================================================================
+
+/**
+ * GET /api/v1/admin/reschedule-requests
+ * List all reschedule requests across the platform (admin scope).
+ */
+adminRoutes.get(
+  '/reschedule-requests',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { getPendingRescheduleRequestsForApprover } = await import('../services/visitRescheduleService.js');
+      const statusFilter = (req.query.status as string) || 'pending';
+      const requests = await getPendingRescheduleRequestsForApprover(
+        req.user!._id.toString(),
+        req.user!.role,
+        statusFilter
+      );
+      res.json({ success: true, count: requests.length, data: requests });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/reschedule-requests/:requestId/approve
+ * Approve a visit rescheduling request (Admin / Super Admin action).
+ */
+adminRoutes.post(
+  '/reschedule-requests/:requestId/approve',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { approveRescheduleRequest } = await import('../services/visitRescheduleService.js');
+      const user = req.user!;
+      const result = await approveRescheduleRequest(req.params.requestId, {
+        _id: user._id,
+        fullName: user.fullName,
+        phone: user.phone,
+        role: user.role,
+      });
+      res.json({
+        success: true,
+        message: 'Rescheduling request approved and field visit schedule updated.',
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/reschedule-requests/:requestId/reject
+ * Reject a visit rescheduling request with mandatory reason.
+ */
+adminRoutes.post(
+  '/reschedule-requests/:requestId/reject',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { rejectRescheduleRequest } = await import('../services/visitRescheduleService.js');
+      const { rejectionReason } = req.body;
+      if (!rejectionReason || typeof rejectionReason !== 'string' || rejectionReason.trim().length < 3) {
+        throw new AppError('Please provide a valid rejection reason (at least 3 characters)', 400);
+      }
+      const user = req.user!;
+      const result = await rejectRescheduleRequest(req.params.requestId, rejectionReason.trim(), {
+        _id: user._id,
+        fullName: user.fullName,
+        phone: user.phone,
+        role: user.role,
+      });
+      res.json({
+        success: true,
+        message: 'Rescheduling request rejected. Original visit schedule preserved.',
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// ADMIN FIELD VISITS — Visit Status Dashboard & Management
+// =============================================================================
+
+/**
+ * GET /api/v1/admin/visits
+ * List field visits with filters for date, status, caregiver, patient.
+ */
+adminRoutes.get(
+  '/visits',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { status, date, search, page, limit } = req.query;
+      const result = await listAdminFieldVisits({
+        status: status as string,
+        date: date as string,
+        search: search as string,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 20,
+      });
+      res.json({ success: true, ...result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/visits/stats
+ * Aggregate visit statistics for admin overview widgets.
+ */
+adminRoutes.get(
+  '/visits/stats',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      const stats = await getAdminFieldOperationsStats();
+      res.json({ success: true, data: stats });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/visits/:visitId/reassign
+ * POST  /api/v1/admin/visits/:visitId/reassign
+ * Reassign a field visit to a different caregiver/provider.
+ */
+const handleVisitReassign = async (req: AuthRequest, res: Response, next: any) => {
+  try {
+    const newProviderId = req.body.newProviderId || req.body.providerId || req.body.caregiverId;
+    const reason = req.body.reason || req.body.reassignmentReason;
+    if (!newProviderId) throw new AppError('newProviderId is required', 400);
+    const result = await assignOrReassignFieldVisitProvider(
+      req.params.visitId,
+      newProviderId,
+      req.user!,
+      reason
+    );
+    res.json({
+      success: true,
+      message: 'Field visit reassigned to new caregiver successfully.',
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+adminRoutes.patch('/visits/:visitId/reassign', authenticateUser, requireRole(['admin', 'super_admin']), handleVisitReassign);
+adminRoutes.post('/visits/:visitId/reassign', authenticateUser, requireRole(['admin', 'super_admin']), handleVisitReassign);
+
+// =============================================================================
+// ADMIN CARE REPORTS — Report Listing with Clinical Documentation
+// =============================================================================
+
+/**
+ * GET /api/v1/admin/care-reports
+ * List field visits that have clinical documentation submitted (care reports).
+ */
+adminRoutes.get(
+  '/care-reports',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { status, date, search, page, limit } = req.query;
+      // Fetch completed or in-progress visits that have clinical documentation
+      const result = await listAdminFieldVisits({
+        status: (status as string) || 'completed',
+        date: date as string,
+        search: search as string,
+        page: page ? parseInt(page as string, 10) : 1,
+        limit: limit ? parseInt(limit as string, 10) : 20,
+        requiresClinicalDoc: true,
+      });
+      res.json({ success: true, ...result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 

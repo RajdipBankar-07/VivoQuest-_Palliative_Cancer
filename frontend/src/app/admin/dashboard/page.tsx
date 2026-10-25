@@ -44,6 +44,12 @@ import {
   MessageSquare,
   Send,
   Smartphone,
+  Bell,
+  Eye,
+  Download,
+  Edit3,
+  Trash2,
+  FileText,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
@@ -179,14 +185,16 @@ export default function AdminDashboardPage() {
   const [fieldSearch, setFieldSearch] = useState('');
   const [selectedVisitForAssign, setSelectedVisitForAssign] = useState<any | null>(null);
   const [showReassignModal, setShowReassignModal] = useState(false);
+  const [reassignProviderId, setReassignProviderId] = useState('');
   const [reassignProviderName, setReassignProviderName] = useState('Dr. Priya Deshmukh');
   const [reassignProviderPhone, setReassignProviderPhone] = useState('9820011003');
   const [reassignReason, setReassignReason] = useState('Clinical route balancing and priority assignment');
   const [reassignScheduledDate, setReassignScheduledDate] = useState(new Date().toISOString().slice(0, 10));
   const [reassignTimeSlot, setReassignTimeSlot] = useState('11:00 AM - 01:00 PM');
+  const [availableCaregivers, setAvailableCaregivers] = useState<any[]>([]);
 
-  // Phase 4: Offline Edge Sync Operations & Patient Notifications Supervision
-  const [fieldOpsSubTab, setFieldOpsSubTab] = useState<'visits' | 'sync_logs' | 'notifications'>('visits');
+  // Phase 4 & Phase 7: Offline Edge Sync Operations & In-App / Gateway Notifications
+  const [fieldOpsSubTab, setFieldOpsSubTab] = useState<'visits' | 'sync_logs' | 'notifications' | 'reschedules'>('visits');
   const [syncLogs, setSyncLogs] = useState<any[]>([]);
   const [syncStats, setSyncStats] = useState<any | null>(null);
   const [syncStatusFilter, setSyncStatusFilter] = useState('all');
@@ -199,6 +207,28 @@ export default function AdminDashboardPage() {
   const [notifStatusFilter, setNotifStatusFilter] = useState('all');
   const [notifSearch, setNotifSearch] = useState('');
   const [notifPagination, setNotifPagination] = useState({ total: 0, page: 1, limit: 10, totalPages: 1 });
+
+  // Notifications Bell & Unread Drawer
+  const [unreadNotifCount, setUnreadNotifCount] = useState<number>(0);
+  const [showNotifDrawer, setShowNotifDrawer] = useState<boolean>(false);
+  const [inAppNotifs, setInAppNotifs] = useState<any[]>([]);
+
+  // Visit Rescheduling Supervision
+  const [rescheduleRequests, setRescheduleRequests] = useState<any[]>([]);
+  const [rescheduleStatusFilter, setRescheduleStatusFilter] = useState<string>('all');
+  const [showRejectModal, setShowRejectModal] = useState<boolean>(false);
+  const [selectedRescheduleForReject, setSelectedRescheduleForReject] = useState<any | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('');
+
+  // Visit Clinical Documentation & Supervision Modals
+  const [selectedVisitForReport, setSelectedVisitForReport] = useState<any | null>(null);
+  const [showReportModal, setShowReportModal] = useState<boolean>(false);
+  const [showEditReportModal, setShowEditReportModal] = useState<boolean>(false);
+  const [editReportNotes, setEditReportNotes] = useState<string>('');
+  const [editReportVitals, setEditReportVitals] = useState<any>({});
+  const [editReportReason, setEditReportReason] = useState<string>('');
+  const [showDeleteReportModal, setShowDeleteReportModal] = useState<boolean>(false);
+  const [deleteReportReason, setDeleteReportReason] = useState<string>('');
 
   // Phase 2: Order Refund & Hospital Verification States
   const [showRefundModal, setShowRefundModal] = useState(false);
@@ -241,18 +271,40 @@ export default function AdminDashboardPage() {
       const token = authApi.getToken();
 
       // Enforce verified administrator session
-      if (!token || !storedUser || !['admin', 'super_admin'].includes(storedUser.role)) {
+      if (!token || !storedUser || !['admin', 'super_admin'].includes(storedUser.role?.toLowerCase())) {
+        authApi.logout();
         setIsAuthorized(false);
         setIsLoading(false);
-        router.push('/admin/login');
+        router.push('/admin/login?returnUrl=/admin/dashboard');
+        return;
+      }
+
+      // Check client-side token expiration before issuing API requests
+      if (authApi.isTokenExpired(token)) {
+        authApi.logout();
+        setIsAuthorized(false);
+        setIsLoading(false);
+        router.push('/admin/login?returnUrl=/admin/dashboard&session=expired');
         return;
       }
 
       setCurrentUser(storedUser);
       setIsAuthorized(true);
-      adminApi.getAdminFieldVisitStats().then(setFieldStats).catch(() => null);
+
+      // Verify session against backend with initial overview load
       await loadTabData('overview');
+
+      // Only dispatch supplementary background requests once authentication is verified
+      adminApi.getAdminFieldVisitStats().then(setFieldStats).catch(() => null);
+      adminApi.getUnreadNotificationsCount().then((res) => setUnreadNotifCount(res.unreadCount || 0)).catch(() => null);
+      adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).then((res) => setInAppNotifs(res.data || [])).catch(() => null);
     } catch (err: any) {
+      if (err instanceof ApiClientError && err.status === 401) {
+        authApi.logout();
+        setIsAuthorized(false);
+        router.push('/admin/login?returnUrl=/admin/dashboard&session=expired');
+        return;
+      }
       setError(err.message || 'Unable to authenticate admin session');
       setIsAuthorized(false);
     } finally {
@@ -277,6 +329,12 @@ export default function AdminDashboardPage() {
       setUsers(res.data);
       setUsersPagination(res.pagination);
     } catch (err: any) {
+      if (err instanceof ApiClientError && err.status === 401) {
+        authApi.logout();
+        setIsAuthorized(false);
+        router.push('/admin/login?returnUrl=/admin/dashboard&session=expired');
+        return;
+      }
       setError(err.message || 'Failed to load user accounts');
     }
   };
@@ -288,7 +346,7 @@ export default function AdminDashboardPage() {
         const data = await adminApi.getOverview();
         setOverview(data);
       } else if (tab === 'field_ops') {
-        const [visitsRes, statsRes, syncLogsRes, syncStatsRes, notifRes] = await Promise.all([
+        const [visitsRes, statsRes, syncLogsRes, syncStatsRes, notifRes, reschedulesRes, caregiversRes, unreadRes, inAppRes] = await Promise.all([
           adminApi.getAdminFieldVisits({
             status: fieldStatusFilter === 'all' ? undefined : fieldStatusFilter,
             visitType: fieldVisitTypeFilter === 'all' ? undefined : fieldVisitTypeFilter,
@@ -313,6 +371,10 @@ export default function AdminDashboardPage() {
             page: notifPagination.page,
             limit: 10,
           }),
+          adminApi.getRescheduleRequests(rescheduleStatusFilter === 'all' ? undefined : rescheduleStatusFilter).catch(() => ({ data: [] })),
+          adminApi.getUsers({ role: 'professional', status: 'active', limit: 50 }).catch(() => ({ data: [] })),
+          adminApi.getUnreadNotificationsCount().catch(() => ({ unreadCount: 0 })),
+          adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).catch(() => ({ data: [] })),
         ]);
         setFieldVisits(visitsRes.data);
         setFieldVisitsPagination(visitsRes.pagination);
@@ -322,6 +384,10 @@ export default function AdminDashboardPage() {
         setSyncStats(syncStatsRes);
         setNotificationLogs(notifRes.data);
         setNotifPagination(notifRes.pagination);
+        setRescheduleRequests(reschedulesRes.data || []);
+        setAvailableCaregivers(caregiversRes.data || []);
+        setUnreadNotifCount(unreadRes.unreadCount || 0);
+        setInAppNotifs(inAppRes.data || []);
       } else if (tab === 'orders') {
         const res = await adminApi.getOrders({
           status: orderStatusFilter,
@@ -369,6 +435,12 @@ export default function AdminDashboardPage() {
         setAuditPagination(res.pagination);
       }
     } catch (err: any) {
+      if (err instanceof ApiClientError && err.status === 401) {
+        authApi.logout();
+        setIsAuthorized(false);
+        router.push('/admin/login?returnUrl=/admin/dashboard&session=expired');
+        return;
+      }
       setError(err.message || `Failed to load data for ${tab}`);
     }
   };
@@ -461,6 +533,7 @@ export default function AdminDashboardPage() {
     setActionLoading(true);
     try {
       await adminApi.reassignFieldVisit(selectedVisitForAssign._id, {
+        providerId: reassignProviderId || undefined,
         providerName: reassignProviderName.trim(),
         providerPhone: reassignProviderPhone.trim() || undefined,
         reason: reassignReason.trim(),
@@ -489,6 +562,124 @@ export default function AdminDashboardPage() {
       await loadTabData('field_ops');
     } catch (err: any) {
       setError(err.message || 'Failed to retry notification dispatch');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // In-App Notifications: Mark as read
+  const handleMarkNotificationRead = async (id: string, notif?: any) => {
+    try {
+      await adminApi.markNotificationRead(id);
+      setUnreadNotifCount((prev) => Math.max(0, prev - 1));
+      setInAppNotifs((prev) =>
+        prev.map((n) => (n._id === id ? { ...n, isRead: true, readAt: new Date().toISOString() } : n))
+      );
+      if (notif) {
+        if (notif.relatedEntityType === 'CaregiverSubscription' || notif.type === 'SUBSCRIPTION_ACTIVATED') {
+          setActiveTab('subscriptions');
+          setShowNotifDrawer(false);
+        } else if (notif.relatedEntityType === 'VisitRescheduleRequest' || notif.type === 'VISIT_RESCHEDULE_REQUESTED') {
+          setActiveTab('field_ops');
+          setFieldOpsSubTab('reschedules');
+          setShowNotifDrawer(false);
+        } else if (notif.relatedEntityType === 'FieldVisit') {
+          setActiveTab('field_ops');
+          setFieldOpsSubTab('visits');
+          setShowNotifDrawer(false);
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to mark notification read');
+    }
+  };
+
+  // In-App Notifications: Mark all as read
+  const handleMarkAllNotificationsRead = async () => {
+    try {
+      await adminApi.markAllNotificationsRead();
+      setUnreadNotifCount(0);
+      setInAppNotifs((prev) =>
+        prev.map((n) => ({ ...n, isRead: true, readAt: new Date().toISOString() }))
+      );
+      setSuccessMsg('All notifications marked as read');
+    } catch (err: any) {
+      setError(err.message || 'Failed to mark all notifications read');
+    }
+  };
+
+  // Reschedule Requests: Approve
+  const handleApproveReschedule = async (id: string) => {
+    setActionLoading(true);
+    setError(null);
+    try {
+      const res = await adminApi.approveRescheduleRequest(id);
+      setSuccessMsg(`Reschedule approved: Visit ${res.data?.visitNumber} updated successfully.`);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to approve reschedule request');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Reschedule Requests: Reject
+  const handleRejectRescheduleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedRescheduleForReject || !rejectReason.trim()) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      await adminApi.rejectRescheduleRequest(selectedRescheduleForReject._id, rejectReason.trim());
+      setSuccessMsg('Reschedule request rejected and patient notified.');
+      setShowRejectModal(false);
+      setSelectedRescheduleForReject(null);
+      setRejectReason('');
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to reject reschedule request');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Clinical Report: Admin Edit with Audit & Version Archival
+  const handleAdminEditReportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedVisitForReport || !editReportReason.trim()) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      await adminApi.adminEditVisitClinicalDoc(selectedVisitForReport._id, {
+        clinicalNotes: editReportNotes,
+        vitals: editReportVitals,
+        editReason: editReportReason.trim(),
+      });
+      setSuccessMsg(`Clinical report for visit ${selectedVisitForReport.visitNumber} updated and archived to version history.`);
+      setShowEditReportModal(false);
+      setShowReportModal(false);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to edit clinical report');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Clinical Report: Admin Soft Delete with Mandatory Audit Reason
+  const handleAdminDeleteReportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedVisitForReport || !deleteReportReason.trim()) return;
+    setActionLoading(true);
+    setError(null);
+    try {
+      await adminApi.adminSoftDeleteVisitClinicalDoc(selectedVisitForReport._id, deleteReportReason.trim());
+      setSuccessMsg(`Clinical report for visit ${selectedVisitForReport.visitNumber} soft-deleted. Audit record preserved.`);
+      setShowDeleteReportModal(false);
+      setShowReportModal(false);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete clinical report');
     } finally {
       setActionLoading(false);
     }
@@ -727,7 +918,7 @@ export default function AdminDashboardPage() {
             Access to the centralized operations dashboard requires verified administrative credentials.
           </p>
           <Link
-            href="/admin/login"
+            href="/admin/login?returnUrl=/admin/dashboard"
             className="w-full inline-flex justify-center items-center gap-2 py-3 px-4 rounded-xl text-sm font-bold bg-navy text-white hover:bg-navy-light transition-colors shadow-md shadow-navy/20"
           >
             Go to Admin Login
@@ -788,6 +979,18 @@ export default function AdminDashboardPage() {
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
               Sync Data
             </Button>
+            <button
+              onClick={() => setShowNotifDrawer(true)}
+              className="relative p-2 rounded-xl bg-navy-light/50 border border-white/20 text-white hover:bg-white/10 transition flex items-center justify-center"
+              title="View In-App Alerts"
+            >
+              <Bell size={16} />
+              {unreadNotifCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-rose-500 text-white border-2 border-navy animate-pulse">
+                  {unreadNotifCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
       </div>
@@ -1247,6 +1450,23 @@ export default function AdminDashboardPage() {
                   </span>
                 )}
               </button>
+
+              <button
+                onClick={() => setFieldOpsSubTab('reschedules')}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                  fieldOpsSubTab === 'reschedules'
+                    ? 'bg-navy text-white shadow-sm'
+                    : 'text-slate-600 hover:text-navy hover:bg-slate-100'
+                }`}
+              >
+                <Calendar size={15} />
+                <span>Reschedule Requests</span>
+                {rescheduleRequests.filter((r) => r.status === 'pending').length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-white animate-pulse">
+                    {rescheduleRequests.filter((r) => r.status === 'pending').length} pending
+                  </span>
+                )}
+              </button>
             </div>
 
             {fieldOpsSubTab === 'visits' && (
@@ -1428,10 +1648,26 @@ export default function AdminDashboardPage() {
                                     </div>
                                   )}
                                 </div>
-                              ) : hasVitals ? (
-                                <div className="text-[11px] text-slate-600 space-y-0.5">
-                                  <div>BP: <strong className="text-navy">{hasVitals.bloodPressure || '--'}</strong></div>
-                                  <div>SpO2: <strong className="text-secondary">{hasVitals.spO2 ? `${hasVitals.spO2}%` : '--'}</strong></div>
+                              ) : v.clinicalDocumentation?.isDeleted ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800" title={v.clinicalDocumentation.deletionReason}>
+                                    Report Soft-Deleted
+                                  </span>
+                                  <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
+                                    Reason: {v.clinicalDocumentation.deletionReason}
+                                  </div>
+                                </div>
+                              ) : v.clinicalDocumentation?.signedAt ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                    <CheckCircle2 size={10} /> Report Signed
+                                  </span>
+                                  <div className="text-[11px] text-slate-600">
+                                    BP: <strong className="text-navy">{v.clinicalDocumentation.vitals?.bloodPressure || '--'}</strong> • SpO2: <strong className="text-secondary">{v.clinicalDocumentation.vitals?.spO2 ? `${v.clinicalDocumentation.vitals.spO2}%` : '--'}</strong>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">
+                                    By {v.clinicalDocumentation.signedBy?.name || 'Caregiver'}
+                                  </div>
                                 </div>
                               ) : (
                                 <span className="text-slate-400 text-[11px] italic">Pending visit documentation</span>
@@ -1439,20 +1675,46 @@ export default function AdminDashboardPage() {
                             </td>
 
                             <td className="py-3.5 px-4 text-right">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                  setSelectedVisitForAssign(v);
-                                  setReassignProviderName(v.providerName || 'Dr. Priya Deshmukh');
-                                  setReassignProviderPhone(v.providerPhone || '9820011003');
-                                  setReassignScheduledDate(v.scheduledDate || new Date().toISOString().slice(0, 10));
-                                  setReassignTimeSlot(v.timeSlot || '11:00 AM - 01:00 PM');
-                                  setShowReassignModal(true);
-                                }}
-                              >
-                                Reassign
-                              </Button>
+                              <div className="flex items-center justify-end gap-1.5">
+                                {v.clinicalDocumentation?.signedAt && !v.clinicalDocumentation?.isDeleted && (
+                                  <>
+                                    <button
+                                      onClick={() => {
+                                        setSelectedVisitForReport(v);
+                                        setShowReportModal(true);
+                                      }}
+                                      className="p-1.5 rounded-lg border border-border text-slate-600 hover:text-navy hover:bg-slate-100 transition"
+                                      title="View Clinical Report & Audit"
+                                    >
+                                      <Eye size={14} />
+                                    </button>
+                                    <a
+                                      href={`/api/v1/visits/${v._id}/report/download?format=pdf`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="p-1.5 rounded-lg border border-border text-primary hover:bg-primary-light/50 transition flex items-center justify-center"
+                                      title="Download PDF Report"
+                                    >
+                                      <Download size={14} />
+                                    </a>
+                                  </>
+                                )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setSelectedVisitForAssign(v);
+                                    setReassignProviderId(v.providerId || '');
+                                    setReassignProviderName(v.providerName || 'Dr. Priya Deshmukh');
+                                    setReassignProviderPhone(v.providerPhone || '9820011003');
+                                    setReassignScheduledDate(v.scheduledDate || new Date().toISOString().slice(0, 10));
+                                    setReassignTimeSlot(v.timeSlot || '11:00 AM - 01:00 PM');
+                                    setShowReassignModal(true);
+                                  }}
+                                >
+                                  Reassign
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -1503,6 +1765,174 @@ export default function AdminDashboardPage() {
                 </div>
               )}
             </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* SUBTAB: VISIT RESCHEDULE REQUESTS SUPERVISION */}
+            {/* ========================================================================= */}
+            {fieldOpsSubTab === 'reschedules' && (
+              <div className="bg-white rounded-2xl border border-border shadow-sm p-6 space-y-6">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-navy">
+                      Patient Reschedule Requests ({rescheduleRequests.length})
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Review, approve, or reject patient visit rescheduling requests. Approvals validate caregiver availability and update the live schedule across all apps.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <select
+                      value={rescheduleStatusFilter}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setRescheduleStatusFilter(val);
+                        adminApi
+                          .getRescheduleRequests(val === 'all' ? undefined : val)
+                          .then((res) => setRescheduleRequests(res.data || []))
+                          .catch(() => null);
+                      }}
+                      className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
+                    >
+                      <option value="all">All Request Statuses</option>
+                      <option value="pending">Pending Review</option>
+                      <option value="approved">Approved</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => loadTabData('field_ops')}
+                      disabled={isLoading}
+                    >
+                      Refresh
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-border">
+                  <table className="w-full text-left text-xs divide-y divide-border">
+                    <thead className="bg-slate-50 text-slate-600 font-semibold">
+                      <tr>
+                        <th className="py-3 px-4">Patient Details</th>
+                        <th className="py-3 px-4">Visit Reference</th>
+                        <th className="py-3 px-4">Assigned Caregiver</th>
+                        <th className="py-3 px-4">Original Schedule</th>
+                        <th className="py-3 px-4">Requested Schedule</th>
+                        <th className="py-3 px-4">Reason for Request</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border bg-white">
+                      {rescheduleRequests.length > 0 ? (
+                        rescheduleRequests.map((req) => {
+                          const isPending = req.status === 'pending';
+                          const isApproved = req.status === 'approved';
+                          const isRejected = req.status === 'rejected';
+
+                          return (
+                            <tr key={req._id} className="hover:bg-slate-50/60 transition-colors">
+                              <td className="py-3.5 px-4">
+                                <div className="font-bold text-navy">{req.patientName || 'Patient'}</div>
+                                <div className="text-[11px] text-slate-500 font-mono">
+                                  {req.patientPhone ? `+91 ${req.patientPhone}` : ''}
+                                </div>
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span className="font-mono font-bold text-primary bg-primary-light/60 px-2 py-0.5 rounded">
+                                  {req.visitNumber || req.visitId}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <div className="font-semibold text-slate-800">
+                                  {req.caregiverName || 'Unassigned'}
+                                </div>
+                                {req.caregiverPhone && (
+                                  <div className="text-[11px] text-slate-400 font-mono">
+                                    +91 {req.caregiverPhone}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-4 whitespace-nowrap">
+                                <div className="font-medium text-slate-700">{req.originalScheduledDate}</div>
+                                <div className="text-[11px] text-slate-400">{req.originalTimeSlot}</div>
+                              </td>
+                              <td className="py-3.5 px-4 whitespace-nowrap">
+                                <div className="font-bold text-primary">{req.requestedDate}</div>
+                                <div className="text-[11px] text-primary/80 font-medium">{req.requestedTimeSlot}</div>
+                              </td>
+                              <td className="py-3.5 px-4 max-w-xs">
+                                <div className="text-slate-700 italic">"{req.reason}"</div>
+                                {req.rejectionReason && (
+                                  <div className="text-[10px] text-rose-600 mt-1 font-semibold">
+                                    Rejection note: {req.rejectionReason}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-3.5 px-4">
+                                <span
+                                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                    isApproved
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : isPending
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-rose-100 text-rose-800'
+                                  }`}
+                                >
+                                  {req.status}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-4 text-right">
+                                {isPending ? (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      onClick={() => handleApproveReschedule(req._id)}
+                                      disabled={actionLoading}
+                                      className="px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition disabled:opacity-50 flex items-center gap-1"
+                                      title="Approve reschedule and synchronize schedule"
+                                    >
+                                      <CheckCircle2 size={12} />
+                                      Approve
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setSelectedRescheduleForReject(req);
+                                        setRejectReason('');
+                                        setShowRejectModal(true);
+                                      }}
+                                      disabled={actionLoading}
+                                      className="px-2.5 py-1 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition disabled:opacity-50 flex items-center gap-1"
+                                      title="Reject reschedule and notify patient"
+                                    >
+                                      <X size={12} />
+                                      Reject
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] text-slate-400 italic">Resolved</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan={8} className="py-12 text-center text-slate-400">
+                            <Calendar size={32} className="mx-auto mb-2 text-slate-300" />
+                            <p className="font-semibold text-slate-600">No Reschedule Requests Found</p>
+                            <p className="text-xs text-slate-400 mt-0.5">
+                              When patients request a new time or date from their mobile app, requests will appear here for clinical review.
+                            </p>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
 
             {/* ========================================================================= */}
@@ -1753,6 +2183,7 @@ export default function AdminDashboardPage() {
                       <option value="all">All Channels</option>
                       <option value="sms">SMS</option>
                       <option value="whatsapp">WhatsApp</option>
+                      <option value="in_app">In-App Alerts</option>
                     </select>
 
                     <select
@@ -1816,10 +2247,12 @@ export default function AdminDashboardPage() {
                                   className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
                                     log.channel === 'whatsapp'
                                       ? 'bg-emerald-100 text-emerald-800'
+                                      : log.channel === 'in_app'
+                                      ? 'bg-purple-100 text-purple-800'
                                       : 'bg-blue-100 text-blue-800'
                                   }`}
                                 >
-                                  {log.channel}
+                                  {log.channel?.replace('_', ' ')}
                                 </span>
                               </td>
                               <td className="py-3 px-3 font-mono text-[10px] text-slate-600">
@@ -1840,23 +2273,45 @@ export default function AdminDashboardPage() {
                                 )}
                               </td>
                               <td className="py-3 px-3">
-                                {isSent && (
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                                    Delivered
+                                {log.channel === 'in_app' ? (
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      log.isRead
+                                        ? 'bg-slate-100 text-slate-600'
+                                        : 'bg-emerald-100 text-emerald-800'
+                                    }`}
+                                  >
+                                    {log.isRead ? 'Read' : 'Unread'}
                                   </span>
-                                )}
-                                {isSimulated && (
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800">
-                                    Simulated
-                                  </span>
-                                )}
-                                {isFailed && (
-                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800" title={log.failureReason}>
-                                    Failed
-                                  </span>
+                                ) : (
+                                  <>
+                                    {isSent && (
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                        Delivered
+                                      </span>
+                                    )}
+                                    {isSimulated && (
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800">
+                                        Simulated
+                                      </span>
+                                    )}
+                                    {isFailed && (
+                                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800" title={log.failureReason}>
+                                        Failed
+                                      </span>
+                                    )}
+                                  </>
                                 )}
                               </td>
                               <td className="py-3 px-3 text-right">
+                                {log.channel === 'in_app' && !log.isRead && (
+                                  <button
+                                    onClick={() => handleMarkNotificationRead(log._id, log)}
+                                    className="px-2.5 py-1 rounded text-xs font-semibold text-primary hover:bg-primary-light/50 transition mr-1.5"
+                                  >
+                                    Mark Read
+                                  </button>
+                                )}
                                 {isFailed && (
                                   <Button
                                     size="sm"
@@ -3865,30 +4320,53 @@ export default function AdminDashboardPage() {
               <form onSubmit={handleReassignVisitSubmit} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Assign New Healthcare Professional / Technician *
+                    Select Active Healthcare Professional / Caregiver *
                   </label>
-                  <input
-                    type="text"
-                    value={reassignProviderName}
-                    onChange={(e) => setReassignProviderName(e.target.value)}
-                    placeholder="e.g. Dr. Priya Deshmukh / Rajesh Kumar"
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
-                    required
-                  />
-                </div>
+                  <select
+                    value={reassignProviderId}
+                    onChange={(e) => {
+                      const pId = e.target.value;
+                      setReassignProviderId(pId);
+                      const found = availableCaregivers.find((u) => (u._id || u.id) === pId);
+                      if (found) {
+                        setReassignProviderName(found.fullName);
+                        setReassignProviderPhone(found.phone);
+                      }
+                    }}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white mb-2"
+                  >
+                    <option value="">-- Choose from Registered Active Staff --</option>
+                    {availableCaregivers.map((u) => (
+                      <option key={u._id || u.id} value={u._id || u.id}>
+                        {u.fullName} ({u.role?.toUpperCase()}) — +91 {u.phone}
+                      </option>
+                    ))}
+                  </select>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Provider Mobile Contact *
-                  </label>
-                  <input
-                    type="text"
-                    value={reassignProviderPhone}
-                    onChange={(e) => setReassignProviderPhone(e.target.value)}
-                    placeholder="e.g. 9820011003"
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
-                    required
-                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-0.5">Clinician Full Name *</label>
+                      <input
+                        type="text"
+                        value={reassignProviderName}
+                        onChange={(e) => setReassignProviderName(e.target.value)}
+                        placeholder="e.g. Dr. Priya Deshmukh"
+                        className="w-full px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-0.5">Mobile Contact *</label>
+                      <input
+                        type="text"
+                        value={reassignProviderPhone}
+                        onChange={(e) => setReassignProviderPhone(e.target.value)}
+                        placeholder="e.g. 9820011003"
+                        className="w-full px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                        required
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -3953,6 +4431,542 @@ export default function AdminDashboardPage() {
                   </Button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: REJECT VISIT RESCHEDULE REQUEST */}
+        {/* ========================================================================= */}
+        {showRejectModal && selectedRescheduleForReject && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-border animate-in fade-in">
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-border">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center">
+                    <X size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-navy">Reject Reschedule Request</h3>
+                    <p className="text-xs text-slate-500">Visit {selectedRescheduleForReject.visitNumber || selectedRescheduleForReject.visitId}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowRejectModal(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-border text-xs mb-4 space-y-1">
+                <div><strong>Patient:</strong> {selectedRescheduleForReject.patientName}</div>
+                <div><strong>Original:</strong> {selectedRescheduleForReject.originalScheduledDate} ({selectedRescheduleForReject.originalTimeSlot})</div>
+                <div><strong>Requested:</strong> {selectedRescheduleForReject.requestedDate} ({selectedRescheduleForReject.requestedTimeSlot})</div>
+                <div className="text-slate-500 italic">"Reason: {selectedRescheduleForReject.reason}"</div>
+              </div>
+
+              <form onSubmit={handleRejectRescheduleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Mandatory Reason for Rejection (Visible to Patient) *
+                  </label>
+                  <textarea
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    placeholder="e.g. Caregiver unavailable in this sector at requested time. Original slot preserved."
+                    rows={3}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowRejectModal(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <button
+                    type="submit"
+                    disabled={actionLoading || !rejectReason.trim()}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition disabled:opacity-50"
+                  >
+                    Confirm Rejection
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: CLINICAL CARE REPORT INSPECTOR & AUDIT */}
+        {/* ========================================================================= */}
+        {showReportModal && selectedVisitForReport && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-border animate-scale-up max-h-[90vh] flex flex-col">
+              <div className="flex items-start justify-between pb-4 border-b border-border">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100">
+                    <FileText size={22} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-navy">Verified Bedside Care Report</h3>
+                    <p className="text-xs text-slate-500">
+                      Visit {selectedVisitForReport.visitNumber} • {selectedVisitForReport.patientDetails?.fullName}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowReportModal(false)}
+                  className="text-slate-400 hover:text-slate-600 transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="py-4 space-y-4 overflow-y-auto flex-1 pr-1">
+                {/* Author & Timestamp */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs flex justify-between items-center">
+                  <div>
+                    <span className="text-slate-500">Documented By: </span>
+                    <strong className="text-navy">
+                      {selectedVisitForReport.clinicalDocumentation?.signedBy?.name || selectedVisitForReport.providerName || 'Caregiver'}
+                    </strong>{' '}
+                    ({selectedVisitForReport.clinicalDocumentation?.signedBy?.role || selectedVisitForReport.providerRole || 'Nurse'})
+                  </div>
+                  <div className="text-slate-500 font-mono text-[11px]">
+                    {selectedVisitForReport.clinicalDocumentation?.signedAt
+                      ? new Date(selectedVisitForReport.clinicalDocumentation.signedAt).toLocaleString()
+                      : '--'}
+                  </div>
+                </div>
+
+                {/* Vitals Grid */}
+                <div>
+                  <h4 className="font-bold text-navy text-xs uppercase tracking-wider mb-2">
+                    Surveillance Vitals
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    <div className="p-2.5 bg-slate-50 rounded-xl border border-border">
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">Blood Pressure</div>
+                      <div className="text-sm font-extrabold text-navy mt-0.5">
+                        {selectedVisitForReport.clinicalDocumentation?.vitals?.bloodPressure || '--'}
+                      </div>
+                    </div>
+                    <div className="p-2.5 bg-slate-50 rounded-xl border border-border">
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">Pulse Rate</div>
+                      <div className="text-sm font-extrabold text-navy mt-0.5">
+                        {selectedVisitForReport.clinicalDocumentation?.vitals?.pulse ? `${selectedVisitForReport.clinicalDocumentation.vitals.pulse} bpm` : '--'}
+                      </div>
+                    </div>
+                    <div className="p-2.5 bg-slate-50 rounded-xl border border-border">
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">SpO2 (Oxygen)</div>
+                      <div className="text-sm font-extrabold text-secondary mt-0.5">
+                        {selectedVisitForReport.clinicalDocumentation?.vitals?.spO2 ? `${selectedVisitForReport.clinicalDocumentation.vitals.spO2}%` : '--'}
+                      </div>
+                    </div>
+                    <div className="p-2.5 bg-slate-50 rounded-xl border border-border">
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">Temperature</div>
+                      <div className="text-sm font-extrabold text-navy mt-0.5">
+                        {selectedVisitForReport.clinicalDocumentation?.vitals?.temperature ? `${selectedVisitForReport.clinicalDocumentation.vitals.temperature}°F` : '--'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Procedures Performed */}
+                {selectedVisitForReport.clinicalDocumentation?.tasksPerformed?.length > 0 && (
+                  <div>
+                    <h4 className="font-bold text-navy text-xs uppercase tracking-wider mb-1.5">
+                      Completed Interventions &amp; Procedures
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedVisitForReport.clinicalDocumentation.tasksPerformed.map((task: string, idx: number) => (
+                        <span key={idx} className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-medium">
+                          ✓ {task}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Observations & Clinical Notes */}
+                <div>
+                  <h4 className="font-bold text-navy text-xs uppercase tracking-wider mb-1.5">
+                    Attending Clinician Observations
+                  </h4>
+                  <div className="p-3 bg-slate-50 rounded-xl border border-border text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+                    {selectedVisitForReport.clinicalDocumentation?.clinicalNotes || 'No specific notes recorded.'}
+                  </div>
+                </div>
+
+                {/* Recommendations */}
+                {selectedVisitForReport.clinicalDocumentation?.recommendations && (
+                  <div>
+                    <h4 className="font-bold text-navy text-xs uppercase tracking-wider mb-1.5">
+                      Recommendations &amp; Follow-up
+                    </h4>
+                    <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200 text-xs text-blue-900 leading-relaxed">
+                      {selectedVisitForReport.clinicalDocumentation.recommendations}
+                    </div>
+                  </div>
+                )}
+
+                {/* Version History (Audit Trail) */}
+                {selectedVisitForReport.clinicalDocumentation?.versionHistory?.length > 0 && (
+                  <div>
+                    <h4 className="font-bold text-navy text-xs uppercase tracking-wider mb-1.5">
+                      Clinical Document Revision History
+                    </h4>
+                    <div className="space-y-1.5">
+                      {selectedVisitForReport.clinicalDocumentation.versionHistory.map((ver: any, vIdx: number) => (
+                        <div key={vIdx} className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/80 text-xs space-y-0.5">
+                          <div className="flex justify-between font-semibold text-navy">
+                            <span>Edited by {ver.editedBy?.name || 'Admin'} ({ver.editedBy?.role || 'Staff'})</span>
+                            <span className="text-[11px] text-slate-400">{new Date(ver.editedAt).toLocaleString()}</span>
+                          </div>
+                          <div className="text-slate-600 italic">"Reason: {ver.reason}"</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-4 border-t border-border">
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`/api/v1/visits/${selectedVisitForReport._id}/report/download?format=pdf`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-primary hover:bg-primary-dark transition flex items-center gap-1.5"
+                  >
+                    <Download size={14} />
+                    Download PDF
+                  </a>
+                  <a
+                    href={`/api/v1/visits/${selectedVisitForReport._id}/report/download?format=json`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition flex items-center gap-1"
+                  >
+                    <Download size={13} />
+                    JSON
+                  </a>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setEditReportNotes(selectedVisitForReport.clinicalDocumentation?.clinicalNotes || '');
+                      setEditReportVitals(selectedVisitForReport.clinicalDocumentation?.vitals || {});
+                      setEditReportReason('');
+                      setShowEditReportModal(true);
+                    }}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition flex items-center gap-1.5"
+                  >
+                    <Edit3 size={13} />
+                    Edit Report
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDeleteReportReason('');
+                      setShowDeleteReportModal(true);
+                    }}
+                    className="px-3 py-2 rounded-xl text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition flex items-center gap-1.5"
+                  >
+                    <Trash2 size={13} />
+                    Soft Delete
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: EDIT CLINICAL REPORT WITH AUDIT REASON */}
+        {/* ========================================================================= */}
+        {showEditReportModal && selectedVisitForReport && (
+          <div className="fixed inset-0 z-70 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-border animate-in fade-in">
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-border">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                    <Edit3 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-navy">Edit Clinical Care Report</h3>
+                    <p className="text-xs text-slate-500">Visit {selectedVisitForReport.visitNumber}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowEditReportModal(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleAdminEditReportSubmit} className="space-y-3.5">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] text-slate-600 font-semibold mb-0.5">Blood Pressure</label>
+                    <input
+                      type="text"
+                      value={editReportVitals?.bloodPressure || ''}
+                      onChange={(e) => setEditReportVitals({ ...editReportVitals, bloodPressure: e.target.value })}
+                      placeholder="120/80"
+                      className="w-full px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-600 font-semibold mb-0.5">SpO2 (%)</label>
+                    <input
+                      type="number"
+                      value={editReportVitals?.spO2 || ''}
+                      onChange={(e) => setEditReportVitals({ ...editReportVitals, spO2: Number(e.target.value) })}
+                      placeholder="98"
+                      className="w-full px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Clinical Notes &amp; Observations
+                  </label>
+                  <textarea
+                    value={editReportNotes}
+                    onChange={(e) => setEditReportNotes(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Mandatory Reason for Amendment (Archived to Version History) *
+                  </label>
+                  <input
+                    type="text"
+                    value={editReportReason}
+                    onChange={(e) => setEditReportReason(e.target.value)}
+                    placeholder="e.g. Corrected transcription error in vitals."
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowEditReportModal(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    isLoading={actionLoading}
+                    disabled={!editReportReason.trim()}
+                  >
+                    Save Revision &amp; Audit
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: SOFT-DELETE CLINICAL REPORT */}
+        {/* ========================================================================= */}
+        {showDeleteReportModal && selectedVisitForReport && (
+          <div className="fixed inset-0 z-70 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-border animate-in fade-in">
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-border">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center">
+                    <Trash2 size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-navy">Soft-Delete Clinical Report</h3>
+                    <p className="text-xs text-slate-500">Visit {selectedVisitForReport.visitNumber}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowDeleteReportModal(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 mb-4 leading-relaxed">
+                <strong>Audit Compliance Warning:</strong> This report will be flagged as soft-deleted and removed from patient/caregiver visibility, while the complete audit trail and deletion rationale are permanently logged for clinical governance.
+              </div>
+
+              <form onSubmit={handleAdminDeleteReportSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Mandatory Deletion Reason (Logged to Audit System) *
+                  </label>
+                  <textarea
+                    value={deleteReportReason}
+                    onChange={(e) => setDeleteReportReason(e.target.value)}
+                    placeholder="e.g. Document was mistakenly submitted against wrong patient profile; re-entry required."
+                    rows={3}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary"
+                    required
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowDeleteReportModal(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <button
+                    type="submit"
+                    disabled={actionLoading || !deleteReportReason.trim()}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition disabled:opacity-50"
+                  >
+                    Confirm Soft Deletion
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* DRAWER: IN-APP NOTIFICATIONS & ALERTS */}
+        {/* ========================================================================= */}
+        {showNotifDrawer && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end">
+            <div className="bg-white w-full max-w-md h-full shadow-2xl flex flex-col animate-slide-left border-l border-border">
+              <div className="p-4 sm:p-5 border-b border-border flex items-center justify-between bg-navy text-white">
+                <div className="flex items-center gap-2.5">
+                  <Bell size={18} />
+                  <h3 className="font-bold text-base">In-App Operations Alerts</h3>
+                  {unreadNotifCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-xs font-extrabold bg-rose-500 text-white">
+                      {unreadNotifCount} unread
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setShowNotifDrawer(false)}
+                  className="text-white/70 hover:text-white p-1 rounded-lg"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {unreadNotifCount > 0 && (
+                <div className="p-3 bg-slate-50 border-b border-border flex items-center justify-between">
+                  <span className="text-xs text-slate-500">Unread notifications require review</span>
+                  <button
+                    onClick={handleMarkAllNotificationsRead}
+                    className="text-xs font-bold text-primary hover:underline"
+                  >
+                    Mark all as read
+                  </button>
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto divide-y divide-border">
+                {inAppNotifs.length > 0 ? (
+                  inAppNotifs.map((notif) => {
+                    const isUnread = !notif.isRead;
+                    const isSubscription = notif.relatedEntityType === 'CaregiverSubscription' || notif.type === 'SUBSCRIPTION_ACTIVATED';
+                    const isReschedule = notif.relatedEntityType === 'VisitRescheduleRequest' || notif.type?.includes('RESCHEDULE');
+
+                    return (
+                      <div
+                        key={notif._id}
+                        onClick={() => handleMarkNotificationRead(notif._id, notif)}
+                        className={`p-4 hover:bg-slate-50/80 transition cursor-pointer flex items-start gap-3 ${
+                          isUnread ? 'bg-primary-light/20' : ''
+                        }`}
+                      >
+                        <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${isUnread ? 'bg-primary' : 'bg-slate-300'}`} />
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-xs text-navy">
+                              {notif.type?.replace(/_/g, ' ') || 'Notification'}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {new Date(notif.sentAt || notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-slate-700 leading-snug">
+                            {notif.messageBody}
+                          </p>
+
+                          <div className="flex items-center gap-2 pt-1">
+                            {isSubscription && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                                TEST MODE
+                              </span>
+                            )}
+                            {isReschedule && (
+                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-100 text-primary">
+                                Reschedule
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400">
+                              {new Date(notif.sentAt || notif.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="py-16 text-center text-slate-400 p-4">
+                    <Bell size={32} className="mx-auto mb-2 text-slate-300" />
+                    <p className="font-semibold text-slate-600 text-sm">No In-App Alerts</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      New subscription activations, reschedule requests, and visit reports will appear here.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 border-t border-border bg-slate-50 flex items-center justify-between">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => loadTabData('field_ops')}
+                  className="text-xs"
+                >
+                  <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+                  Refresh
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => setShowNotifDrawer(false)}
+                >
+                  Close
+                </Button>
+              </div>
             </div>
           </div>
         )}

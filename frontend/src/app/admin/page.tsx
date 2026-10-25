@@ -6,13 +6,27 @@ import Link from 'next/link';
 import { ShieldCheck, ArrowRight, Activity, Lock } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
+import { authApi } from '@/lib/api';
 
 export default function AdminIndexPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // Automatically redirect to the full responsive Admin Dashboard
-    router.replace('/admin/dashboard');
+    const token = authApi.getToken();
+    const user = authApi.getStoredUser();
+    const isValidAdmin = Boolean(
+      token &&
+      !authApi.isTokenExpired(token) &&
+      user &&
+      ['admin', 'super_admin'].includes(user.role?.toLowerCase())
+    );
+
+    if (isValidAdmin) {
+      router.replace('/admin/dashboard');
+    } else {
+      authApi.logout();
+      router.replace('/admin/login?returnUrl=/admin/dashboard');
+    }
   }, [router]);
 
   return (

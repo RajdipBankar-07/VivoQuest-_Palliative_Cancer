@@ -7,12 +7,21 @@ import {
   getFieldVisitById,
   updateFieldVisitStatus,
   recordFieldVisitClinicalDoc,
+  generateFieldVisitReportDownload,
+  adminEditFieldVisitClinicalDoc,
+  adminSoftDeleteFieldVisitClinicalDoc,
   reportFieldVisitException,
   verifyEquipmentInstallation,
   failOrRescheduleInstallation,
   processSyncBatch,
+  scheduleVisitForSubscription,
 } from '../services/fieldOperationsService.js';
 import { getCaregiverAssignedPatients } from '../services/patientService.js';
+import {
+  getPendingRescheduleRequestsForApprover,
+  approveRescheduleRequest,
+  rejectRescheduleRequest,
+} from '../services/visitRescheduleService.js';
 import { FieldVisitStatus, VisitExceptionType } from '../models/FieldVisit.js';
 
 const router = Router();
@@ -78,6 +87,101 @@ router.get(
   }
 );
 
+/**
+ * GET /api/v1/visits/reschedule-requests
+ * Retrieve pending reschedule requests for the authenticated caregiver/approver
+ */
+router.get(
+  '/reschedule-requests',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const statusFilter = (req.query.status as string) || 'pending';
+      const requests = await getPendingRescheduleRequestsForApprover(
+        user._id.toString(),
+        user.role,
+        statusFilter
+      );
+
+      res.status(200).json({
+        success: true,
+        count: requests.length,
+        data: requests,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/visits/reschedule-requests/:requestId/approve
+ * Approve a visit rescheduling request with scheduling conflict check
+ */
+router.post(
+  '/reschedule-requests/:requestId/approve',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { requestId } = req.params;
+
+      const result = await approveRescheduleRequest(requestId, {
+        _id: user._id,
+        fullName: user.fullName,
+        phone: user.phone,
+        role: user.role,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Rescheduling request approved successfully and field visit schedule updated.',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/visits/reschedule-requests/:requestId/reject
+ * Reject a visit rescheduling request with mandatory rejection reason
+ */
+router.post(
+  '/reschedule-requests/:requestId/reject',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { requestId } = req.params;
+      const { rejectionReason } = req.body;
+
+      if (!rejectionReason || typeof rejectionReason !== 'string' || rejectionReason.trim().length < 3) {
+        throw new AppError('Please provide a valid rejection reason (at least 3 characters)', 400);
+      }
+
+      const result = await rejectRescheduleRequest(requestId, rejectionReason.trim(), {
+        _id: user._id,
+        fullName: user.fullName,
+        phone: user.phone,
+        role: user.role,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Rescheduling request rejected. Original visit schedule remains unchanged.',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 /**
  * GET /api/v1/visits/:id
@@ -174,6 +278,107 @@ router.post(
       res.status(200).json({
         success: true,
         message: 'Clinical visit documentation and vitals recorded successfully',
+        data: updated,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/visits/:id/report/download
+ * Download or view printable clinical care report (HTML/PDF printable or JSON)
+ */
+router.get(
+  '/:id/report/download',
+  authenticateUser,
+  requireRole(['patient', 'caregiver', 'professional', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const format = (req.query.format as string) || (req.headers.accept?.includes('application/json') ? 'json' : 'html');
+      const result = await generateFieldVisitReportDownload(req.params.id, {
+        _id: user._id,
+        role: user.role,
+        fullName: user.fullName,
+      }, format);
+
+      if (result.format === 'html') {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Content-Disposition', `inline; filename="${result.filename}"`);
+        res.send(result.data);
+      } else {
+        res.status(200).json({
+          success: true,
+          data: result.data,
+        });
+      }
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/visits/:id/documentation
+ * Admin edit clinical documentation with mandatory reason and version history
+ */
+router.patch(
+  '/:id/documentation',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const editReason = req.body.editReason || req.body.reason;
+      const { clinicalNotes, vitals, proceduresPerformed, medicationsAdministered, recommendations, followUpDate } = req.body;
+      const updated = await adminEditFieldVisitClinicalDoc(req.params.id, {
+        _id: user._id,
+        role: user.role,
+        fullName: user.fullName,
+      }, {
+        editReason,
+        clinicalNotes,
+        vitals,
+        proceduresPerformed,
+        medicationsAdministered,
+        recommendations,
+        followUpDate,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Clinical visit documentation amended with audit trail',
+        data: updated,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/visits/:id/documentation
+ * Admin soft-delete clinical documentation with mandatory audit reason
+ */
+router.delete(
+  '/:id/documentation',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { reason } = req.body;
+      const updated = await adminSoftDeleteFieldVisitClinicalDoc(req.params.id, {
+        _id: user._id,
+        role: user.role,
+        fullName: user.fullName,
+      }, reason);
+
+      res.status(200).json({
+        success: true,
+        message: 'Clinical care report soft-deleted and archived',
         data: updated,
       });
     } catch (error) {
@@ -318,6 +523,41 @@ router.post(
       res.status(200).json({
         success: true,
         message: `Offline sync processed: ${result.summary.applied} applied, ${result.summary.conflicts} conflicts, ${result.summary.failed} failed`,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/visits/schedule
+ * Schedule and confirm an authorized field visit for an active caregiver subscription
+ */
+router.post(
+  '/schedule',
+  authenticateUser,
+  requireRole(['admin', 'super_admin', 'professional']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { subscriptionId, scheduledDate, timeSlot, visitType, providerId, instructions, idempotencyKey } = req.body;
+      const result = await scheduleVisitForSubscription(
+        {
+          subscriptionId,
+          scheduledDate,
+          timeSlot,
+          visitType,
+          providerId,
+          instructions,
+          idempotencyKey,
+        },
+        req.user!
+      );
+
+      res.status(201).json({
+        success: true,
+        message: 'Visit scheduled and confirmed successfully',
         data: result,
       });
     } catch (error) {

@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document, Model } from 'mongoose';
 
-export type SubscriptionStatus = 'active' | 'paused' | 'completed' | 'cancelled' | 'expired';
+export type SubscriptionStatus = 'active' | 'paused' | 'suspended' | 'completed' | 'cancelled' | 'expired';
 
 export interface ICaregiverSubscription extends Document {
   subscriptionNumber: string;
@@ -22,7 +22,7 @@ export interface ICaregiverSubscription extends Document {
     customerPrice: number;
     caregiverPayout: number;
     platformCommission: number;
-    paymentStatus: 'paid' | 'pending' | 'refunded';
+    paymentStatus: 'paid' | 'pending' | 'refunded' | 'test_mode';
     paymentMethod?: string;
     razorpayPaymentId?: string;
   };
@@ -33,6 +33,19 @@ export interface ICaregiverSubscription extends Document {
   };
   carePlanNotes?: string;
   isDemo: boolean;
+  suspendedAt?: Date;
+  suspendedBy?: mongoose.Types.ObjectId;
+  suspensionReason?: string;
+  resumedAt?: Date;
+  resumedBy?: mongoose.Types.ObjectId;
+  resumeReason?: string;
+  cancelledAt?: Date;
+  cancelledBy?: mongoose.Types.ObjectId;
+  cancellationReason?: string;
+  isArchived?: boolean;
+  archivedAt?: Date;
+  archivedBy?: mongoose.Types.ObjectId;
+  archiveReason?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -76,7 +89,7 @@ const CaregiverSubscriptionSchema = new Schema<ICaregiverSubscription>(
     },
     status: {
       type: String,
-      enum: ['active', 'paused', 'completed', 'cancelled', 'expired'],
+      enum: ['active', 'paused', 'suspended', 'completed', 'cancelled', 'expired'],
       default: 'active',
       index: true,
     },
@@ -123,7 +136,7 @@ const CaregiverSubscriptionSchema = new Schema<ICaregiverSubscription>(
       platformCommission: { type: Number, required: true, min: 0 },
       paymentStatus: {
         type: String,
-        enum: ['paid', 'pending', 'refunded'],
+        enum: ['paid', 'pending', 'refunded', 'test_mode'],
         default: 'paid',
         index: true,
       },
@@ -142,6 +155,55 @@ const CaregiverSubscriptionSchema = new Schema<ICaregiverSubscription>(
     isDemo: {
       type: Boolean,
       default: false,
+    },
+    suspendedAt: {
+      type: Date,
+    },
+    suspendedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    suspensionReason: {
+      type: String,
+      trim: true,
+    },
+    resumedAt: {
+      type: Date,
+    },
+    resumedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    resumeReason: {
+      type: String,
+      trim: true,
+    },
+    cancelledAt: {
+      type: Date,
+    },
+    cancelledBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    cancellationReason: {
+      type: String,
+      trim: true,
+    },
+    isArchived: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    archivedAt: {
+      type: Date,
+    },
+    archivedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    archiveReason: {
+      type: String,
+      trim: true,
     },
   },
   {

@@ -98,6 +98,14 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       const errorMessage = data?.error?.message || `Request failed with status ${response.status}`;
       const errorCode = data?.error?.code || 'HTTP_ERROR';
       const errorDetails = data?.error?.details || null;
+
+      // Handle 401 Unauthorized (Expired Session / Invalid Token)
+      // Safely clear invalid auth state so requests do not repeatedly fail with stale credentials.
+      // Note: Do NOT treat 403 (Forbidden / Access Denied) as an expired session.
+      if (response.status === 401 && endpoint !== '/api/v1/auth/login') {
+        authApi.logout();
+      }
+
       throw new ApiClientError(errorMessage, response.status, errorCode, errorDetails);
     }
 
@@ -187,6 +195,9 @@ export const authApi = {
       localStorage.setItem('vivo_user', JSON.stringify(res.data.user));
       document.cookie = `vivo_token=${res.data.token}; path=/; max-age=604800; SameSite=Lax`;
       document.cookie = `vivo_role=${res.data.user.role}; path=/; max-age=604800; SameSite=Lax`;
+      try {
+        window.dispatchEvent(new CustomEvent('vivo_auth_change', { detail: { authenticated: true, user: res.data.user } }));
+      } catch {}
     }
 
     return res.data;
@@ -196,8 +207,39 @@ export const authApi = {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('vivo_token');
       localStorage.removeItem('vivo_user');
-      document.cookie = 'vivo_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-      document.cookie = 'vivo_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      const authCookies = ['vivo_token', 'vivo_role', 'vivo_tier', 'access_token', 'refresh_token'];
+      for (const name of authCookies) {
+        document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0`;
+      }
+      try {
+        window.dispatchEvent(new CustomEvent('vivo_auth_change', { detail: { authenticated: false } }));
+      } catch {}
+    }
+  },
+
+  isTokenExpired(token?: string | null): boolean {
+    const t = token !== undefined ? token : this.getToken();
+    if (!t) return true;
+    try {
+      const parts = t.split('.');
+      if (parts.length !== 3) return true;
+      const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const jsonStr = typeof window !== 'undefined' && window.atob
+        ? decodeURIComponent(
+            window.atob(base64)
+              .split('')
+              .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+              .join('')
+          )
+        : Buffer.from(base64, 'base64').toString('utf8');
+      const payload = JSON.parse(jsonStr);
+      if (payload.exp && typeof payload.exp === 'number') {
+        // Expired if current time is past exp (in seconds) with 5s clock skew cushion
+        return Date.now() >= payload.exp * 1000 - 5000;
+      }
+      return false;
+    } catch {
+      return true;
     }
   },
 
@@ -1488,6 +1530,7 @@ export const adminApi = {
   async getNotificationLogs(params?: {
     channel?: string;
     status?: string;
+    isRead?: boolean;
     search?: string;
     page?: number;
     limit?: number;
@@ -1495,6 +1538,7 @@ export const adminApi = {
     const query = new URLSearchParams();
     if (params?.channel && params.channel !== 'all') query.set('channel', params.channel);
     if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (typeof params?.isRead === 'boolean') query.set('isRead', params.isRead.toString());
     if (params?.search) query.set('search', params.search);
     if (params?.page) query.set('page', params.page.toString());
     if (params?.limit) query.set('limit', params.limit.toString());
@@ -1505,6 +1549,25 @@ export const adminApi = {
       pagination: { total: number; page: number; limit: number; totalPages: number };
       data: any[];
     }>(`/api/v1/admin/notifications${qs}`);
+    return res;
+  },
+
+  async getUnreadNotificationsCount() {
+    const res = await request<{
+      success: boolean;
+      data: { unreadCount: number };
+    }>('/api/v1/admin/notifications/unread-count');
+    return res.data;
+  },
+
+  async markAllNotificationsRead() {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { markedRead: number };
+    }>('/api/v1/admin/notifications/mark-all-read', {
+      method: 'PATCH',
+    });
     return res;
   },
 
@@ -1841,7 +1904,188 @@ export const adminApi = {
     });
     return res;
   },
+
+  async suspendCaregiverSubscription(id: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
+  async resumeCaregiverSubscription(id: string, reason?: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
+  async cancelCaregiverSubscription(id: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
+  async archiveCaregiverSubscription(id: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
+  async getCaregiverSubscriptionHistory(id: string, params?: { page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+
+    const res = await request<{
+      success: boolean;
+      data: any[];
+      subscription?: any;
+      pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        pages: number;
+      };
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}/history${queryString}`);
+    return res;
+  },
+
+  async getPatientProfile(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+      message?: string;
+    }>(`/api/v1/admin/patients/${id}`);
+    return res;
+  },
+
+  async scheduleVisit(data: {
+    subscriptionId: string;
+    scheduledDate: string;
+    timeSlot: string;
+    visitType: string;
+    providerId: string;
+    instructions?: string;
+    idempotencyKey?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/visits/schedule', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async markNotificationRead(id: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/notifications/${id}/read`, {
+      method: 'PATCH',
+    });
+    return res;
+  },
+
+  async getRescheduleRequests(status = 'pending') {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/admin/reschedule-requests?status=${encodeURIComponent(status)}`);
+    return res;
+  },
+
+  async approveRescheduleRequest(requestId: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/reschedule-requests/${requestId}/approve`, {
+      method: 'POST',
+    });
+    return res;
+  },
+
+  async rejectRescheduleRequest(requestId: string, rejectionReason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/reschedule-requests/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ rejectionReason }),
+    });
+    return res;
+  },
+
+  async getVisitReport(visitId: string, format = 'json') {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/visits/${visitId}/report/download?format=${encodeURIComponent(format)}`);
+    return res;
+  },
+
+  async adminEditVisitClinicalDoc(visitId: string, docData: {
+    clinicalNotes?: string;
+    vitals?: any;
+    proceduresPerformed?: string[];
+    medicationsAdministered?: string[];
+    recommendations?: string;
+    followUpDate?: string;
+    editReason: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${visitId}/documentation`, {
+      method: 'PATCH',
+      body: JSON.stringify(docData),
+    });
+    return res;
+  },
+
+  async adminSoftDeleteVisitClinicalDoc(visitId: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${visitId}/documentation`, {
+      method: 'DELETE',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
 };
+
 
 // -----------------------------------------------------------------------------
 // Super-Admin Governance APIs (Strictly Role: super_admin)
@@ -2056,36 +2300,85 @@ export const superAdminApi = {
     return res.data;
   },
 
-  async getNotificationLogs(params?: {
-    channel?: string;
-    status?: string;
-    search?: string;
-    page?: number;
-    limit?: number;
-  }) {
-    const query = new URLSearchParams();
-    if (params?.channel && params.channel !== 'all') query.set('channel', params.channel);
-    if (params?.status && params.status !== 'all') query.set('status', params.status);
-    if (params?.search) query.set('search', params.search);
-    if (params?.page) query.set('page', params.page.toString());
-    if (params?.limit) query.set('limit', params.limit.toString());
-    const qs = query.toString() ? `?${query.toString()}` : '';
-    const res = await request<{
-      success: boolean;
-      count: number;
-      pagination: { total: number; page: number; limit: number; totalPages: number };
-      data: any[];
-    }>(`/api/v1/admin/notifications${qs}`);
-    return res;
-  },
-
-  async retryNotification(id: string) {
+  async markNotificationRead(id: string) {
     const res = await request<{
       success: boolean;
       message: string;
       data: any;
-    }>(`/api/v1/admin/notifications/${id}/retry`, {
+    }>(`/api/v1/admin/notifications/${id}/read`, {
+      method: 'PATCH',
+    });
+    return res;
+  },
+
+  async getRescheduleRequests(status = 'pending') {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/admin/reschedule-requests?status=${encodeURIComponent(status)}`);
+    return res;
+  },
+
+  async approveRescheduleRequest(requestId: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/reschedule-requests/${requestId}/approve`, {
       method: 'POST',
+    });
+    return res;
+  },
+
+  async rejectRescheduleRequest(requestId: string, rejectionReason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/reschedule-requests/${requestId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ rejectionReason }),
+    });
+    return res;
+  },
+
+  async getVisitReport(visitId: string, format = 'json') {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/visits/${visitId}/report/download?format=${encodeURIComponent(format)}`);
+    return res;
+  },
+
+  async adminEditVisitClinicalDoc(visitId: string, docData: {
+    clinicalNotes?: string;
+    vitals?: any;
+    proceduresPerformed?: string[];
+    medicationsAdministered?: string[];
+    recommendations?: string;
+    followUpDate?: string;
+    editReason: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${visitId}/documentation`, {
+      method: 'PATCH',
+      body: JSON.stringify(docData),
+    });
+    return res;
+  },
+
+  async adminSoftDeleteVisitClinicalDoc(visitId: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/visits/${visitId}/documentation`, {
+      method: 'DELETE',
+      body: JSON.stringify({ reason }),
     });
     return res;
   },

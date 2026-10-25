@@ -2,8 +2,70 @@ import mongoose from 'mongoose';
 import { CaregiverPlan, ICaregiverPlan, PlanCategory, PlanType } from '../models/CaregiverPlan.js';
 import { CaregiverSubscription, ICaregiverSubscription, SubscriptionStatus } from '../models/CaregiverSubscription.js';
 import { User, IUser } from '../models/User.js';
+import { AuditLog } from '../models/AuditLog.js';
+import { NotificationLog } from '../models/NotificationLog.js';
 import { logAdminAction, escapeRegex, extractPhoneSearchVariants } from './adminService.js';
 import { AppError } from '../middleware/errorHandler.js';
+
+/**
+ * Standard caregiver subscription audit event recorder.
+ * Guarantees actor attribution strictly from server context and standard audit fields.
+ */
+export interface SubscriptionAuditDetails {
+  eventType: string;
+  subscriptionId?: string;
+  subscriptionNumber?: string;
+  patientId?: string;
+  patientName?: string;
+  previousStatus?: string;
+  newStatus?: string;
+  reason?: string;
+  notes?: string;
+  correlationId?: string;
+  previousCaregiverId?: string;
+  previousCaregiverName?: string;
+  newCaregiverId?: string;
+  newCaregiverName?: string;
+  visitsCompleted?: number;
+  visitsRemaining?: number;
+  totalVisitsIncluded?: number;
+  planTitle?: string;
+  customerPrice?: number;
+  paymentStatus?: string;
+  paymentMethod?: string;
+  [key: string]: any;
+}
+
+export const logSubscriptionAudit = async (params: {
+  action: string;
+  sub: ICaregiverSubscription;
+  actorUser?: IUser;
+  details: SubscriptionAuditDetails;
+  severity?: 'info' | 'warning' | 'critical';
+}): Promise<void> => {
+  const actorId = params.actorUser?._id ? params.actorUser._id.toString() : undefined;
+  const actorName = params.actorUser?.fullName || 'System / Service Engine';
+  const actorRole = params.actorUser?.role || 'system';
+
+  await logAdminAction({
+    action: params.action,
+    category: 'order_fulfillment',
+    actorId,
+    actorName,
+    actorRole,
+    targetType: 'CAREGIVER_SUBSCRIPTION',
+    targetId: params.sub.subscriptionNumber,
+    details: {
+      subscriptionId: params.sub._id.toString(),
+      subscriptionNumber: params.sub.subscriptionNumber,
+      patientId: params.sub.patientId ? params.sub.patientId.toString() : params.details.patientId,
+      patientName: params.sub.patientName || params.details.patientName,
+      ...params.details,
+    },
+    severity: params.severity || 'info',
+  });
+};
+
 
 export const seedCaregiverPlansDemoData = async () => {
   try {
@@ -299,7 +361,16 @@ export const listCaregiverSubscriptions = async (filters: {
 
   const query: any = {};
   if (filters.status && filters.status !== 'all') {
-    query.status = filters.status;
+    if (filters.status === 'suspended' || filters.status === 'paused') {
+      query.status = { $in: ['paused', 'suspended'] };
+    } else if (filters.status === 'archived') {
+      query.isArchived = true;
+    } else {
+      query.status = filters.status;
+    }
+  }
+  if (filters.status !== 'archived') {
+    query.isArchived = { $ne: true };
   }
   if (filters.patientId && mongoose.Types.ObjectId.isValid(filters.patientId)) {
     query.patientId = new mongoose.Types.ObjectId(filters.patientId);
@@ -397,6 +468,10 @@ export const assignCaregiverToSubscription = async (
     throw new AppError('Subscription not found', 404);
   }
 
+  if (sub.isArchived) {
+    throw new AppError('Cannot assign caregiver: Subscription is archived', 400);
+  }
+
   if (sub.status === 'cancelled') {
     throw new AppError('Cannot assign caregiver: Subscription is cancelled', 400);
   }
@@ -423,6 +498,12 @@ export const assignCaregiverToSubscription = async (
     throw new AppError('Selected user is not a caregiver or healthcare professional', 400);
   }
 
+  // Capture previous assignment state for audit delta and rollback safety
+  const previousCaregiverId = sub.assignedCaregiverId ? sub.assignedCaregiverId.toString() : undefined;
+  const previousCaregiverName = sub.assignedCaregiverName;
+  const previousCaregiverPhone = sub.assignedCaregiverPhone;
+  const previousNotes = sub.carePlanNotes;
+
   sub.assignedCaregiverId = caregiver._id;
   sub.assignedCaregiverName = caregiver.fullName;
   sub.assignedCaregiverPhone = caregiver.phone;
@@ -432,25 +513,51 @@ export const assignCaregiverToSubscription = async (
 
   await sub.save();
 
-  if (actorUser) {
-    await logAdminAction({
+  try {
+    await logSubscriptionAudit({
       action: 'CAREGIVER_ASSIGNED_TO_SUBSCRIPTION',
-      category: 'order_fulfillment' as any,
-      actorId: actorUser._id.toString(),
-      actorName: actorUser.fullName,
-      actorRole: actorUser.role,
-      targetType: 'CAREGIVER_SUBSCRIPTION',
-      targetId: sub.subscriptionNumber,
+      sub,
+      actorUser,
       details: {
-        caregiverName: caregiver.fullName,
-        patientName: sub.patientName,
+        eventType: 'CAREGIVER_ASSIGNED_TO_SUBSCRIPTION',
+        previousCaregiverId,
+        previousCaregiverName: previousCaregiverName || 'Unassigned',
+        newCaregiverId: caregiver._id.toString(),
+        newCaregiverName: caregiver.fullName,
+        notes: notes?.trim() || (previousCaregiverName ? 'Caregiver reassigned' : 'Initial caregiver assigned'),
       },
       severity: 'info',
     });
+  } catch (auditErr: any) {
+    // Consistency rollback: revert state change if audit recording fails
+    const unsetObj: any = {};
+    const setObj: any = {
+      carePlanNotes: previousNotes,
+    };
+    if (previousCaregiverId) {
+      setObj.assignedCaregiverId = new mongoose.Types.ObjectId(previousCaregiverId);
+      setObj.assignedCaregiverName = previousCaregiverName;
+      setObj.assignedCaregiverPhone = previousCaregiverPhone;
+    } else {
+      unsetObj.assignedCaregiverId = 1;
+      unsetObj.assignedCaregiverName = 1;
+      unsetObj.assignedCaregiverPhone = 1;
+    }
+
+    const updateDoc: any = { $set: setObj };
+    if (Object.keys(unsetObj).length > 0) updateDoc.$unset = unsetObj;
+
+    await CaregiverSubscription.findByIdAndUpdate(sub._id, updateDoc);
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Caregiver assignment rolled back to maintain compliance.`,
+      500
+    );
   }
 
   return sub;
 };
+
+
 
 /**
  * Activate a caregiver subscription for a patient
@@ -503,6 +610,19 @@ export const activateCaregiverSubscription = async (
     if (existingPaymentSub) {
       throw new AppError('A subscription has already been activated with this payment transaction ID', 409);
     }
+  }
+
+  // Prevent duplicate activation of the same care plan for the same patient
+  const duplicateSub = await CaregiverSubscription.findOne({
+    patientId: patient._id,
+    planId: plan._id,
+    status: 'active',
+  });
+  if (duplicateSub) {
+    throw new AppError(
+      `Duplicate subscription activation: Patient already has an active subscription (${duplicateSub.subscriptionNumber} — ${duplicateSub.planTitle}) for this care plan.`,
+      409
+    );
   }
 
   // Prevent rapid duplicate submissions for the same patient and plan (e.g. double-clicking activate button)
@@ -576,56 +696,561 @@ export const activateCaregiverSubscription = async (
     };
   }
 
-  // 8. Create Subscription in MongoDB
-  const sub = await CaregiverSubscription.create({
-    subscriptionNumber,
-    patientId: patient._id,
-    patientName: patient.fullName,
-    patientPhone: patient.phone,
-    planId: plan._id,
-    planTitle: plan.title,
-    status: 'active',
-    startDate,
-    endDate,
-    assignedCaregiverId: caregiverUser?._id,
-    assignedCaregiverName: caregiverUser?.fullName,
-    assignedCaregiverPhone: caregiverUser?.phone,
-    totalVisitsIncluded: visits,
-    visitsCompleted: 0,
-    visitsRemaining: visits,
-    pricing: {
-      customerPrice: plan.customerPrice,
-      caregiverPayout: plan.caregiverPayout,
-      platformCommission: Math.max(0, plan.customerPrice - plan.caregiverPayout),
-      paymentStatus: 'paid',
-      paymentMethod: data.paymentMethod || 'online',
-      razorpayPaymentId: data.razorpayPaymentId || `pay_sub_${Date.now()}`,
-    },
-    emergencyContact,
-    carePlanNotes: data.carePlanNotes ? data.carePlanNotes.trim() : undefined,
-    isDemo: false,
-  });
+  // 8. Create Subscription in MongoDB with concurrency guard
+  let sub: ICaregiverSubscription;
+  try {
+    sub = await CaregiverSubscription.create({
+      subscriptionNumber,
+      patientId: patient._id,
+      patientName: patient.fullName,
+      patientPhone: patient.phone,
+      planId: plan._id,
+      planTitle: plan.title,
+      status: 'active',
+      startDate,
+      endDate,
+      assignedCaregiverId: caregiverUser?._id,
+      assignedCaregiverName: caregiverUser?.fullName,
+      assignedCaregiverPhone: caregiverUser?.phone,
+      totalVisitsIncluded: visits,
+      visitsCompleted: 0,
+      visitsRemaining: visits,
+      pricing: {
+        customerPrice: plan.customerPrice,
+        caregiverPayout: plan.caregiverPayout,
+        platformCommission: Math.max(0, plan.customerPrice - plan.caregiverPayout),
+        paymentStatus: 'paid',
+        paymentMethod: data.paymentMethod || 'online',
+        razorpayPaymentId: data.razorpayPaymentId || `pay_sub_${Date.now()}`,
+      },
+      emergencyContact,
+      carePlanNotes: data.carePlanNotes ? data.carePlanNotes.trim() : undefined,
+      isDemo: false,
+    });
+  } catch (err: any) {
+    if (err.code === 11000) {
+      const activeSub = await CaregiverSubscription.findOne({
+        patientId: patient._id,
+        status: 'active',
+      }).sort({ createdAt: -1 });
+      if (activeSub) {
+        if (activeSub.planId.toString() === plan._id.toString()) {
+          (activeSub as any)._isIdempotentReplay = true;
+          return activeSub;
+        }
+        throw new AppError(
+          `Patient already has an active subscription (${activeSub.subscriptionNumber} — ${activeSub.planTitle}). Please cancel, pause, or complete the active subscription before activating a new one.`,
+          409
+        );
+      }
+    }
+    throw err;
+  }
 
-  if (actorUser) {
-    await logAdminAction({
+  try {
+    await logSubscriptionAudit({
       action: 'CAREGIVER_SUBSCRIPTION_ACTIVATED',
-      category: 'order_fulfillment' as any,
-      actorId: actorUser._id.toString(),
-      actorName: actorUser.fullName,
-      actorRole: actorUser.role,
-      targetType: 'CAREGIVER_SUBSCRIPTION',
-      targetId: sub.subscriptionNumber,
+      sub,
+      actorUser,
       details: {
+        eventType: 'CAREGIVER_SUBSCRIPTION_ACTIVATED',
         planTitle: plan.title,
+        patientId: patient._id.toString(),
         patientName: patient.fullName,
         visitsIncluded: visits,
+        customerPrice: plan.customerPrice,
+        paymentStatus: sub.pricing?.paymentStatus || 'paid',
+        paymentMethod: sub.pricing?.paymentMethod || 'online',
+        correlationId: data.razorpayPaymentId || sub.pricing?.razorpayPaymentId,
+        notes: data.carePlanNotes?.trim() || 'Initial subscription activation',
       },
       severity: 'info',
     });
+  } catch (auditErr: any) {
+    // Consistency rollback: unroll subscription creation if audit fails
+    await CaregiverSubscription.findByIdAndDelete(sub._id);
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Subscription activation rolled back to maintain compliance.`,
+      500
+    );
+  }
+
+  // Dispatch In-App Persistent Notification to Admin
+  try {
+    const adminNotifIdempotency = `notif_sub_active_${sub.subscriptionNumber}`;
+    const existingNotif = await NotificationLog.findOne({ idempotencyKey: adminNotifIdempotency });
+    if (!existingNotif) {
+      await NotificationLog.create({
+        recipientPhone: 'ADMIN_DESK',
+        recipientName: 'VivoQuest Clinical Care Desk',
+        recipientRole: 'admin',
+        channel: 'in_app',
+        templateId: 'SUBSCRIPTION_ACTIVATED_TEST_MODE',
+        messageBody: `New Care Plan Subscription Activated: Plan "${plan.title}" for patient ${patient.fullName} (+91 ${patient.phone}). Subscription #${sub.subscriptionNumber}. Included Visits: ${visits}. Status: Active.`,
+        consentChecked: true,
+        status: 'delivered',
+        provider: 'in_app_system',
+        idempotencyKey: adminNotifIdempotency,
+        isRead: false,
+        metadata: {
+          subscriptionId: sub._id.toString(),
+          subscriptionNumber: sub.subscriptionNumber,
+          patientId: patient._id.toString(),
+          patientName: patient.fullName,
+          patientPhone: patient.phone,
+          planId: plan._id.toString(),
+          planTitle: plan.title,
+          paymentStatus: sub.pricing?.paymentStatus || 'paid',
+          customerPrice: plan.customerPrice,
+          totalVisitsIncluded: visits,
+          activatedAt: new Date().toISOString(),
+        },
+      });
+    }
+  } catch (notifErr: any) {
+    console.warn('[Notification] Failed to create in-app notification for admin subscription activation:', notifErr.message);
   }
 
   return sub;
 };
+
+/**
+ * Patient-initiated Caregiver Subscription Activation in explicit TEST MODE.
+ * - Strictly derives patient identity from the authenticated server-side context.
+ * - Validates plan availability and takes real configured price directly from DB plan.
+ * - Idempotent against rapid double-clicks or retries.
+ * - Sets paymentStatus to 'test_mode' and paymentMethod to 'test_mode'.
+ * - Records compliant audit log entry.
+ * - Dispatches persistent in-app notification to Admin and Super Admin.
+ */
+export const activatePatientSubscriptionTestMode = async (
+  patientUserId: string,
+  planId: string,
+  options?: {
+    emergencyContact?: { name: string; phone: string; relation: string };
+    carePlanNotes?: string;
+    idempotencyKey?: string;
+  }
+): Promise<ICaregiverSubscription> => {
+  // 1. Validate Patient
+  if (!patientUserId || !mongoose.Types.ObjectId.isValid(patientUserId)) {
+    throw new AppError('Valid authenticated patient ID is required', 400);
+  }
+
+  const patient = await User.findById(patientUserId);
+  if (!patient) {
+    throw new AppError('Patient account not found', 404);
+  }
+
+  if (patient.role !== 'patient') {
+    throw new AppError('Only registered patients can activate a caregiver subscription', 403);
+  }
+
+  if (patient.status !== 'active') {
+    throw new AppError('Patient account is suspended or inactive', 400);
+  }
+
+  // 2. Validate Care Plan
+  if (!planId || typeof planId !== 'string' || !mongoose.Types.ObjectId.isValid(planId.trim())) {
+    throw new AppError('Valid care plan package ID is required', 400);
+  }
+
+  const plan = await CaregiverPlan.findById(planId.trim());
+  if (!plan || !plan.isActive) {
+    throw new AppError('Care plan not found or currently inactive', 404);
+  }
+
+  // 3. Idempotency Check & Duplicate Prevention
+  // Priority 1: If client provided idempotency key, check if already recorded
+  if (options?.idempotencyKey) {
+    const existingKeySub = await CaregiverSubscription.findOne({
+      patientId: patient._id,
+      'pricing.razorpayPaymentId': `test_mode_${options.idempotencyKey.trim()}`,
+    });
+    if (existingKeySub) {
+      (existingKeySub as any)._isIdempotentReplay = true;
+      return existingKeySub;
+    }
+  }
+
+  // Priority 2: Check if patient already has ANY active subscription (business rule: one at a time)
+  // Return existing as idempotent replay if same plan; reject if different plan.
+  const existingActiveSub = await CaregiverSubscription.findOne({
+    patientId: patient._id,
+    status: 'active',
+  }).sort({ createdAt: -1 });
+
+  if (existingActiveSub) {
+    // If it's the same plan, treat as idempotent replay (safe for retries/double-clicks)
+    if (existingActiveSub.planId.toString() === plan._id.toString()) {
+      (existingActiveSub as any)._isIdempotentReplay = true;
+      return existingActiveSub;
+    }
+    // Different plan: patient already has an active subscription — reject clearly
+    throw new AppError(
+      `You already have an active subscription (${existingActiveSub.subscriptionNumber} — ${existingActiveSub.planTitle}). Please cancel or complete the existing subscription before activating a new one.`,
+      409
+    );
+  }
+
+  // Priority 3: Race-condition guard — recent duplicate within 30 seconds (e.g. concurrent requests)
+  const recentDuplicate = await CaregiverSubscription.findOne({
+    patientId: patient._id,
+    createdAt: { $gte: new Date(Date.now() - 30000) },
+  });
+  if (recentDuplicate) {
+    (recentDuplicate as any)._isIdempotentReplay = true;
+    return recentDuplicate;
+  }
+
+  // 4. Calculate Subscription Details
+  const durationDays = plan.planType === 'monthly_subscription' ? 30 : (plan.durationDays || 60);
+  const startDate = new Date();
+  const endDate = new Date(startDate.getTime() + durationDays * 24 * 3600 * 1000);
+  const visits = plan.totalVisitsIncluded || 10;
+
+  // 5. Generate Collision-Safe Sequential Subscription Number
+  const monthPrefix = `SUB-${new Date().toISOString().slice(0, 7).replace('-', '')}`;
+  const lastSub = await CaregiverSubscription.findOne({
+    subscriptionNumber: new RegExp(`^${monthPrefix}-\\d+`),
+  })
+    .sort({ subscriptionNumber: -1 })
+    .lean();
+
+  let nextSeq = 1;
+  if (lastSub && lastSub.subscriptionNumber) {
+    const parts = lastSub.subscriptionNumber.split('-');
+    const lastNum = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(lastNum)) {
+      nextSeq = lastNum + 1;
+    }
+  }
+
+  let subscriptionNumber = `${monthPrefix}-${String(nextSeq).padStart(3, '0')}`;
+  while (await CaregiverSubscription.exists({ subscriptionNumber })) {
+    nextSeq += 1;
+    subscriptionNumber = `${monthPrefix}-${String(nextSeq).padStart(3, '0')}`;
+  }
+
+  // 6. Sanitize Emergency Contact
+  let emergencyContact: { name: string; phone: string; relation: string } | undefined;
+  if (options?.emergencyContact && options.emergencyContact.name?.trim()) {
+    emergencyContact = {
+      name: options.emergencyContact.name.trim(),
+      phone: (options.emergencyContact.phone || '').trim(),
+      relation: (options.emergencyContact.relation || '').trim(),
+    };
+  }
+
+  const paymentRef = options?.idempotencyKey
+    ? `test_mode_${options.idempotencyKey.trim()}`
+    : `test_mode_${Date.now()}`;
+
+  // 7. Create Subscription with server-side atomic guard against concurrent requests
+  let sub: ICaregiverSubscription;
+  try {
+    sub = await CaregiverSubscription.create({
+      subscriptionNumber,
+      patientId: patient._id,
+      patientName: patient.fullName,
+      patientPhone: patient.phone,
+      planId: plan._id,
+      planTitle: plan.title,
+      status: 'active',
+      startDate,
+      endDate,
+      totalVisitsIncluded: visits,
+      visitsCompleted: 0,
+      visitsRemaining: visits,
+      pricing: {
+        customerPrice: plan.customerPrice,
+        caregiverPayout: plan.caregiverPayout,
+        platformCommission: Math.max(0, plan.customerPrice - plan.caregiverPayout),
+        paymentStatus: 'test_mode',
+        paymentMethod: 'test_mode',
+        razorpayPaymentId: paymentRef,
+      },
+      emergencyContact,
+      carePlanNotes: options?.carePlanNotes?.trim() || 'Self-activated via Patient App (TEST MODE)',
+      isDemo: false,
+    });
+  } catch (err: any) {
+    if (err.code === 11000) {
+      // Concurrency race: an active subscription was created concurrently
+      const activeSub = await CaregiverSubscription.findOne({
+        patientId: patient._id,
+        status: 'active',
+      }).sort({ createdAt: -1 });
+      if (activeSub) {
+        if (activeSub.planId.toString() === plan._id.toString()) {
+          (activeSub as any)._isIdempotentReplay = true;
+          return activeSub;
+        }
+        throw new AppError(
+          `You already have an active subscription (${activeSub.subscriptionNumber} — ${activeSub.planTitle}). Please cancel or complete the existing subscription before activating a new one.`,
+          409
+        );
+      }
+    }
+    throw err;
+  }
+
+  // 8. Log Compliant Audit Trail
+  try {
+    await logSubscriptionAudit({
+      action: 'CAREGIVER_SUBSCRIPTION_ACTIVATED_TEST_MODE',
+      sub,
+      actorUser: patient,
+      details: {
+        eventType: 'CAREGIVER_SUBSCRIPTION_ACTIVATED_TEST_MODE',
+        activationMode: 'TEST_MODE',
+        planTitle: plan.title,
+        patientId: patient._id.toString(),
+        patientName: patient.fullName,
+        visitsIncluded: visits,
+        customerPrice: plan.customerPrice,
+        paymentStatus: 'test_mode',
+        paymentMethod: 'test_mode',
+        correlationId: paymentRef,
+        notes: options?.carePlanNotes?.trim() || 'Patient self-activation in verified TEST MODE',
+      },
+      severity: 'info',
+    });
+  } catch (auditErr: any) {
+    await CaregiverSubscription.findByIdAndDelete(sub._id);
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Subscription activation rolled back to maintain compliance.`,
+      500
+    );
+  }
+
+  // 9. Dispatch In-App Persistent Notification to Admin / Super Admin (Safe reconciliation)
+  try {
+    const adminNotifIdempotency = `notif_sub_active_${sub.subscriptionNumber}`;
+    const existingNotif = await NotificationLog.findOne({ idempotencyKey: adminNotifIdempotency });
+    if (!existingNotif) {
+      await NotificationLog.create({
+        recipientPhone: 'ADMIN_DESK',
+        recipientName: 'VivoQuest Clinical Care Desk',
+        recipientRole: 'admin',
+        channel: 'in_app',
+        templateId: 'SUBSCRIPTION_ACTIVATED_TEST_MODE',
+        messageBody: `[TEST MODE] New Care Plan Subscription Activated: Plan "${plan.title}" activated by patient ${patient.fullName} (+91 ${patient.phone}). Subscription #${sub.subscriptionNumber}. Included Visits: ${visits}. Status: Active (Test Mode). Action required: Review subscription and schedule bedside visits.`,
+        consentChecked: true,
+        status: 'delivered',
+        provider: 'in_app_system',
+        idempotencyKey: adminNotifIdempotency,
+        isRead: false,
+        metadata: {
+          subscriptionId: sub._id.toString(),
+          subscriptionNumber: sub.subscriptionNumber,
+          patientId: patient._id.toString(),
+          patientName: patient.fullName,
+          patientPhone: patient.phone,
+          planId: plan._id.toString(),
+          planTitle: plan.title,
+          activationMode: 'TEST_MODE',
+          paymentStatus: 'test_mode',
+          customerPrice: plan.customerPrice,
+          totalVisitsIncluded: visits,
+          activatedAt: new Date().toISOString(),
+        },
+      });
+    }
+  } catch (notifErr: any) {
+    console.warn('[Notification] Failed to create in-app notification for patient self-activation:', notifErr.message);
+  }
+
+  return sub;
+};
+
+
+/**
+ * Suspend a caregiver subscription
+ */
+export const suspendCaregiverSubscription = async (
+  subscriptionId: string,
+  reason: string,
+  actorUser: IUser
+): Promise<ICaregiverSubscription> => {
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 3) {
+    throw new AppError('Suspension reason is required and must be at least 3 characters', 400);
+  }
+
+  const sub = await findSubscriptionDoc(subscriptionId);
+  if (!sub) {
+    throw new AppError('Subscription not found', 404);
+  }
+
+  if (sub.isArchived) {
+    throw new AppError('Cannot suspend an archived subscription', 400);
+  }
+
+  if (sub.status === 'paused' || sub.status === 'suspended') {
+    throw new AppError('Subscription is already suspended', 400);
+  }
+
+  if (sub.status === 'cancelled') {
+    throw new AppError('Cannot suspend a cancelled subscription', 400);
+  }
+
+  if (sub.status === 'completed') {
+    throw new AppError('Cannot suspend a completed subscription', 400);
+  }
+
+  if (sub.status === 'expired') {
+    throw new AppError('Cannot suspend an expired subscription', 400);
+  }
+
+  const previousStatus = sub.status;
+  const previousNotes = sub.carePlanNotes;
+  const previousSuspendedAt = sub.suspendedAt;
+  const previousSuspendedBy = sub.suspendedBy;
+  const previousSuspensionReason = sub.suspensionReason;
+
+  sub.status = 'suspended';
+  sub.suspendedAt = new Date();
+  sub.suspendedBy = actorUser._id;
+  sub.suspensionReason = reason.trim();
+  sub.carePlanNotes = sub.carePlanNotes
+    ? `${sub.carePlanNotes} | Suspended: ${reason.trim()}`
+    : `Suspended: ${reason.trim()}`;
+
+  await sub.save();
+
+  try {
+    await logSubscriptionAudit({
+      action: 'CAREGIVER_SUBSCRIPTION_SUSPENDED',
+      sub,
+      actorUser,
+      details: {
+        eventType: 'CAREGIVER_SUBSCRIPTION_SUSPENDED',
+        previousStatus,
+        newStatus: 'suspended',
+        reason: reason.trim(),
+        visitsRemaining: sub.visitsRemaining,
+      },
+      severity: 'warning',
+    });
+  } catch (auditErr: any) {
+    // Consistency rollback: revert state change if audit recording fails
+    const unsetObj: any = {};
+    const setObj: any = {
+      status: previousStatus,
+      carePlanNotes: previousNotes,
+    };
+    if (previousSuspendedAt) setObj.suspendedAt = previousSuspendedAt;
+    else unsetObj.suspendedAt = 1;
+
+    if (previousSuspendedBy) setObj.suspendedBy = previousSuspendedBy;
+    else unsetObj.suspendedBy = 1;
+
+    if (previousSuspensionReason) setObj.suspensionReason = previousSuspensionReason;
+    else unsetObj.suspensionReason = 1;
+
+    const updateDoc: any = { $set: setObj };
+    if (Object.keys(unsetObj).length > 0) updateDoc.$unset = unsetObj;
+
+    await CaregiverSubscription.findByIdAndUpdate(sub._id, updateDoc);
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Subscription suspension rolled back to maintain compliance.`,
+      500
+    );
+  }
+
+
+  return sub;
+};
+
+/**
+ * Resume a suspended caregiver subscription
+ */
+export const resumeCaregiverSubscription = async (
+  subscriptionId: string,
+  reason?: string,
+  actorUser?: IUser
+): Promise<ICaregiverSubscription> => {
+  const sub = await findSubscriptionDoc(subscriptionId);
+  if (!sub) {
+    throw new AppError('Subscription not found', 404);
+  }
+
+  if (sub.isArchived) {
+    throw new AppError('Cannot resume an archived subscription', 400);
+  }
+
+  if (sub.status !== 'paused' && sub.status !== 'suspended') {
+    throw new AppError(`Cannot resume: Subscription is not currently suspended (current status: ${sub.status})`, 400);
+  }
+
+  if (sub.visitsRemaining <= 0) {
+    throw new AppError('Cannot resume: Subscription has no remaining visits', 400);
+  }
+
+  const previousStatus = sub.status;
+  const previousNotes = sub.carePlanNotes;
+  const previousResumedAt = sub.resumedAt;
+  const previousResumedBy = sub.resumedBy;
+  const previousResumeReason = sub.resumeReason;
+
+  sub.status = 'active';
+  sub.resumedAt = new Date();
+  if (actorUser) {
+    sub.resumedBy = actorUser._id;
+  }
+  if (reason && reason.trim()) {
+    sub.resumeReason = reason.trim();
+    sub.carePlanNotes = sub.carePlanNotes
+      ? `${sub.carePlanNotes} | Resumed: ${reason.trim()}`
+      : `Resumed: ${reason.trim()}`;
+  }
+
+  await sub.save();
+
+  try {
+    await logSubscriptionAudit({
+      action: 'CAREGIVER_SUBSCRIPTION_RESUMED',
+      sub,
+      actorUser,
+      details: {
+        eventType: 'CAREGIVER_SUBSCRIPTION_RESUMED',
+        previousStatus,
+        newStatus: 'active',
+        reason: reason?.trim() || 'Resumed by admin',
+        visitsRemaining: sub.visitsRemaining,
+      },
+      severity: 'info',
+    });
+  } catch (auditErr: any) {
+    // Consistency rollback: revert state change if audit recording fails
+    const unsetObj: any = {};
+    const setObj: any = {
+      status: previousStatus,
+      carePlanNotes: previousNotes,
+    };
+    if (previousResumedAt) setObj.resumedAt = previousResumedAt;
+    else unsetObj.resumedAt = 1;
+
+    if (previousResumedBy) setObj.resumedBy = previousResumedBy;
+    else unsetObj.resumedBy = 1;
+
+    if (previousResumeReason) setObj.resumeReason = previousResumeReason;
+    else unsetObj.resumeReason = 1;
+
+    const updateDoc: any = { $set: setObj };
+    if (Object.keys(unsetObj).length > 0) updateDoc.$unset = unsetObj;
+
+    await CaregiverSubscription.findByIdAndUpdate(sub._id, updateDoc);
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Subscription resume rolled back to maintain compliance.`,
+      500
+    );
+  }
+
+
+  return sub;
+};
+
 
 /**
  * Cancel a caregiver subscription
@@ -635,35 +1260,174 @@ export const cancelCaregiverSubscription = async (
   reason: string,
   actorUser?: IUser
 ): Promise<ICaregiverSubscription> => {
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 3) {
+    throw new AppError('Cancellation reason is required and must be at least 3 characters', 400);
+  }
+
   const sub = await findSubscriptionDoc(subscriptionId);
   if (!sub) {
     throw new AppError('Subscription not found', 404);
+  }
+
+  if (sub.isArchived) {
+    throw new AppError('Cannot cancel an archived subscription', 400);
   }
 
   if (sub.status === 'cancelled') {
     throw new AppError('Subscription is already cancelled', 400);
   }
 
+  if (sub.status === 'completed') {
+    throw new AppError('Cannot cancel a completed subscription', 400);
+  }
+
+  const previousStatus = sub.status;
+  const previousNotes = sub.carePlanNotes;
+  const previousCancelledAt = sub.cancelledAt;
+  const previousCancelledBy = sub.cancelledBy;
+  const previousCancellationReason = sub.cancellationReason;
+
   sub.status = 'cancelled';
-  sub.carePlanNotes = sub.carePlanNotes ? `${sub.carePlanNotes} | Cancelled: ${reason}` : `Cancelled: ${reason}`;
+  sub.cancelledAt = new Date();
+  if (actorUser) {
+    sub.cancelledBy = actorUser._id;
+  }
+  sub.cancellationReason = reason.trim();
+  sub.carePlanNotes = sub.carePlanNotes ? `${sub.carePlanNotes} | Cancelled: ${reason.trim()}` : `Cancelled: ${reason.trim()}`;
   await sub.save();
 
-  if (actorUser) {
-    await logAdminAction({
+  try {
+    await logSubscriptionAudit({
       action: 'CAREGIVER_SUBSCRIPTION_CANCELLED',
-      category: 'order_fulfillment' as any,
-      actorId: actorUser._id.toString(),
-      actorName: actorUser.fullName,
-      actorRole: actorUser.role,
-      targetType: 'CAREGIVER_SUBSCRIPTION',
-      targetId: sub.subscriptionNumber,
+      sub,
+      actorUser,
       details: {
-        reason,
-        remainingVisits: sub.visitsRemaining,
+        eventType: 'CAREGIVER_SUBSCRIPTION_CANCELLED',
+        previousStatus,
+        newStatus: 'cancelled',
+        reason: reason.trim(),
+        visitsRemaining: sub.visitsRemaining,
+        paymentStatus: sub.pricing?.paymentStatus || 'paid',
       },
       severity: 'warning',
     });
+  } catch (auditErr: any) {
+    // Consistency rollback: revert state change if audit recording fails
+    const unsetObj: any = {};
+    const setObj: any = {
+      status: previousStatus,
+      carePlanNotes: previousNotes,
+    };
+    if (previousCancelledAt) setObj.cancelledAt = previousCancelledAt;
+    else unsetObj.cancelledAt = 1;
+
+    if (previousCancelledBy) setObj.cancelledBy = previousCancelledBy;
+    else unsetObj.cancelledBy = 1;
+
+    if (previousCancellationReason) setObj.cancellationReason = previousCancellationReason;
+    else unsetObj.cancellationReason = 1;
+
+    const updateDoc: any = { $set: setObj };
+    if (Object.keys(unsetObj).length > 0) updateDoc.$unset = unsetObj;
+
+    await CaregiverSubscription.findByIdAndUpdate(sub._id, updateDoc);
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Subscription cancellation rolled back to maintain compliance.`,
+      500
+    );
   }
+
+  return sub;
+};
+
+/**
+ * Archive a caregiver subscription (soft-delete compliance workflow)
+ */
+export const archiveCaregiverSubscription = async (
+  subscriptionId: string,
+  reason: string,
+  actorUser: IUser
+): Promise<ICaregiverSubscription> => {
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 3) {
+    throw new AppError('Archive reason is required and must be at least 3 characters', 400);
+  }
+
+  const sub = await findSubscriptionDoc(subscriptionId);
+  if (!sub) {
+    throw new AppError('Subscription not found', 404);
+  }
+
+  if (sub.isArchived) {
+    throw new AppError('Subscription is already archived', 400);
+  }
+
+  // Retention rule: Active or suspended care packages cannot be archived until formally cancelled or completed
+  if (sub.status === 'active' || sub.status === 'paused' || sub.status === 'suspended') {
+    throw new AppError(
+      'Cannot archive an active or suspended subscription. Please cancel or complete the subscription first before archiving.',
+      400
+    );
+  }
+
+  // Prevent archiving unfulfilled paid subscriptions without cancellation
+  if (sub.pricing?.paymentStatus === 'paid' && sub.visitsRemaining > 0 && sub.status !== 'cancelled') {
+    throw new AppError(
+      'Cannot archive subscription with unfulfilled paid visits unless it is cancelled first.',
+      400
+    );
+  }
+
+  const previousIsArchived = sub.isArchived;
+  const previousArchivedAt = sub.archivedAt;
+  const previousArchivedBy = sub.archivedBy;
+  const previousArchiveReason = sub.archiveReason;
+
+  sub.isArchived = true;
+  sub.archivedAt = new Date();
+  sub.archivedBy = actorUser._id;
+  sub.archiveReason = reason.trim();
+
+  await sub.save();
+
+  try {
+    await logSubscriptionAudit({
+      action: 'CAREGIVER_SUBSCRIPTION_ARCHIVED',
+      sub,
+      actorUser,
+      details: {
+        eventType: 'CAREGIVER_SUBSCRIPTION_ARCHIVED',
+        previousStatus: sub.status,
+        newStatus: 'archived',
+        reason: reason.trim(),
+        visitsRemaining: sub.visitsRemaining,
+      },
+      severity: 'warning',
+    });
+  } catch (auditErr: any) {
+    // Consistency rollback: revert state change if audit recording fails
+    const unsetObj: any = {};
+    const setObj: any = {
+      isArchived: previousIsArchived,
+    };
+    if (previousArchivedAt) setObj.archivedAt = previousArchivedAt;
+    else unsetObj.archivedAt = 1;
+
+    if (previousArchivedBy) setObj.archivedBy = previousArchivedBy;
+    else unsetObj.archivedBy = 1;
+
+    if (previousArchiveReason) setObj.archiveReason = previousArchiveReason;
+    else unsetObj.archiveReason = 1;
+
+    const updateDoc: any = { $set: setObj };
+    if (Object.keys(unsetObj).length > 0) updateDoc.$unset = unsetObj;
+
+    await CaregiverSubscription.findByIdAndUpdate(sub._id, updateDoc);
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Subscription archive rolled back to maintain compliance.`,
+      500
+    );
+  }
+
 
   return sub;
 };
@@ -682,8 +1446,23 @@ export const recordSubscriptionVisit = async (
     throw new AppError('Subscription not found', 404);
   }
 
+  if (sub.isArchived) {
+    throw new AppError('Cannot record visit: Subscription is archived', 400);
+  }
+
+  if (sub.status === 'paused' || sub.status === 'suspended') {
+    throw new AppError(
+      'Cannot record visit: Subscription is currently suspended. Please resume the subscription before recording visits.',
+      400
+    );
+  }
+
   if (sub.status === 'cancelled') {
     throw new AppError('Cannot record visit: Subscription is cancelled', 400);
+  }
+
+  if (sub.status === 'completed') {
+    throw new AppError('Cannot record visit: Subscription is already completed', 400);
   }
 
   if (sub.status === 'expired' || new Date() > sub.endDate) {
@@ -701,6 +1480,11 @@ export const recordSubscriptionVisit = async (
     return sub; // Idempotent return without duplicate decrement
   }
 
+  const previousVisitsCompleted = sub.visitsCompleted;
+  const previousVisitsRemaining = sub.visitsRemaining;
+  const previousStatus = sub.status;
+  const previousNotes = sub.carePlanNotes;
+
   sub.visitsCompleted += 1;
   sub.visitsRemaining -= 1;
 
@@ -714,23 +1498,136 @@ export const recordSubscriptionVisit = async (
 
   await sub.save();
 
-  if (actorUser) {
-    await logAdminAction({
+  try {
+    await logSubscriptionAudit({
       action: 'SUBSCRIPTION_VISIT_RECORDED',
-      category: 'order_fulfillment' as any,
-      actorId: actorUser._id.toString(),
-      actorName: actorUser.fullName,
-      actorRole: actorUser.role,
-      targetType: 'CAREGIVER_SUBSCRIPTION',
-      targetId: sub.subscriptionNumber,
+      sub,
+      actorUser,
       details: {
+        eventType: 'SUBSCRIPTION_VISIT_RECORDED',
+        previousStatus,
+        newStatus: sub.status,
+        previousVisitsRemaining,
         visitsCompleted: sub.visitsCompleted,
         visitsRemaining: sub.visitsRemaining,
-        notes: visitNotes,
+        totalVisitsIncluded: sub.totalVisitsIncluded,
+        notes: visitNotes || 'Care visit recorded',
+        correlationId: visitIdempotencyKey,
       },
       severity: 'info',
     });
+  } catch (auditErr: any) {
+    // Consistency rollback: revert state change if audit recording fails
+    await CaregiverSubscription.findByIdAndUpdate(sub._id, {
+      visitsCompleted: previousVisitsCompleted,
+      visitsRemaining: previousVisitsRemaining,
+      status: previousStatus,
+      carePlanNotes: previousNotes,
+    });
+    throw new AppError(
+      `Audit logging failed: ${auditErr.message}. Visit recording rolled back to maintain compliance.`,
+      500
+    );
   }
 
   return sub;
 };
+
+/**
+ * Retrieve authorized chronological audit history for a specific caregiver subscription.
+ * Strictly scoped to the requested subscription, sorted in descending chronological order.
+ */
+export const getSubscriptionAuditHistory = async (
+  subscriptionIdOrNumber: string,
+  options: { page?: number; limit?: number } = {}
+) => {
+  const sub = await findSubscriptionDoc(subscriptionIdOrNumber);
+  if (!sub) {
+    throw new AppError('Subscription not found', 404);
+  }
+
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(100, Math.max(1, options.limit || 20));
+  const skip = (page - 1) * limit;
+
+  const query = {
+    targetType: 'CAREGIVER_SUBSCRIPTION',
+    $or: [
+      { targetId: sub.subscriptionNumber },
+      { targetId: sub._id.toString() },
+      { 'details.subscriptionNumber': sub.subscriptionNumber },
+      { 'details.subscriptionId': sub._id.toString() },
+    ],
+  };
+
+  const [total, rawLogs] = await Promise.all([
+    AuditLog.countDocuments(query),
+    AuditLog.find(query)
+      .sort({ timestamp: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+  ]);
+
+  const events = rawLogs.map((log: any) => ({
+    id: log._id.toString(),
+    action: log.action,
+    category: log.category,
+    actorId: log.actorId ? log.actorId.toString() : undefined,
+    actorName: log.actorName,
+    actorRole: log.actorRole,
+    targetType: log.targetType,
+    targetId: log.targetId,
+    severity: log.severity,
+    timestamp: log.timestamp || log.createdAt,
+    details: {
+      ...(log.details || {}),
+      eventType: log.details?.eventType || log.action,
+      subscriptionId: log.details?.subscriptionId || sub._id.toString(),
+      subscriptionNumber: log.details?.subscriptionNumber || sub.subscriptionNumber,
+      patientId: log.details?.patientId || (sub.patientId ? sub.patientId.toString() : undefined),
+      patientName: log.details?.patientName || sub.patientName,
+
+      previousStatus: log.details?.previousStatus,
+      newStatus: log.details?.newStatus,
+      reason: log.details?.reason || log.details?.notes,
+      notes: log.details?.notes,
+      correlationId: log.details?.correlationId,
+      visitsCompleted: log.details?.visitsCompleted,
+      visitsRemaining: log.details?.visitsRemaining,
+      totalVisitsIncluded: log.details?.totalVisitsIncluded,
+      caregiverName: log.details?.caregiverName || log.details?.newCaregiverName,
+      previousCaregiverName: log.details?.previousCaregiverName,
+      newCaregiverName: log.details?.newCaregiverName,
+      planTitle: log.details?.planTitle,
+      paymentStatus: log.details?.paymentStatus,
+      paymentMethod: log.details?.paymentMethod,
+    },
+  }));
+
+  return {
+    subscription: {
+      id: sub._id.toString(),
+      subscriptionNumber: sub.subscriptionNumber,
+      patientId: sub.patientId.toString(),
+      patientName: sub.patientName,
+      patientPhone: sub.patientPhone,
+      planTitle: sub.planTitle,
+      status: sub.status,
+      isArchived: Boolean(sub.isArchived),
+      visitsRemaining: sub.visitsRemaining,
+      totalVisitsIncluded: sub.totalVisitsIncluded,
+      visitsCompleted: sub.visitsCompleted,
+      startDate: sub.startDate,
+      endDate: sub.endDate,
+    },
+    events,
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit) || 1,
+    },
+  };
+};
+

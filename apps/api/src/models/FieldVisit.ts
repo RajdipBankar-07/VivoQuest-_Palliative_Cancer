@@ -54,7 +54,9 @@ export interface IFieldVisit extends Document {
     fullName: string;
     phone: string;
     address: string;
+    street?: string;
     city: string;
+    state?: string;
     pincode: string;
     cluster: string;
     instructions?: string;
@@ -71,6 +73,8 @@ export interface IFieldVisit extends Document {
     completedAt?: Date;
     cancelledAt?: Date;
   };
+  subscriptionId?: mongoose.Types.ObjectId;
+  subscriptionNumber?: string;
   hospitalReferralId?: mongoose.Types.ObjectId;
   hospitalId?: mongoose.Types.ObjectId;
   hospitalName?: string;
@@ -84,6 +88,24 @@ export interface IFieldVisit extends Document {
     recommendations?: string;
     followUpDate?: string;
     signedAt?: Date;
+    isDeleted?: boolean;
+    deletedAt?: Date;
+    deletedBy?: mongoose.Types.ObjectId;
+    deletedByRole?: string;
+    deletedByName?: string;
+    deletionReason?: string;
+    versionHistory?: Array<{
+      editedAt: Date;
+      editedBy: mongoose.Types.ObjectId;
+      editedByRole: string;
+      editedByName: string;
+      editReason: string;
+      previousVitals?: IVisitVitals;
+      previousNotes?: string;
+      previousProcedures?: string[];
+      previousMedications?: string[];
+      previousRecommendations?: string;
+    }>;
   };
   installationVerification?: {
     isEquipmentInstallation: boolean;
@@ -191,7 +213,9 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
       fullName: { type: String, required: true, trim: true },
       phone: { type: String, required: true, trim: true },
       address: { type: String, required: true, trim: true },
+      street: { type: String, trim: true },
       city: { type: String, required: true, trim: true, default: 'Pune' },
+      state: { type: String, trim: true, default: 'Maharashtra' },
       pincode: { type: String, required: true, trim: true },
       cluster: { type: String, required: true, trim: true, default: 'Pune Central' },
       instructions: { type: String, trim: true },
@@ -207,6 +231,16 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
       startedAt: { type: Date },
       completedAt: { type: Date },
       cancelledAt: { type: Date },
+    },
+    subscriptionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'CaregiverSubscription',
+      index: true,
+    },
+    subscriptionNumber: {
+      type: String,
+      trim: true,
+      index: true,
     },
     hospitalReferralId: {
       type: Schema.Types.ObjectId,
@@ -239,6 +273,26 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
       recommendations: { type: String, trim: true },
       followUpDate: { type: String, trim: true },
       signedAt: { type: Date },
+      isDeleted: { type: Boolean, default: false },
+      deletedAt: { type: Date },
+      deletedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      deletedByRole: { type: String },
+      deletedByName: { type: String },
+      deletionReason: { type: String, trim: true },
+      versionHistory: [
+        {
+          editedAt: { type: Date, default: Date.now },
+          editedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+          editedByRole: { type: String },
+          editedByName: { type: String },
+          editReason: { type: String, trim: true },
+          previousVitals: { type: Schema.Types.Mixed },
+          previousNotes: { type: String },
+          previousProcedures: { type: [String] },
+          previousMedications: { type: [String] },
+          previousRecommendations: { type: String },
+        },
+      ],
     },
     installationVerification: {
       isEquipmentInstallation: { type: Boolean, default: false },
@@ -308,6 +362,7 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
 FieldVisitSchema.index({ providerId: 1, scheduledDate: 1, status: 1 });
 FieldVisitSchema.index({ hospitalReferralId: 1, status: 1 });
 FieldVisitSchema.index({ productOrderId: 1, status: 1 });
+FieldVisitSchema.index({ subscriptionId: 1, status: 1 });
 
 export const FieldVisit: Model<IFieldVisit> =
   mongoose.models.FieldVisit || mongoose.model<IFieldVisit>('FieldVisit', FieldVisitSchema);

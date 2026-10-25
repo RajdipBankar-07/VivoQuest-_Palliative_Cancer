@@ -30,3 +30,4 @@ export * from './Supplier.js';
 export * from './SupplierPurchaseOrder.js';
 export * from './CaregiverPlan.js';
 export * from './CaregiverSubscription.js';
+export * from './VisitRescheduleRequest.js';

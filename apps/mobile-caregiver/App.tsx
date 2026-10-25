@@ -28,6 +28,7 @@ import {
   FieldVisit,
   AssignedPatient,
   FieldVisitStatus,
+  VisitRescheduleRequest,
 } from './src/types';
 
 export default function CaregiverApp() {
@@ -39,10 +40,19 @@ export default function CaregiverApp() {
   // Live Backend Data States
   const [visits, setVisits] = useState<FieldVisit[]>([]);
   const [assignedPatients, setAssignedPatients] = useState<AssignedPatient[]>([]);
+  const [rescheduleRequests, setRescheduleRequests] = useState<VisitRescheduleRequest[]>([]);
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
   const [isLoadingPatients, setIsLoadingPatients] = useState(false);
+  const [isLoadingRequests, setIsLoadingRequests] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+
+  // Phase 2: Reschedule Approval / Rejection State
+  const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
+  const [rejectingRequest, setRejectingRequest] = useState<VisitRescheduleRequest | null>(null);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState<string>('');
+  const [isSubmittingRejection, setIsSubmittingRejection] = useState<boolean>(false);
+  const [rejectionError, setRejectionError] = useState<string | null>(null);
 
   // Vitals & Care Report Form State
   const [selectedVisitId, setSelectedVisitId] = useState<string>('');
@@ -142,16 +152,33 @@ export default function CaregiverApp() {
     }
   }, [userSession]);
 
+  const loadRescheduleRequests = useCallback(async () => {
+    if (!userSession) return;
+    setIsLoadingRequests(true);
+
+    try {
+      const data = await caregiverApi.getPendingRescheduleRequests();
+      setRescheduleRequests(data);
+    } catch (err: any) {
+      if (!(err instanceof SessionExpiredError)) {
+        console.warn('[CaregiverApp] Error fetching reschedule requests:', err.message);
+      }
+    } finally {
+      setIsLoadingRequests(false);
+    }
+  }, [userSession]);
+
   useEffect(() => {
     if (userSession) {
       loadVisits();
       loadPatients();
+      loadRescheduleRequests();
     }
-  }, [userSession, loadVisits, loadPatients]);
+  }, [userSession, loadVisits, loadPatients, loadRescheduleRequests]);
 
   const onRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([loadVisits(), loadPatients()]);
+    await Promise.all([loadVisits(), loadPatients(), loadRescheduleRequests()]);
     setIsRefreshing(false);
   };
 
@@ -165,6 +192,64 @@ export default function CaregiverApp() {
       Alert.alert('Visit Status Updated', `Visit status is now ${newStatus.toUpperCase()}`);
     } catch (err: any) {
       Alert.alert('Status Update Failed', err.message || 'Could not update visit status.');
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // Phase 2: Reschedule Request Approvals & Rejections
+  // ---------------------------------------------------------------------------
+  const handleApproveReschedule = (request: VisitRescheduleRequest) => {
+    Alert.alert(
+      'Approve Visit Reschedule',
+      `Approve rescheduling Visit #${request.visitNumber} for ${request.patientName}?\n\nOriginal: ${request.originalSchedule.scheduledDate} (${request.originalSchedule.timeSlot})\nRequested: ${request.requestedSchedule.scheduledDate} (${request.requestedSchedule.timeSlot})`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Approve & Update Schedule',
+          onPress: async () => {
+            setProcessingRequestId(request.id);
+            try {
+              await caregiverApi.approveRescheduleRequest(request.id);
+              Alert.alert('Reschedule Approved', 'Field visit schedule has been updated to the requested time slot.');
+              await Promise.all([loadVisits(), loadRescheduleRequests()]);
+            } catch (err: any) {
+              Alert.alert('Approval Rejected', err.message || 'Could not approve rescheduling request.');
+            } finally {
+              setProcessingRequestId(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleOpenRejectModal = (request: VisitRescheduleRequest) => {
+    setRejectingRequest(request);
+    setRejectionReasonInput('');
+    setRejectionError(null);
+  };
+
+  const handleSubmitRejection = async () => {
+    if (!rejectingRequest) return;
+
+    const trimmedReason = rejectionReasonInput.trim();
+    if (trimmedReason.length < 3) {
+      setRejectionError('Please enter a rejection reason of at least 3 characters.');
+      return;
+    }
+
+    setIsSubmittingRejection(true);
+    setRejectionError(null);
+
+    try {
+      await caregiverApi.rejectRescheduleRequest(rejectingRequest.id, trimmedReason);
+      Alert.alert('Request Rejected', 'The rescheduling request has been rejected. The original schedule remains unchanged.');
+      setRejectingRequest(null);
+      await loadRescheduleRequests();
+    } catch (err: any) {
+      setRejectionError(err.message || 'Failed to reject rescheduling request.');
+    } finally {
+      setIsSubmittingRejection(false);
     }
   };
 
@@ -261,6 +346,48 @@ export default function CaregiverApp() {
     );
   };
 
+  const formatPatientAddress = (details?: {
+    street?: string;
+    cluster?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    address?: string;
+  }) => {
+    if (!details) return '📍 Address not available (Incomplete profile)';
+    const parts = [
+      details.street,
+      details.cluster,
+      details.city,
+      details.state,
+      details.pincode ? `PIN: ${details.pincode}` : undefined,
+    ].filter(Boolean);
+
+    if (parts.length > 0) {
+      return `📍 ${parts.join(', ')}`;
+    }
+
+    if (details.address && details.address !== 'Address not available') {
+      return `📍 ${details.address}`;
+    }
+
+    return '📍 Address not available (Incomplete profile)';
+  };
+
+  const handleDownloadCaregiverReport = async (visitId: string) => {
+    try {
+      const token = await authStorage.getToken();
+      const downloadUrl = `${getMobileApiBaseUrl()}/visits/${visitId}/report/download?format=pdf${
+        token ? `&token=${encodeURIComponent(token)}` : ''
+      }`;
+      Linking.openURL(downloadUrl).catch(() => {
+        Alert.alert('Report Download', `Please open in your browser:\n${downloadUrl}`);
+      });
+    } catch (err: any) {
+      Alert.alert('Download Error', err.message || 'Unable to download report.');
+    }
+  };
+
   // Loading Screen
   if (isBootstrapping) {
     return (
@@ -343,6 +470,86 @@ export default function CaregiverApp() {
               </View>
             </View>
 
+            {/* Phase 2: Pending Reschedule Requests Section */}
+            {rescheduleRequests.length > 0 && (
+              <View style={styles.rescheduleSectionContainer}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.rescheduleSectionTitle}>
+                    ⏳ Pending Reschedule Requests ({rescheduleRequests.length})
+                  </Text>
+                  {isLoadingRequests && <ActivityIndicator size="small" color="#d97706" />}
+                </View>
+
+                {rescheduleRequests.map((req) => (
+                  <View key={req.id} style={styles.rescheduleCard}>
+                    <View style={styles.cardRowBetween}>
+                      <Text style={styles.rescheduleBadge}>Caregiver Approval Required</Text>
+                      <Text style={styles.rescheduleTimestamp}>
+                        {new Date(req.createdAt).toLocaleDateString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                        })}
+                      </Text>
+                    </View>
+
+                    <Text style={styles.reschedulePatientName}>{req.patientName}</Text>
+                    <Text style={styles.rescheduleSubtext}>
+                      Visit #{req.visitNumber} • Tel: +91 {req.patientPhone}
+                    </Text>
+
+                    <View style={styles.scheduleComparisonBox}>
+                      <View style={styles.comparisonCol}>
+                        <Text style={styles.comparisonLabel}>Current Schedule:</Text>
+                        <Text style={styles.comparisonOriginalVal}>
+                          {req.originalSchedule.scheduledDate}
+                        </Text>
+                        <Text style={styles.comparisonOriginalSlot}>
+                          {req.originalSchedule.timeSlot}
+                        </Text>
+                      </View>
+                      <Text style={styles.comparisonArrow}>➔</Text>
+                      <View style={styles.comparisonCol}>
+                        <Text style={styles.comparisonLabel}>Requested Slot:</Text>
+                        <Text style={styles.comparisonRequestedVal}>
+                          {req.requestedSchedule.scheduledDate}
+                        </Text>
+                        <Text style={styles.comparisonRequestedSlot}>
+                          {req.requestedSchedule.timeSlot}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.rescheduleReasonBox}>
+                      <Text style={styles.rescheduleReasonHeading}>Patient's Reason:</Text>
+                      <Text style={styles.rescheduleReasonContent}>"{req.reason}"</Text>
+                    </View>
+
+                    <View style={styles.rescheduleButtonRow}>
+                      <TouchableOpacity
+                        style={styles.rejectOutlineButton}
+                        onPress={() => handleOpenRejectModal(req)}
+                        disabled={processingRequestId === req.id}
+                      >
+                        <Text style={styles.rejectOutlineButtonText}>✕ Reject Request</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.approveButton}
+                        onPress={() => handleApproveReschedule(req)}
+                        disabled={processingRequestId === req.id}
+                      >
+                        {processingRequestId === req.id ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.approveButtonText}>✓ Approve Reschedule</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionTitle}>Assigned Patient Visits</Text>
               {isLoadingVisits && <ActivityIndicator size="small" color="#0284c7" />}
@@ -394,7 +601,7 @@ export default function CaregiverApp() {
                   <Text style={styles.patientSubtext}>
                     Visit #{vis.visitNumber} • {vis.visitType.replace('_', ' ').toUpperCase()}
                   </Text>
-                  <Text style={styles.patientAddress}>📍 {vis.patientDetails.address}</Text>
+                  <Text style={styles.patientAddress}>{formatPatientAddress(vis.patientDetails)}</Text>
 
                   {vis.patientDetails.instructions ? (
                     <Text style={styles.instructionsText}>
@@ -453,6 +660,15 @@ export default function CaregiverApp() {
                         <Text style={styles.buttonText}>
                           {isCompleted ? 'View Documentation' : 'Record Vitals & Report'}
                         </Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {isCompleted && (
+                      <TouchableOpacity
+                        style={[styles.recordButton, { backgroundColor: '#0284c7' }]}
+                        onPress={() => handleDownloadCaregiverReport(vis.id)}
+                      >
+                        <Text style={styles.buttonText}>📥 PDF</Text>
                       </TouchableOpacity>
                     )}
 
@@ -647,6 +863,79 @@ export default function CaregiverApp() {
                 </TouchableOpacity>
               </View>
             )}
+
+            {/* Submitted Care Reports & History */}
+            <View style={{ marginTop: 24 }}>
+              <Text style={styles.sectionTitle}>Submitted Care Reports &amp; History</Text>
+              <Text style={styles.subtext}>
+                Verified daily clinical documentation and signed vitals recorded for your patients
+              </Text>
+
+              {visits.filter((v) => v.status === 'completed' || v.clinicalDocumentation?.signedAt).length === 0 ? (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyIcon}>📄</Text>
+                  <Text style={styles.emptyTitle}>No Reports Submitted Yet</Text>
+                  <Text style={styles.emptySubtitle}>
+                    When you document bedside visits, your saved reports will appear here.
+                  </Text>
+                </View>
+              ) : (
+                visits
+                  .filter((v) => v.status === 'completed' || v.clinicalDocumentation?.signedAt)
+                  .map((v) => (
+                    <View key={v.id} style={styles.card}>
+                      <View style={styles.cardRowBetween}>
+                        <Text style={styles.visitTime}>
+                          Visit #{v.visitNumber} • {v.scheduledDate}
+                        </Text>
+                        <Text style={[styles.statusPill, styles.statusCompleted]}>
+                          SIGNED
+                        </Text>
+                      </View>
+                      <Text style={styles.patientName}>{v.patientDetails?.fullName}</Text>
+                      <Text style={styles.patientAddress}>{formatPatientAddress(v.patientDetails)}</Text>
+
+                      {v.clinicalDocumentation?.vitals && (
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginVertical: 8 }}>
+                          {v.clinicalDocumentation.vitals.bloodPressure && (
+                            <View style={styles.vitalBadge}>
+                              <Text style={styles.vitalBadgeText}>BP: {v.clinicalDocumentation.vitals.bloodPressure}</Text>
+                            </View>
+                          )}
+                          {v.clinicalDocumentation.vitals.pulse && (
+                            <View style={styles.vitalBadge}>
+                              <Text style={styles.vitalBadgeText}>Pulse: {v.clinicalDocumentation.vitals.pulse} bpm</Text>
+                            </View>
+                          )}
+                          {v.clinicalDocumentation.vitals.spO2 && (
+                            <View style={styles.vitalBadge}>
+                              <Text style={styles.vitalBadgeText}>SpO2: {v.clinicalDocumentation.vitals.spO2}%</Text>
+                            </View>
+                          )}
+                          {v.clinicalDocumentation.vitals.temperature && (
+                            <View style={styles.vitalBadge}>
+                              <Text style={styles.vitalBadgeText}>Temp: {v.clinicalDocumentation.vitals.temperature}°F</Text>
+                            </View>
+                          )}
+                        </View>
+                      )}
+
+                      {v.clinicalDocumentation?.clinicalNotes ? (
+                        <Text style={[styles.patientSubtext, { fontStyle: 'italic', marginBottom: 8 }]}>
+                          "{v.clinicalDocumentation.clinicalNotes}"
+                        </Text>
+                      ) : null}
+
+                      <TouchableOpacity
+                        style={[styles.actionButton, { marginTop: 6, backgroundColor: '#0284c7' }]}
+                        onPress={() => handleDownloadCaregiverReport(v.id)}
+                      >
+                        <Text style={styles.buttonText}>📥 Download PDF Report</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+              )}
+            </View>
           </View>
         )}
 
@@ -678,12 +967,19 @@ export default function CaregiverApp() {
                 </View>
 
                 <Text style={styles.patientSubtext}>Phone: +91 {pat.phone}</Text>
-                {pat.address ? (
-                  <Text style={styles.patientAddress}>
-                    📍 {pat.address.street ? `${pat.address.street}, ` : ''}
-                    {pat.address.city} - {pat.address.pincode} ({pat.address.cluster})
-                  </Text>
-                ) : null}
+                <Text style={styles.patientAddress}>
+                  {pat.address
+                    ? `📍 ${[
+                        pat.address.street,
+                        pat.address.cluster,
+                        pat.address.city,
+                        pat.address.state,
+                        pat.address.pincode ? `PIN: ${pat.address.pincode}` : undefined,
+                      ]
+                        .filter(Boolean)
+                        .join(', ')}`
+                    : '📍 Address not available (Incomplete profile)'}
+                </Text>
 
                 {pat.activeSubscription ? (
                   <View style={styles.subscriptionBox}>
@@ -801,6 +1097,71 @@ export default function CaregiverApp() {
           <Text style={[styles.tabText, activeTab === 'profile' && styles.tabTextActive]}>Profile</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Phase 2: Rejection Reason Modal */}
+      <Modal
+        visible={!!rejectingRequest}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setRejectingRequest(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.cardRowBetween}>
+              <Text style={styles.modalTitle}>Reject Rescheduling Request</Text>
+              <TouchableOpacity onPress={() => setRejectingRequest(null)}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSubheading}>
+              Visit #{rejectingRequest?.visitNumber} for {rejectingRequest?.patientName}
+            </Text>
+
+            <Text style={styles.modalInstructionText}>
+              Please explain why this visit cannot be rescheduled to {rejectingRequest?.requestedSchedule.scheduledDate} ({rejectingRequest?.requestedSchedule.timeSlot}). This reason will be shown to the patient.
+            </Text>
+
+            {rejectionError && (
+              <View style={styles.rejectionErrorBox}>
+                <Text style={styles.rejectionErrorText}>⚠️ {rejectionError}</Text>
+              </View>
+            )}
+
+            <TextInput
+              style={styles.rejectionInput}
+              value={rejectionReasonInput}
+              onChangeText={setRejectionReasonInput}
+              placeholder="e.g., Critical patient procedure scheduled, outside shift hours, etc."
+              placeholderTextColor="#94a3b8"
+              multiline={true}
+              numberOfLines={3}
+            />
+
+            <View style={styles.modalActionButtons}>
+              <TouchableOpacity
+                style={styles.modalCancelButton}
+                onPress={() => setRejectingRequest(null)}
+                disabled={isSubmittingRejection}
+              >
+                <Text style={styles.modalCancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalConfirmRejectButton}
+                onPress={handleSubmitRejection}
+                disabled={isSubmittingRejection}
+              >
+                {isSubmittingRejection ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalConfirmRejectButtonText}>Confirm Rejection</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1258,5 +1619,253 @@ const styles = StyleSheet.create({
   },
   tabTextActive: {
     color: '#0284c7',
+  },
+
+  // Phase 2: Reschedule Approval Styles
+  rescheduleSectionContainer: {
+    marginBottom: 20,
+  },
+  rescheduleSectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#b45309',
+  },
+  rescheduleCard: {
+    backgroundColor: '#fffbeb',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1.5,
+    borderColor: '#fcd34d',
+    marginBottom: 12,
+  },
+  rescheduleBadge: {
+    backgroundColor: '#fef3c7',
+    color: '#b45309',
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  rescheduleTimestamp: {
+    fontSize: 11,
+    color: '#92400e',
+    fontWeight: '600',
+  },
+  reschedulePatientName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#78350f',
+    marginTop: 8,
+  },
+  rescheduleSubtext: {
+    fontSize: 12,
+    color: '#92400e',
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  scheduleComparisonBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#fef08a',
+    marginBottom: 10,
+  },
+  comparisonCol: {
+    flex: 1,
+  },
+  comparisonLabel: {
+    fontSize: 10,
+    color: '#64748b',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  comparisonOriginalVal: {
+    fontSize: 13,
+    color: '#64748b',
+    fontWeight: '700',
+    marginTop: 2,
+    textDecorationLine: 'line-through',
+  },
+  comparisonOriginalSlot: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  comparisonArrow: {
+    fontSize: 18,
+    color: '#0284c7',
+    paddingHorizontal: 8,
+    fontWeight: '800',
+  },
+  comparisonRequestedVal: {
+    fontSize: 13,
+    color: '#059669',
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  comparisonRequestedSlot: {
+    fontSize: 11,
+    color: '#047857',
+    fontWeight: '700',
+  },
+  rescheduleReasonBox: {
+    backgroundColor: '#fefce8',
+    borderRadius: 8,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#fef08a',
+    marginBottom: 12,
+  },
+  rescheduleReasonHeading: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400e',
+    marginBottom: 2,
+  },
+  rescheduleReasonContent: {
+    fontSize: 12,
+    color: '#78350f',
+    fontStyle: 'italic',
+    lineHeight: 16,
+  },
+  rescheduleButtonRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  rejectOutlineButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    backgroundColor: '#ffffff',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  rejectOutlineButtonText: {
+    color: '#dc2626',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  approveButton: {
+    flex: 1.5,
+    backgroundColor: '#059669',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  approveButtonText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    maxWidth: 420,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  modalCloseText: {
+    fontSize: 18,
+    color: '#94a3b8',
+    padding: 4,
+  },
+  modalSubheading: {
+    fontSize: 13,
+    color: '#0284c7',
+    fontWeight: '700',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  modalInstructionText: {
+    fontSize: 12,
+    color: '#64748b',
+    lineHeight: 17,
+    marginBottom: 12,
+  },
+  rejectionErrorBox: {
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fca5a5',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 10,
+  },
+  rejectionErrorText: {
+    color: '#dc2626',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  rejectionInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 10,
+    fontSize: 13,
+    color: '#0f172a',
+    height: 80,
+    textAlignVertical: 'top',
+    backgroundColor: '#f8fafc',
+    marginBottom: 16,
+  },
+  modalActionButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modalCancelButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalCancelButtonText: {
+    color: '#475569',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  modalConfirmRejectButton: {
+    flex: 1.5,
+    backgroundColor: '#dc2626',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalConfirmRejectButtonText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  vitalBadge: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  vitalBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0f172a',
   },
 });

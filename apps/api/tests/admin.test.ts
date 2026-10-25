@@ -38,8 +38,9 @@ describe('Phase 7 — Admin and Super Admin Dashboards & Governance Test Suite',
   before(async () => {
     await connectDatabase();
 
-    // Clean up test-specific patient account
+    // Clean up test-specific patient account and test subscriptions
     await User.deleteMany({ phone: patientPhone });
+    await CaregiverSubscription.deleteMany({ patientPhone: { $in: [patientPhone, '8788392624', '9822334455'] } });
 
     // Seed admin demo data, super admin, demo credentials, support tickets, and audit logs
     await seedAdminDemoData();

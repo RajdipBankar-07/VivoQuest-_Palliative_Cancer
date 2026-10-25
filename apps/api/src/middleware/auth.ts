@@ -28,6 +28,8 @@ export const authenticateUser = async (
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.split(' ')[1];
+    } else if (req.query && typeof req.query.token === 'string') {
+      token = req.query.token;
     } else if (req.headers.cookie) {
       // Parse cookie fallback: vivo_token
       const cookies = Object.fromEntries(

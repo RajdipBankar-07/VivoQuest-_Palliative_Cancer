@@ -1,0 +1,4 @@
+cd /d "E:\VivoQuest Website\apps\mobile-patient"
+
+
+npx expo start --port 8081

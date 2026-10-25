@@ -31,6 +31,7 @@ describe('Medical Products & DME Commerce Test Suite', () => {
     // Clean up test-specific users and orders
     await User.deleteMany({ phone: { $in: [patientAPhone, patientBPhone, adminPhone] } });
     await ProductOrder.deleteMany({ patientPhone: { $in: [patientAPhone, patientBPhone] } });
+    await MedicalProduct.updateMany({}, { $set: { reservedQuantity: 0 } });
 
     // Register Patient A
     const regARes = await request(app)
