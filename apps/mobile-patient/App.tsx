@@ -115,6 +115,22 @@ export default function PatientApp() {
     };
   }, []);
 
+  // Periodic background refresh for real-time visit schedule & caregiver updates
+  useEffect(() => {
+    if (!userSession) return;
+    const interval = setInterval(() => {
+      Promise.allSettled([
+        patientApi.getAssignedCaregiver(),
+        patientApi.getVisits(),
+      ]).then(([caregiverRes, visitsRes]) => {
+        if (caregiverRes.status === 'fulfilled') setAssignedCaregiver(caregiverRes.value);
+        if (visitsRes.status === 'fulfilled') setVisitsSchedule(visitsRes.value);
+      }).catch(() => {});
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [userSession]);
+
   // ---------------------------------------------------------------------------
   // 2. Load Real Patient Data from Backend APIs
   // ---------------------------------------------------------------------------
@@ -326,6 +342,77 @@ export default function PatientApp() {
     } catch (err: any) {
       Alert.alert('Download Error', err.message || 'Unable to download report.');
     }
+  };
+
+  const handleDeletePatientReport = (report: DailyCareReport) => {
+    Alert.alert(
+      'Remove Care Report',
+      'Are you sure you want to remove this report from your dashboard view? The complete clinical documentation and audit history remain securely preserved and accessible to your healthcare team.',
+      [
+        { text: 'Keep Report', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await patientApi.deleteCareReport(report.id);
+              setSelectedReport(null);
+              const updated = await patientApi.getCareReports();
+              setCareReports(updated);
+              Alert.alert('Report Removed', 'The care report has been hidden from your dashboard.');
+            } catch (err: any) {
+              Alert.alert('Unable to Remove Report', err.message || 'An error occurred while removing the report.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleHideRescheduleRequest = (requestId: string, visitNumber: string) => {
+    Alert.alert(
+      'Hide Reschedule Request',
+      `Hide this request entry for Visit #${visitNumber}? Your confirmed visit schedule remains active and unaffected.`,
+      [
+        { text: 'Keep Visible', style: 'cancel' },
+        {
+          text: 'Hide Entry',
+          onPress: async () => {
+            try {
+              await patientApi.hideRescheduleRequest(requestId);
+              await loadPatientDashboardData();
+              Alert.alert('Entry Hidden', 'The request has been removed from your interface.');
+            } catch (err: any) {
+              Alert.alert('Unable to Hide Request', err.message || 'An error occurred while hiding the request.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleHideCompletedVisit = (visit: PatientVisit) => {
+    Alert.alert(
+      'Remove Visit from History',
+      `Are you sure you want to remove completed Visit #${visit.visitNumber} from your history? Clinical documentation, reports, and medical records remain safely preserved.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await patientApi.hideCompletedVisit(visit.id);
+              const updatedVisits = await patientApi.getVisits();
+              setVisitsSchedule(updatedVisits);
+              Alert.alert('Visit Removed', 'The visit has been removed from your history.');
+            } catch (err: any) {
+              Alert.alert('Unable to Remove Visit', err.message || 'An error occurred while removing the visit.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   // ---------------------------------------------------------------------------
@@ -652,14 +739,20 @@ export default function PatientApp() {
                 <View style={styles.divider} />
 
                 <View style={styles.cardRowBetween}>
-                  <View>
-                    <Text style={styles.visitCaregiverLabel}>Assigned Caregiver:</Text>
-                    <Text style={styles.visitCaregiverName}>
-                      {nextVisit.assignedCaregiver?.name || 'Care Team Clinician'}
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <Text style={styles.visitCaregiverLabel}>
+                      {nextVisit.status === 'rejected' ? 'Caregiver Status:' : 'Assigned Caregiver:'}
+                    </Text>
+                    <Text style={[styles.visitCaregiverName, nextVisit.status === 'rejected' && { color: '#be123c', fontWeight: '700' }]}>
+                      {nextVisit.status === 'rejected'
+                        ? 'Reassignment in Progress (Desk allocating replacement)'
+                        : nextVisit.assignedCaregiver?.name || 'Awaiting Caregiver Assignment'}
                     </Text>
                   </View>
-                  <View style={styles.visitStatusPill}>
-                    <Text style={styles.visitStatusPillText}>{nextVisit.statusLabel}</Text>
+                  <View style={[styles.visitStatusPill, nextVisit.status === 'rejected' && { backgroundColor: '#ffe4e6' }]}>
+                    <Text style={[styles.visitStatusPillText, nextVisit.status === 'rejected' && { color: '#be123c' }]}>
+                      {nextVisit.statusLabel}
+                    </Text>
                   </View>
                 </View>
 
@@ -1000,31 +1093,40 @@ export default function PatientApp() {
                       <View style={styles.divider} />
 
                       {/* Assigned Caregiver Section */}
-                      <View style={styles.cardRowBetween}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.visitCaregiverLabel}>Assigned Caregiver:</Text>
-                          <Text style={styles.visitCaregiverNameBold}>
-                            {visit.assignedCaregiver?.name || 'Assigned Nurse'}
-                          </Text>
-                          <Text style={styles.visitCaregiverRoleSub}>
-                            {visit.assignedCaregiver?.role || 'Clinical Healthcare Provider'}
+                      {visit.status === 'rejected' ? (
+                        <View style={{ backgroundColor: '#fff1f2', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#fecdd3', marginVertical: 6 }}>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#9f1239' }}>⚠️ Caregiver Reassignment in Progress</Text>
+                          <Text style={{ fontSize: 11, color: '#4c0519', marginTop: 3, lineHeight: 16 }}>
+                            The previous caregiver was unavailable. Our clinical desk is actively assigning a qualified replacement caregiver for your visit. Your booking is safely preserved.
                           </Text>
                         </View>
+                      ) : (
+                        <View style={styles.cardRowBetween}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.visitCaregiverLabel}>Assigned Caregiver:</Text>
+                            <Text style={styles.visitCaregiverNameBold}>
+                              {visit.assignedCaregiver?.name || 'Awaiting Caregiver Assignment'}
+                            </Text>
+                            <Text style={styles.visitCaregiverRoleSub}>
+                              {visit.assignedCaregiver?.role || 'Clinical Healthcare Specialist'}
+                            </Text>
+                          </View>
 
-                        {visit.assignedCaregiver?.phone ? (
-                          <TouchableOpacity
-                            style={styles.callActionButtonSmall}
-                            onPress={() =>
-                              handleCallCaregiver(
-                                visit.assignedCaregiver!.phone,
-                                visit.assignedCaregiver!.name
-                              )
-                            }
-                          >
-                            <Text style={styles.callActionButtonSmallText}>📞 Call</Text>
-                          </TouchableOpacity>
-                        ) : null}
-                      </View>
+                          {visit.assignedCaregiver?.phone ? (
+                            <TouchableOpacity
+                              style={styles.callActionButtonSmall}
+                              onPress={() =>
+                                handleCallCaregiver(
+                                  visit.assignedCaregiver!.phone,
+                                  visit.assignedCaregiver!.name
+                                )
+                              }
+                            >
+                              <Text style={styles.callActionButtonSmallText}>📞 Call</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      )}
 
                       {/* Authorized Instructions or Notes for the Patient */}
                       {visit.instructions ? (
@@ -1070,14 +1172,27 @@ export default function PatientApp() {
                         <View style={styles.rescheduleRejectedBox}>
                           <View style={styles.rescheduleHeaderRow}>
                             <Text style={styles.rescheduleRejectedBadge}>❌ Reschedule Request Rejected</Text>
-                            {['assigned', 'accepted'].includes(visit.status) ? (
+                            <View style={{ flexDirection: 'row', gap: 6 }}>
+                              {['assigned', 'accepted'].includes(visit.status) ? (
+                                <TouchableOpacity
+                                  style={styles.requestRescheduleButtonSmall}
+                                  onPress={() => handleOpenReschedule(visit)}
+                                >
+                                  <Text style={styles.requestRescheduleButtonSmallText}>Try Another Slot</Text>
+                                </TouchableOpacity>
+                              ) : null}
                               <TouchableOpacity
-                                style={styles.requestRescheduleButtonSmall}
-                                onPress={() => handleOpenReschedule(visit)}
+                                style={styles.cancelRequestButtonSmall}
+                                onPress={() =>
+                                  handleHideRescheduleRequest(
+                                    visit.rescheduleRequest!.id,
+                                    visit.visitNumber
+                                  )
+                                }
                               >
-                                <Text style={styles.requestRescheduleButtonSmallText}>Try Another Slot</Text>
+                                <Text style={styles.cancelRequestButtonText}>Dismiss Notice</Text>
                               </TouchableOpacity>
-                            ) : null}
+                            </View>
                           </View>
                           {visit.rescheduleRequest.rejectionReason ? (
                             <Text style={styles.rescheduleRejectionReasonText}>
@@ -1158,7 +1273,7 @@ export default function PatientApp() {
               <View>
                 {visitsSchedule?.past && visitsSchedule.past.length > 0 ? (
                   visitsSchedule.past.map((visit) => (
-                    <View key={visit.id} style={styles.cardMuted}>
+                    <View key={visit.id || (visit as any)._id || visit.visitNumber} style={styles.cardMuted}>
                       <View style={styles.cardRowBetween}>
                         <Text style={styles.pastDateText}>
                           {new Date(visit.scheduledDate).toLocaleDateString('en-IN', {
@@ -1193,6 +1308,25 @@ export default function PatientApp() {
                           <Text style={styles.pastRecText}>"{visit.recommendations}"</Text>
                         </View>
                       ) : null}
+
+                      {/* Issue 2: Option to remove completed/past visit from history */}
+                      <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end' }}>
+                        <TouchableOpacity
+                          style={{
+                            paddingVertical: 6,
+                            paddingHorizontal: 12,
+                            borderRadius: 8,
+                            backgroundColor: '#f1f5f9',
+                            borderWidth: 1,
+                            borderColor: '#cbd5e1',
+                          }}
+                          onPress={() => handleHideCompletedVisit(visit)}
+                        >
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748b' }}>
+                            🗑️ Remove from History
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   ))
                 ) : (
@@ -1263,7 +1397,18 @@ export default function PatientApp() {
                     </Text>
                   ) : null}
 
-                  <Text style={styles.viewDetailsText}>Tap to view complete clinical notes →</Text>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                    <Text style={styles.viewDetailsText}>Tap to view complete clinical notes →</Text>
+                    <TouchableOpacity
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        handleDeletePatientReport(report);
+                      }}
+                      style={{ paddingVertical: 2, paddingHorizontal: 6 }}
+                    >
+                      <Text style={{ fontSize: 12, color: '#DC2626', fontWeight: '600' }}>🗑️ Remove</Text>
+                    </TouchableOpacity>
+                  </View>
                 </TouchableOpacity>
               ))
             ) : (
@@ -1320,6 +1465,12 @@ export default function PatientApp() {
                       </View>
                     </View>
 
+                    {sub.planDescription ? (
+                      <Text style={{ fontSize: 12, color: '#546E7A', marginTop: 4, marginBottom: 2 }}>
+                        {sub.planDescription}
+                      </Text>
+                    ) : null}
+
                     <View style={styles.enrolledSubMetricsRow}>
                       <View style={styles.enrolledSubMetric}>
                         <Text style={styles.enrolledSubMetricLabel}>Visits Balance</Text>
@@ -1363,55 +1514,87 @@ export default function PatientApp() {
             </Text>
 
             {availablePlans.length > 0 ? (
-              availablePlans.map((plan) => (
-                <View key={plan.id} style={styles.planCard}>
-                  {plan.isPopular && (
-                    <View style={styles.popularBadge}>
-                      <Text style={styles.popularText}>★ MOST POPULAR</Text>
+              availablePlans.map((plan) => {
+                const activeSub = subscriptions.find((s) => s.status === 'active');
+                const isCurrentPlan = !!(
+                  activeSub &&
+                  (activeSub.planId === plan.id ||
+                    (activeSub.planCode && activeSub.planCode === plan.planCode) ||
+                    activeSub.planTitle === plan.title)
+                );
+
+                return (
+                  <View key={plan.id} style={styles.planCard}>
+                    {plan.isPopular && (
+                      <View style={styles.popularBadge}>
+                        <Text style={styles.popularText}>★ MOST POPULAR</Text>
+                      </View>
+                    )}
+
+                    <Text style={styles.planName}>{plan.title}</Text>
+                    <Text style={styles.planCategoryPill}>{plan.category.toUpperCase()}</Text>
+
+                    <View style={styles.priceRow}>
+                      <Text style={styles.priceText}>₹{plan.customerPrice.toLocaleString('en-IN')}</Text>
+                      <Text style={styles.priceDuration}>/ {plan.durationDays} Days</Text>
                     </View>
-                  )}
 
-                  <Text style={styles.planName}>{plan.title}</Text>
-                  <Text style={styles.planCategoryPill}>{plan.category.toUpperCase()}</Text>
-
-                  <View style={styles.priceRow}>
-                    <Text style={styles.priceText}>₹{plan.customerPrice.toLocaleString('en-IN')}</Text>
-                    <Text style={styles.priceDuration}>/ {plan.durationDays} Days</Text>
-                  </View>
-
-                  <Text style={styles.planVisitsCount}>
-                    Includes {plan.totalVisitsIncluded} Scheduled Visits ({plan.hoursPerVisit} hrs/visit)
-                  </Text>
-                  <Text style={styles.planDescription}>{plan.description}</Text>
-
-                  <View style={styles.divider} />
-
-                  <Text style={styles.featuresHeading}>Included Services:</Text>
-                  {plan.features.map((feat, idx) => (
-                    <Text key={idx} style={styles.featureItem}>
-                      ✓ {feat}
+                    <Text style={styles.planVisitsCount}>
+                      Includes {plan.totalVisitsIncluded} Scheduled Visits ({plan.hoursPerVisit} hrs/visit)
                     </Text>
-                  ))}
+                    <Text style={styles.planDescription}>{plan.description}</Text>
 
-                  <TouchableOpacity
-                    style={styles.subscribeButton}
-                    onPress={() => {
-                      const activeSub = subscriptions.find((s) => s.status === 'active');
-                      if (activeSub) {
-                        Alert.alert(
-                          'Active Subscription Exists',
-                          `You already have an active subscription (${activeSub.subscriptionNumber} — ${activeSub.planTitle}). You can only have one active care plan at a time. Please cancel or complete your current plan before activating another.`
-                        );
-                        return;
-                      }
-                      setCheckoutIdempotencyKey(`act-${plan.id}-${userSession?.id || 'pat'}-${Date.now()}`);
-                      setSubscribingPlan(plan);
-                    }}
-                  >
-                    <Text style={styles.subscribeButtonText}>Subscribe to Plan</Text>
-                  </TouchableOpacity>
-                </View>
-              ))
+                    <View style={styles.divider} />
+
+                    <Text style={styles.featuresHeading}>Included Services:</Text>
+                    {plan.features.map((feat, idx) => (
+                      <Text key={idx} style={styles.featureItem}>
+                        ✓ {feat}
+                      </Text>
+                    ))}
+
+                    {isCurrentPlan ? (
+                      <View
+                        style={[
+                          styles.subscribeButton,
+                          {
+                            backgroundColor: '#2E7D32',
+                            flexDirection: 'row',
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                          },
+                        ]}
+                      >
+                        <Text style={styles.subscribeButtonText}>
+                          ✓ Currently Enrolled ({activeSub.subscriptionNumber})
+                        </Text>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={[
+                          styles.subscribeButton,
+                          activeSub ? { backgroundColor: '#78909C' } : {},
+                        ]}
+                        onPress={() => {
+                          if (activeSub) {
+                            Alert.alert(
+                              'Active Subscription Exists',
+                              `You already have an active subscription (${activeSub.subscriptionNumber} — ${activeSub.planTitle}). You can only have one active care plan at a time. Please cancel or complete your current plan before activating another.`
+                            );
+                            return;
+                          }
+                          setCheckoutIdempotencyKey(`act-${plan.id}-${userSession?.id || 'pat'}-${Date.now()}`);
+                          setSubscribingPlan(plan);
+                        }}
+                      >
+                        <Text style={styles.subscribeButtonText}>
+                          {activeSub ? 'Active Plan Already In Progress' : 'Subscribe to Plan'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })
             ) : (
               <View style={styles.emptyCard}>
                 <Text style={styles.emptyCardTitle}>Loading Available Plans...</Text>
@@ -1586,15 +1769,21 @@ export default function PatientApp() {
             )}
 
             {selectedReport && (
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
                 <TouchableOpacity
-                  style={[styles.modalCloseButton, { flex: 1, backgroundColor: '#0284c7' }]}
+                  style={[styles.modalCloseButton, { flex: 1.2, backgroundColor: '#0284c7' }]}
                   onPress={() => handleDownloadPatientReport(selectedReport.id)}
                 >
-                  <Text style={[styles.modalCloseButtonText, { color: '#FFFFFF' }]}>📥 Download PDF</Text>
+                  <Text style={[styles.modalCloseButtonText, { color: '#FFFFFF' }]}>📥 Download</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalCloseButton, { flex: 1 }]}
+                  style={[styles.modalCloseButton, { flex: 1, backgroundColor: '#DC2626' }]}
+                  onPress={() => handleDeletePatientReport(selectedReport)}
+                >
+                  <Text style={[styles.modalCloseButtonText, { color: '#FFFFFF' }]}>🗑️ Remove</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalCloseButton, { flex: 0.8 }]}
                   onPress={() => setSelectedReport(null)}
                 >
                   <Text style={styles.modalCloseButtonText}>Close</Text>

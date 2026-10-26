@@ -38,6 +38,13 @@ export interface IVisitRescheduleRequest extends Document {
     timestamp: Date;
     reason?: string;
   }>;
+  hiddenFromPatient?: boolean;
+  hiddenFromPatientAt?: Date;
+  hiddenFromCaregiver?: boolean;
+  hiddenFromCaregiverAt?: Date;
+  hiddenFromAdmin?: boolean;
+  hiddenFromAdminAt?: Date;
+  hiddenFromUserIds?: mongoose.Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -156,6 +163,13 @@ const VisitRescheduleRequestSchema = new Schema<IVisitRescheduleRequest>(
         reason: { type: String },
       },
     ],
+    hiddenFromPatient: { type: Boolean, default: false },
+    hiddenFromPatientAt: { type: Date },
+    hiddenFromCaregiver: { type: Boolean, default: false },
+    hiddenFromCaregiverAt: { type: Date },
+    hiddenFromAdmin: { type: Boolean, default: false },
+    hiddenFromAdminAt: { type: Date },
+    hiddenFromUserIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   },
   {
     timestamps: true,

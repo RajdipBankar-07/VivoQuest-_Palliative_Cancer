@@ -9,9 +9,20 @@ const USER_KEY = 'vivoquest_patient_user_data';
 
 export type StorageType = 'hardware_secure_store' | 'in_memory_transient_fallback';
 
-// In-memory fallback cache for headless tests and web previews (non-persistent)
+// In-memory fallback cache for headless tests (non-persistent)
 let inMemoryToken: string | null = null;
 let inMemoryUser: string | null = null;
+
+const getBrowserStorage = (): Storage | null => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage;
+    }
+  } catch {
+    // Ignore restricted sandbox contexts
+  }
+  return null;
+};
 
 // Dynamically load expo-secure-store if available
 let SecureStore: any = null;
@@ -32,7 +43,7 @@ export const authStorage = {
         const available = await SecureStore.isAvailableAsync();
         if (available) return 'hardware_secure_store';
       } catch {
-        // Fall back to in-memory
+        // Fall back to web/in-memory
       }
     }
     return 'in_memory_transient_fallback';
@@ -43,6 +54,15 @@ export const authStorage = {
    */
   async setToken(token: string): Promise<void> {
     inMemoryToken = token;
+    const browserStorage = getBrowserStorage();
+    if (browserStorage) {
+      try {
+        browserStorage.setItem(TOKEN_KEY, token);
+      } catch (err) {
+        console.warn('[AuthStorage] localStorage setItem failed:', err);
+      }
+    }
+
     if (SecureStore && typeof SecureStore.setItemAsync === 'function') {
       try {
         await SecureStore.setItemAsync(TOKEN_KEY, token, {
@@ -67,6 +87,20 @@ export const authStorage = {
         console.warn('[AuthStorage] SecureStore getItem failed, using fallback:', err);
       }
     }
+
+    const browserStorage = getBrowserStorage();
+    if (browserStorage) {
+      try {
+        const token = browserStorage.getItem(TOKEN_KEY);
+        if (token) {
+          inMemoryToken = token;
+          return token;
+        }
+      } catch (err) {
+        console.warn('[AuthStorage] localStorage getItem failed:', err);
+      }
+    }
+
     return inMemoryToken;
   },
 
@@ -76,6 +110,16 @@ export const authStorage = {
   async setUser(user: any): Promise<void> {
     const raw = JSON.stringify(user);
     inMemoryUser = raw;
+
+    const browserStorage = getBrowserStorage();
+    if (browserStorage) {
+      try {
+        browserStorage.setItem(USER_KEY, raw);
+      } catch (err) {
+        console.warn('[AuthStorage] localStorage setUser failed:', err);
+      }
+    }
+
     if (SecureStore && typeof SecureStore.setItemAsync === 'function') {
       try {
         await SecureStore.setItemAsync(USER_KEY, raw);
@@ -98,6 +142,20 @@ export const authStorage = {
         console.warn('[AuthStorage] SecureStore getUser failed:', err);
       }
     }
+
+    const browserStorage = getBrowserStorage();
+    if (browserStorage) {
+      try {
+        const raw = browserStorage.getItem(USER_KEY);
+        if (raw) {
+          inMemoryUser = raw;
+          return JSON.parse(raw);
+        }
+      } catch (err) {
+        console.warn('[AuthStorage] localStorage getUser failed:', err);
+      }
+    }
+
     return inMemoryUser ? JSON.parse(inMemoryUser) : null;
   },
 
@@ -107,6 +165,17 @@ export const authStorage = {
   async clearSession(): Promise<void> {
     inMemoryToken = null;
     inMemoryUser = null;
+
+    const browserStorage = getBrowserStorage();
+    if (browserStorage) {
+      try {
+        browserStorage.removeItem(TOKEN_KEY);
+        browserStorage.removeItem(USER_KEY);
+      } catch (err) {
+        console.warn('[AuthStorage] localStorage removeItem failed:', err);
+      }
+    }
+
     if (SecureStore && typeof SecureStore.deleteItemAsync === 'function') {
       try {
         await SecureStore.deleteItemAsync(TOKEN_KEY);

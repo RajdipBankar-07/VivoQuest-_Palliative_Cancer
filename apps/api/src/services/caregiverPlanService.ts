@@ -3,6 +3,7 @@ import { CaregiverPlan, ICaregiverPlan, PlanCategory, PlanType } from '../models
 import { CaregiverSubscription, ICaregiverSubscription, SubscriptionStatus } from '../models/CaregiverSubscription.js';
 import { User, IUser } from '../models/User.js';
 import { AuditLog } from '../models/AuditLog.js';
+import { FieldVisit } from '../models/FieldVisit.js';
 import { NotificationLog } from '../models/NotificationLog.js';
 import { logAdminAction, escapeRegex, extractPhoneSearchVariants } from './adminService.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -406,18 +407,30 @@ export const listCaregiverSubscriptions = async (filters: {
   }
 
   const page = Math.max(1, filters.page || 1);
-  const limit = Math.min(100, Math.max(1, filters.limit || 20));
+  const limit = Math.min(100, Math.max(1, filters.limit || 10));
   const skip = (page - 1) * limit;
 
   const [subscriptions, total] = await Promise.all([
-    CaregiverSubscription.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+    CaregiverSubscription.find(query).populate('planId').sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
     CaregiverSubscription.countDocuments(query),
   ]);
 
-  const mappedSubscriptions = subscriptions.map((s: any) => ({
-    ...s,
-    id: s._id ? s._id.toString() : undefined,
-  }));
+  const mappedSubscriptions = subscriptions.map((s: any) => {
+    const planObj = s.planId && typeof s.planId === 'object' && s.planId._id ? s.planId : null;
+    return {
+      ...s,
+      id: s._id ? s._id.toString() : undefined,
+      planId: planObj ? planObj._id.toString() : (s.planId ? s.planId.toString() : ''),
+      planTitle: s.planTitle || planObj?.title || 'Care Plan',
+      planCode: planObj?.planCode || s.planCode || '',
+      planType: planObj?.planType || s.planType || '',
+      category: planObj?.category || s.category || '',
+      durationDays: planObj?.durationDays || s.durationDays || 30,
+      hoursPerVisit: planObj?.hoursPerVisit || s.hoursPerVisit || 8,
+      features: planObj?.features || s.features || [],
+      planDescription: planObj?.description || '',
+    };
+  });
 
   return {
     subscriptions: mappedSubscriptions,
@@ -893,9 +906,10 @@ export const activatePatientSubscriptionTestMode = async (
     );
   }
 
-  // Priority 3: Race-condition guard — recent duplicate within 30 seconds (e.g. concurrent requests)
+  // Priority 3: Race-condition guard — recent duplicate within 30 seconds for same plan
   const recentDuplicate = await CaregiverSubscription.findOne({
     patientId: patient._id,
+    planId: plan._id,
     createdAt: { $gte: new Date(Date.now() - 30000) },
   });
   if (recentDuplicate) {
@@ -1430,6 +1444,57 @@ export const archiveCaregiverSubscription = async (
 
 
   return sub;
+};
+
+/**
+ * Permanently deletes a caregiver subscription from MongoDB, cleans up linked visits, and records audit trail.
+ */
+export const deleteCaregiverSubscriptionPermanently = async (
+  subscriptionId: string,
+  actorUser: IUser,
+  reason?: string
+) => {
+  const sub = await findSubscriptionDoc(subscriptionId);
+  if (!sub) {
+    throw new AppError('Subscription not found', 404);
+  }
+
+  // Audit log the permanent deletion before removing document
+  await logSubscriptionAudit({
+    action: 'CAREGIVER_SUBSCRIPTION_PERMANENTLY_DELETED',
+    sub,
+    actorUser,
+    details: {
+      eventType: 'CAREGIVER_SUBSCRIPTION_PERMANENTLY_DELETED',
+      subscriptionNumber: sub.subscriptionNumber,
+      patientId: sub.patientId?.toString(),
+      patientName: sub.patientName,
+      patientPhone: sub.patientPhone,
+      planTitle: sub.planTitle,
+      reason: reason?.trim() || 'Permanent administrative deletion by authorized administrator',
+      statusAtDeletion: sub.status,
+      visitsCompleted: sub.visitsCompleted,
+      visitsRemaining: sub.visitsRemaining,
+    },
+    severity: 'critical',
+  }).catch((err) => {
+    console.error('[Audit] Failed to record deletion audit:', err.message);
+  });
+
+  // Clean up any visits linked to this subscription
+  await FieldVisit.deleteMany({ subscriptionId: sub._id }).catch((err) => {
+    console.error('[CleanUp] Failed to clean up linked visits:', err.message);
+  });
+
+  // Remove the subscription document permanently from MongoDB
+  await CaregiverSubscription.findByIdAndDelete(sub._id);
+
+  return {
+    deletedId: subscriptionId,
+    subscriptionNumber: sub.subscriptionNumber,
+    patientName: sub.patientName,
+    message: `Subscription ${sub.subscriptionNumber} (${sub.patientName}) permanently deleted from database.`,
+  };
 };
 
 /**

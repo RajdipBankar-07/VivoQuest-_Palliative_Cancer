@@ -281,6 +281,14 @@ export const patientApi = {
       subscriptionNumber: s.subscriptionNumber,
       planId: s.planId,
       planTitle: s.planTitle,
+      planCode: s.planCode,
+      planType: s.planType,
+      category: s.category,
+      durationDays: s.durationDays,
+      hoursPerVisit: s.hoursPerVisit,
+      features: s.features || [],
+      planDescription: s.planDescription,
+      plan: s.plan,
       status: s.status,
       startDate: s.startDate,
       endDate: s.endDate,
@@ -327,6 +335,21 @@ export const patientApi = {
       recommendations: r.recommendations,
       comfortLevel: r.comfortLevel,
     }));
+  },
+
+  /**
+   * Hide care report from patient's personal dashboard (clinical & audit records preserved)
+   */
+  async deleteCareReport(reportId: string, reason?: string, baseUrl?: string): Promise<{ success: boolean; message: string }> {
+    const res = await apiRequest<any>(
+      `/patients/me/care-reports/${encodeURIComponent(reportId)}`,
+      {
+        method: 'DELETE',
+        body: JSON.stringify({ reason }),
+      },
+      baseUrl
+    );
+    return res;
   },
 
   /**
@@ -390,6 +413,14 @@ export const patientApi = {
       subscriptionNumber: s.subscriptionNumber,
       planId: s.planId,
       planTitle: s.planTitle,
+      planCode: s.planCode,
+      planType: s.planType,
+      category: s.category,
+      durationDays: s.durationDays,
+      hoursPerVisit: s.hoursPerVisit,
+      features: s.features || [],
+      planDescription: s.planDescription,
+      plan: s.plan,
       status: s.status,
       startDate: s.startDate,
       endDate: s.endDate,
@@ -480,6 +511,25 @@ export const patientApi = {
   },
 
   /**
+   * Hide a completed or past visit from patient's personal visit history
+   */
+  async hideCompletedVisit(
+    visitId: string,
+    reason?: string,
+    baseUrl?: string
+  ): Promise<{ success: boolean; message: string; visitId: string }> {
+    const res = await apiRequest<any>(
+      `/patients/me/visits/${encodeURIComponent(visitId)}`,
+      {
+        method: 'DELETE',
+        body: JSON.stringify({ reason }),
+      },
+      baseUrl
+    );
+    return res;
+  },
+
+  /**
    * Submit a visit rescheduling request for an upcoming visit
    */
   async requestVisitReschedule(
@@ -533,6 +583,25 @@ export const patientApi = {
       baseUrl
     );
     return res.data || [];
+  },
+
+  /**
+   * Hide reschedule request entry from patient view (visit schedule remains unchanged)
+   */
+  async hideRescheduleRequest(
+    requestId: string,
+    reason?: string,
+    baseUrl?: string
+  ): Promise<{ success: boolean; message: string }> {
+    const res = await apiRequest<any>(
+      `/patients/me/reschedule-requests/${encodeURIComponent(requestId)}`,
+      {
+        method: 'DELETE',
+        body: JSON.stringify({ reason }),
+      },
+      baseUrl
+    );
+    return res;
   },
 
   /**

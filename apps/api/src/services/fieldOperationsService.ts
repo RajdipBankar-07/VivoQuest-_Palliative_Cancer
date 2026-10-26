@@ -20,13 +20,15 @@ import { NotificationLog } from '../models/NotificationLog.js';
 import { sendPatientNotification } from './notificationService.js';
 import { logAdminAction } from './adminService.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { getPhoneVariants } from './patientService.js';
 
 // -----------------------------------------------------------------------------
 // Helper: Permitted Status Transitions State Machine
 // -----------------------------------------------------------------------------
 const PERMITTED_VISIT_TRANSITIONS: Record<FieldVisitStatus, FieldVisitStatus[]> = {
-  assigned: ['accepted', 'cancelled'],
-  accepted: ['en_route', 'cancelled'],
+  assigned: ['accepted', 'rejected', 'cancelled'],
+  accepted: ['en_route', 'cancelled', 'rejected'],
+  rejected: ['assigned'], // When reassigning a rejected visit
   en_route: ['arrived', 'cancelled', 'failed'],
   arrived: ['in_progress', 'cancelled', 'failed'],
   in_progress: ['completed', 'failed', 'cancelled'],
@@ -56,22 +58,27 @@ export const seedDemoFieldVisitsIfEmpty = async () => {
     const hospitals = await User.find({ role: 'hospital' }).limit(2);
     const patients = await User.find({ role: 'patient' }).limit(3);
 
-    const docA = doctors[0] || {
+    const userDocA = await User.findOne({ phone: '9820011001' });
+    const userNurseB = await User.findOne({ phone: { $in: ['9822441122', '9820011004'] } });
+    const userPhysioC = await User.findOne({ phone: '9820011003' });
+    const userTechD = await User.findOne({ phone: '9822119988' });
+
+    const docA = userDocA || doctors[0] || {
       _id: new mongoose.Types.ObjectId(),
       fullName: 'Dr. Aditi Rao',
       phone: '9820011001',
     };
-    const nurseB = doctors[1] || {
+    const nurseB = userNurseB || doctors[1] || {
       _id: new mongoose.Types.ObjectId(),
       fullName: 'Sister Varsha Kulkarni, RN',
       phone: '9822441122',
     };
-    const physioC = doctors[2] || {
+    const physioC = userPhysioC || doctors[2] || {
       _id: new mongoose.Types.ObjectId(),
       fullName: 'Priya Deshmukh, PT',
       phone: '9820011003',
     };
-    const techD = doctors[3] || {
+    const techD = userTechD || doctors[3] || {
       _id: new mongoose.Types.ObjectId(),
       fullName: 'Rohan Shinde (Bio-Engineer)',
       phone: '9822119988',
@@ -325,13 +332,26 @@ export const listProviderFieldVisits = async (
 
   // Provider isolation: non-admin can ONLY view visits assigned to them
   if (userRole !== 'admin' && userRole !== 'super_admin') {
-    query.providerId = new mongoose.Types.ObjectId(providerUserId);
+    const userDoc = await User.findById(providerUserId).lean();
+    const phoneVariants = getPhoneVariants(userDoc?.phone);
+    const providerOr: any[] = [{ providerId: new mongoose.Types.ObjectId(providerUserId) }];
+    if (phoneVariants.length > 0) {
+      providerOr.push({ providerPhone: { $in: phoneVariants } });
+    }
+    query.$or = providerOr;
+    query.hiddenFromCaregiver = { $ne: true };
+    // Non-admin caregivers cannot view visits they have rejected in their active queues
+    query.status = { $ne: 'rejected' };
   } else if (filters.search && mongoose.Types.ObjectId.isValid(filters.search)) {
     query.providerId = new mongoose.Types.ObjectId(filters.search);
   }
 
   if (filters.status && filters.status !== 'all') {
-    query.status = filters.status;
+    if (userRole !== 'admin' && userRole !== 'super_admin' && filters.status === 'rejected') {
+      query.status = '__none__';
+    } else {
+      query.status = filters.status;
+    }
   }
 
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -339,7 +359,7 @@ export const listProviderFieldVisits = async (
     query.scheduledDate = todayStr;
   } else if (filters.date === 'upcoming') {
     query.scheduledDate = { $gte: todayStr };
-    query.status = { $nin: ['completed', 'cancelled'] };
+    query.status = { $nin: ['completed', 'cancelled', 'rejected'] };
   } else if (filters.date === 'completed') {
     query.status = 'completed';
   } else if (filters.date && /^\d{4}-\d{2}-\d{2}$/.test(filters.date)) {
@@ -347,12 +367,12 @@ export const listProviderFieldVisits = async (
   }
 
   const page = Math.max(1, filters.page || 1);
-  const limit = Math.max(1, Math.min(50, filters.limit || 20));
+  const limit = Math.max(1, Math.min(100, filters.limit || 100));
   const skip = (page - 1) * limit;
 
   const [total, visits] = await Promise.all([
     FieldVisit.countDocuments(query),
-    FieldVisit.find(query).sort({ scheduledDate: 1, timeSlot: 1 }).skip(skip).limit(limit),
+    FieldVisit.find(query).sort({ scheduledDate: -1, timeSlot: -1 }).skip(skip).limit(limit),
   ]);
 
   // Enrich with canonical PatientProfile address where available
@@ -394,7 +414,7 @@ export const listProviderFieldVisits = async (
 
 export const getFieldVisitById = async (
   visitId: string,
-  user: { _id: mongoose.Types.ObjectId; role: string }
+  user: { _id: mongoose.Types.ObjectId; role: string; phone?: string }
 ): Promise<IFieldVisit> => {
   const visit = await FieldVisit.findById(visitId);
   if (!visit) {
@@ -402,13 +422,24 @@ export const getFieldVisitById = async (
   }
 
   // Strict tenant / ownership isolation
-  const isAssignedProvider = visit.providerId.toString() === user._id.toString();
+  const userDoc = await User.findById(user._id).lean();
+  const phoneVariants = getPhoneVariants(user.phone || (userDoc as any)?.phone);
+  const isAssignedProvider =
+    (visit.providerId && visit.providerId.toString() === user._id.toString()) ||
+    (visit.providerPhone && phoneVariants.includes(visit.providerPhone));
   const isAdmin = ['admin', 'super_admin'].includes(user.role);
   const isLinkedHospital = visit.hospitalId && visit.hospitalId.toString() === user._id.toString();
-  const isPatient = visit.patientId && visit.patientId.toString() === user._id.toString();
+  const isPatient =
+    (visit.patientId && visit.patientId.toString() === user._id.toString()) ||
+    (visit.patientDetails?.phone && phoneVariants.includes(visit.patientDetails.phone));
 
   if (!isAssignedProvider && !isAdmin && !isLinkedHospital && !isPatient) {
     throw new AppError('Forbidden: You do not have authorization to view this field visit', 403);
+  }
+
+  // Prevent rejected caregiver from continuing to see sensitive patient details through active-assignment APIs
+  if (isAssignedProvider && (visit.status === 'rejected' || visit.assignmentStatus === 'rejected') && !isAdmin) {
+    throw new AppError('Forbidden: This visit assignment was rejected. Patient details are no longer accessible.', 403);
   }
 
   // Canonical address enrichment
@@ -460,6 +491,10 @@ export const updateFieldVisitStatus = async (
   // Record specific operational timestamps
   if (newStatus === 'accepted') {
     visit.timestamps.acceptedAt = now;
+    visit.assignmentStatus = 'accepted';
+  } else if (newStatus === 'rejected') {
+    visit.timestamps.rejectedAt = now;
+    visit.assignmentStatus = 'rejected';
   } else if (newStatus === 'en_route') {
     visit.timestamps.enRouteAt = now;
   } else if (newStatus === 'arrived') {
@@ -544,6 +579,341 @@ export const updateFieldVisitStatus = async (
         metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
       }).catch((err) => console.warn('[Notification Error]', err.message));
     }
+  }
+
+  return visit;
+};
+
+/**
+ * Phase 3: Caregiver/Nurse Assignment Acceptance
+ * Allows the assigned caregiver to accept a pending visit assignment.
+ * - Enforces role authorization (patients cannot accept; only assigned caregiver or admin).
+ * - Enforces active caregiver status.
+ * - Enforces eligibility (cannot accept cancelled, completed, failed, or already rejected visits).
+ * - Detects schedule conflicts with caregiver's other active visits.
+ * - Idempotent: repeated acceptances return current accepted visit without duplication.
+ * - Records decision timestamp, updates status to 'accepted', logs audit and dispatches notifications.
+ */
+export const acceptFieldVisitAssignment = async (
+  visitId: string,
+  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string; phone?: string }
+): Promise<IFieldVisit> => {
+  if (!mongoose.Types.ObjectId.isValid(visitId)) {
+    throw new AppError('Invalid field visit ID', 400);
+  }
+
+  // 1. Authorization check: Patients cannot accept caregiver assignments
+  if (user.role === 'patient') {
+    throw new AppError('Forbidden: Patients cannot accept or reject caregiver assignments', 403);
+  }
+
+  const visit = await FieldVisit.findById(visitId);
+  if (!visit) {
+    throw new AppError(`Field visit '${visitId}' not found`, 404);
+  }
+
+  const userDoc = await User.findById(user._id).lean();
+  const phoneVariants = getPhoneVariants(user.phone || (userDoc as any)?.phone);
+  const isAssignedProvider =
+    (visit.providerId && visit.providerId.toString() === user._id.toString()) ||
+    (visit.providerPhone && phoneVariants.includes(visit.providerPhone));
+  const isAdmin = ['admin', 'super_admin'].includes(user.role);
+
+  if (!isAssignedProvider && !isAdmin) {
+    throw new AppError('Forbidden: You are not authorized to accept this visit because it is not assigned to you', 403);
+  }
+
+  // 2. Caregiver active status check
+  if (userDoc && (userDoc as any).status !== 'active') {
+    throw new AppError('Your caregiver account is inactive or pending verification. Only active caregivers can accept visits.', 403);
+  }
+
+  // 3. Idempotency: If already accepted by this caregiver, return existing accepted visit
+  if (visit.status === 'accepted' && visit.assignmentStatus === 'accepted') {
+    return visit;
+  }
+
+  // 4. Eligibility check: Cannot accept cancelled, completed, failed, or rejected visits
+  if (visit.status === 'cancelled') {
+    throw new AppError('Cannot accept a visit that has been cancelled', 400);
+  }
+  if (visit.status === 'completed') {
+    throw new AppError('Cannot accept a visit that has already been completed', 400);
+  }
+  if (visit.status === 'failed') {
+    throw new AppError('Cannot accept a visit that has failed. It must be reassigned first.', 400);
+  }
+  if (visit.status === 'rejected') {
+    throw new AppError('Cannot accept an assignment that has already been rejected. A new valid assignment must be explicitly created by an administrator.', 400);
+  }
+  if (visit.status !== 'assigned') {
+    throw new AppError(`Cannot accept visit in status '${visit.status}'. Only pending assignments can be accepted.`, 400);
+  }
+
+  // 5. Schedule Conflict Detection
+  const targetProviderId = visit.providerId || user._id;
+  const conflictVisit = await FieldVisit.findOne({
+    providerId: targetProviderId,
+    _id: { $ne: visit._id },
+    scheduledDate: visit.scheduledDate,
+    timeSlot: visit.timeSlot,
+    status: { $in: ['accepted', 'en_route', 'arrived', 'in_progress'] },
+  });
+
+  if (conflictVisit) {
+    throw new AppError(
+      `Scheduling conflict: Caregiver already has an active visit (${conflictVisit.visitNumber}) scheduled on ${visit.scheduledDate} during ${visit.timeSlot}`,
+      409
+    );
+  }
+
+  // 6. Persist Acceptance
+  const now = new Date();
+  visit.status = 'accepted';
+  visit.assignmentStatus = 'accepted';
+  visit.replacementRequired = false;
+  visit.timestamps.acceptedAt = now;
+  visit.statusHistory.push({
+    status: 'accepted',
+    changedBy: user._id,
+    changedByRole: user.role,
+    changedByName: user.fullName,
+    timestamp: now,
+    notes: 'Caregiver accepted visit assignment',
+  });
+
+  await visit.save();
+
+  // 7. Audit Log
+  await AuditLog.create({
+    action: 'FIELD_VISIT_ASSIGNMENT_ACCEPTED',
+    category: 'field_operations',
+    actorId: user._id,
+    actorName: user.fullName,
+    actorRole: user.role,
+    targetType: 'FieldVisit',
+    targetId: visit._id.toString(),
+    details: {
+      visitNumber: visit.visitNumber,
+      providerId: visit.providerId,
+      providerName: visit.providerName,
+      scheduledDate: visit.scheduledDate,
+      timeSlot: visit.timeSlot,
+    },
+    severity: 'info',
+    timestamp: now,
+  });
+
+  // 8. Notifications
+  try {
+    if (visit.patientDetails?.phone) {
+      await NotificationLog.create({
+        recipientPhone: visit.patientDetails.phone,
+        recipientName: visit.patientDetails.fullName,
+        recipientRole: 'patient',
+        channel: 'in_app',
+        templateId: 'VISIT_ASSIGNMENT_ACCEPTED',
+        messageBody: `Visit Confirmed: Caregiver ${visit.providerName} has accepted your home visit #${visit.visitNumber} scheduled for ${visit.scheduledDate} (${visit.timeSlot}).`,
+        consentChecked: true,
+        status: 'delivered',
+        provider: 'in_app_system',
+        idempotencyKey: `notif_accept_${visit._id}_${now.getTime()}`,
+        isRead: false,
+        metadata: {
+          visitId: visit._id.toString(),
+          visitNumber: visit.visitNumber,
+          caregiverName: visit.providerName,
+        },
+      });
+    }
+
+    await NotificationLog.create({
+      recipientPhone: 'ADMIN_DESK',
+      recipientName: 'Clinical Desk Admin',
+      recipientRole: 'admin',
+      channel: 'in_app',
+      templateId: 'VISIT_ASSIGNMENT_ACCEPTED',
+      type: 'VISIT_ASSIGNMENT_ACCEPTED',
+      relatedEntityType: 'FieldVisit',
+      messageBody: `Caregiver Acceptance: ${visit.providerName} accepted visit #${visit.visitNumber} for patient ${visit.patientDetails?.fullName}.`,
+      consentChecked: true,
+      status: 'delivered',
+      provider: 'in_app_system',
+      idempotencyKey: `notif_admin_accept_${visit._id}_${now.getTime()}`,
+      isRead: false,
+      metadata: {
+        visitId: visit._id.toString(),
+        visitNumber: visit.visitNumber,
+        caregiverName: visit.providerName,
+      },
+    });
+  } catch (notifErr: any) {
+    console.warn('[acceptFieldVisitAssignment] Notification notice:', notifErr.message);
+  }
+
+  return visit;
+};
+
+/**
+ * Phase 3: Caregiver/Nurse Assignment Rejection
+ * Allows the assigned caregiver to reject a pending visit assignment with mandatory reason.
+ * - Enforces mandatory non-empty reason (min 3 chars).
+ * - Enforces role authorization (patients cannot reject; only assigned caregiver or admin).
+ * - Enforces eligibility (cannot reject completed/cancelled/in-progress visits).
+ * - Idempotent: repeated rejections with same reason return existing rejected visit.
+ * - Stores reason, caregiver identity, and timestamp.
+ * - Notifies Admin with rejected visit details and reason.
+ * - Does not alter visit schedule or delete record.
+ * - Locks out rejected caregiver from sensitive patient details in active queries.
+ */
+export const rejectFieldVisitAssignment = async (
+  visitId: string,
+  reason: string,
+  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string; phone?: string }
+): Promise<IFieldVisit> => {
+  if (!mongoose.Types.ObjectId.isValid(visitId)) {
+    throw new AppError('Invalid field visit ID', 400);
+  }
+
+  // 1. Mandatory rejection reason validation
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 3) {
+    throw new AppError('Please provide a valid rejection reason (at least 3 characters)', 400);
+  }
+  const cleanReason = reason.trim();
+
+  // 2. Authorization check: Patients cannot decide caregiver assignments
+  if (user.role === 'patient') {
+    throw new AppError('Forbidden: Patients cannot accept or reject caregiver assignments', 403);
+  }
+
+  const visit = await FieldVisit.findById(visitId);
+  if (!visit) {
+    throw new AppError(`Field visit '${visitId}' not found`, 404);
+  }
+
+  const userDoc = await User.findById(user._id).lean();
+  const phoneVariants = getPhoneVariants(user.phone || (userDoc as any)?.phone);
+  const isAssignedProvider =
+    (visit.providerId && visit.providerId.toString() === user._id.toString()) ||
+    (visit.providerPhone && phoneVariants.includes(visit.providerPhone));
+  const isAdmin = ['admin', 'super_admin'].includes(user.role);
+
+  if (!isAssignedProvider && !isAdmin) {
+    throw new AppError('Forbidden: You are not authorized to reject this visit because it is not assigned to you', 403);
+  }
+
+  // 3. Idempotency: If already rejected by this caregiver, return existing rejected visit
+  if (visit.status === 'rejected' && visit.assignmentStatus === 'rejected') {
+    return visit;
+  }
+
+  // 4. Eligibility check: Cannot reject completed, cancelled, or in-progress visits
+  if (visit.status === 'cancelled') {
+    throw new AppError('Cannot reject a visit that has been cancelled', 400);
+  }
+  if (visit.status === 'completed') {
+    throw new AppError('Cannot reject a visit that has already been completed', 400);
+  }
+  if (['en_route', 'arrived', 'in_progress'].includes(visit.status)) {
+    throw new AppError(`Cannot reject a visit that is already ${visit.status.replace('_', ' ')}. Please report an exception instead.`, 400);
+  }
+
+  // 5. Persist Rejection
+  const now = new Date();
+  visit.status = 'rejected';
+  visit.assignmentStatus = 'rejected';
+  visit.replacementRequired = true;
+  visit.timestamps.rejectedAt = now;
+  visit.assignmentRejection = {
+    reason: cleanReason,
+    rejectedAt: now,
+    rejectedBy: user._id,
+    rejectedByName: user.fullName,
+    rejectedByPhone: user.phone || (userDoc as any)?.phone,
+  };
+  visit.statusHistory.push({
+    status: 'rejected',
+    changedBy: user._id,
+    changedByRole: user.role,
+    changedByName: user.fullName,
+    timestamp: now,
+    reason: cleanReason,
+    notes: `Caregiver rejected assignment: ${cleanReason}`,
+  });
+
+  await visit.save();
+
+  // 6. Synchronize subscription caregiver if this caregiver was primary on subscription
+  if (visit.subscriptionId) {
+    try {
+      await CaregiverSubscription.updateOne(
+        { _id: visit.subscriptionId, assignedCaregiverId: user._id },
+        {
+          $unset: {
+            assignedCaregiverId: 1,
+            assignedCaregiverName: 1,
+            assignedCaregiverPhone: 1,
+          },
+        }
+      );
+    } catch (subErr: any) {
+      console.warn('[rejectFieldVisitAssignment] Subscription sync notice:', subErr.message);
+    }
+  }
+
+  // 7. Audit Log
+  await AuditLog.create({
+    action: 'FIELD_VISIT_ASSIGNMENT_REJECTED',
+    category: 'field_operations',
+    actorId: user._id,
+    actorName: user.fullName,
+    actorRole: user.role,
+    targetType: 'FieldVisit',
+    targetId: visit._id.toString(),
+    details: {
+      visitNumber: visit.visitNumber,
+      providerId: visit.providerId,
+      providerName: visit.providerName,
+      scheduledDate: visit.scheduledDate,
+      timeSlot: visit.timeSlot,
+      reason: cleanReason,
+      replacementRequired: true,
+    },
+    severity: 'warning',
+    timestamp: now,
+  });
+
+  // 8. Dispatch Authoritative Notification to Admin
+  try {
+    await NotificationLog.create({
+      recipientPhone: 'ADMIN_DESK',
+      recipientName: 'Clinical Operations Admin',
+      recipientRole: 'admin',
+      channel: 'in_app',
+      templateId: 'VISIT_ASSIGNMENT_REJECTED',
+      type: 'VISIT_ASSIGNMENT_REJECTED',
+      relatedEntityType: 'FieldVisit',
+      messageBody: `Assignment Rejected: Caregiver ${visit.providerName} rejected visit #${visit.visitNumber} for patient ${visit.patientDetails?.fullName}. Reason: "${cleanReason}". Immediate replacement caregiver assignment required.`,
+      consentChecked: true,
+      status: 'delivered',
+      provider: 'in_app_system',
+      idempotencyKey: `notif_admin_reject_${visit._id}_${now.getTime()}`,
+      isRead: false,
+      metadata: {
+        visitId: visit._id.toString(),
+        visitNumber: visit.visitNumber,
+        providerId: visit.providerId.toString(),
+        providerName: visit.providerName,
+        patientName: visit.patientDetails?.fullName,
+        scheduledDate: visit.scheduledDate,
+        timeSlot: visit.timeSlot,
+        reason: cleanReason,
+        rejectedAt: now,
+        replacementRequired: true,
+      },
+    });
+  } catch (notifErr: any) {
+    console.warn('[rejectFieldVisitAssignment] Notification notice:', notifErr.message);
   }
 
   return visit;
@@ -1023,6 +1393,73 @@ export const adminSoftDeleteFieldVisitClinicalDoc = async (
   return visit;
 };
 
+/**
+ * Phase 1: Allow assigned caregiver to hide a visit entry from their own interface.
+ * Critical Rule: Does NOT cancel, reschedule, or modify confirmed visit status or schedule.
+ */
+export const hideProviderFieldVisit = async (
+  visitId: string,
+  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string },
+  reason?: string
+): Promise<{ success: boolean; message: string; visitId: string; visitUnchanged: boolean; hiddenFromCaregiver: boolean }> => {
+  if (!mongoose.Types.ObjectId.isValid(visitId)) {
+    throw new AppError('Invalid field visit identifier', 400);
+  }
+
+  const visit = await FieldVisit.findById(visitId);
+  if (!visit) {
+    throw new AppError('Field visit not found', 404);
+  }
+
+  if (user.role !== 'admin' && user.role !== 'super_admin') {
+    const userDoc = await User.findById(user._id).lean();
+    const phoneVariants = getPhoneVariants((userDoc as any)?.phone);
+    const isAssigned =
+      (visit.providerId && visit.providerId.toString() === user._id.toString()) ||
+      (visit.providerPhone && phoneVariants.includes(visit.providerPhone));
+    if (!isAssigned) {
+      throw new AppError('Forbidden: Caregivers can only hide entries for their assigned visits', 403);
+    }
+
+    if (!['completed', 'cancelled', 'failed'].includes(visit.status)) {
+      throw new AppError('Only completed or past visits can be hidden from history', 400);
+    }
+  }
+
+  visit.hiddenFromCaregiver = true;
+  visit.hiddenFromCaregiverAt = new Date();
+  await visit.save();
+
+  await AuditLog.create({
+    action: 'FIELD_VISIT_HIDDEN_BY_CAREGIVER',
+    category: 'field_operations',
+    actorId: user._id,
+    actorName: user.fullName,
+    actorRole: user.role,
+    targetType: 'FieldVisit',
+    targetId: visit.visitNumber,
+    severity: 'info',
+    timestamp: new Date(),
+    details: {
+      visitId: visit._id.toString(),
+      visitNumber: visit.visitNumber,
+      status: visit.status,
+      scheduledDate: visit.scheduledDate,
+      timeSlot: visit.timeSlot,
+      visitScheduleUnchanged: true,
+      reason: reason || 'Hidden by caregiver from list',
+    },
+  }).catch(() => {});
+
+  return {
+    success: true,
+    message: 'Visit entry hidden from your caregiver interface. Confirmed visit schedule remains active.',
+    visitId: visit._id.toString(),
+    visitUnchanged: true,
+    hiddenFromCaregiver: true,
+  };
+};
+
 // -----------------------------------------------------------------------------
 // 5. Visit Exception & Cancellation Reporting
 // -----------------------------------------------------------------------------
@@ -1445,8 +1882,9 @@ export const listAdminFieldVisits = async (filters: {
     query.scheduledDate = filters.date;
   }
   if (filters.requiresClinicalDoc) {
-    // Only visits that have at least one clinical documentation field populated
+    // Only visits that have active clinical documentation (not soft-deleted)
     query['clinicalDocumentation.signedAt'] = { $exists: true };
+    query['clinicalDocumentation.isDeleted'] = { $ne: true };
   }
   if (filters.search?.trim()) {
     const s = filters.search.trim();
@@ -1493,6 +1931,9 @@ export const getAdminFieldOperationsStats = async () => {
     overdueCount,
     exceptionsCount,
     pendingInstallationsCount,
+    pendingAcceptanceCount,
+    acceptedCount,
+    rejectedCount,
   ] = await Promise.all([
     FieldVisit.countDocuments(),
     FieldVisit.countDocuments({ scheduledDate: todayStr }),
@@ -1501,6 +1942,9 @@ export const getAdminFieldOperationsStats = async () => {
     FieldVisit.countDocuments({ scheduledDate: { $lt: todayStr }, status: { $nin: ['completed', 'cancelled'] } }),
     FieldVisit.countDocuments({ status: 'failed' }),
     FieldVisit.countDocuments({ visitType: 'equipment_installation', status: { $ne: 'completed' } }),
+    FieldVisit.countDocuments({ status: 'assigned' }),
+    FieldVisit.countDocuments({ status: 'accepted' }),
+    FieldVisit.countDocuments({ status: 'rejected' }),
   ]);
 
   return {
@@ -1511,6 +1955,9 @@ export const getAdminFieldOperationsStats = async () => {
     overdueCount,
     exceptionsCount,
     pendingInstallationsCount,
+    pendingAcceptanceCount,
+    acceptedCount,
+    rejectedCount,
   };
 };
 
@@ -1522,7 +1969,13 @@ export const assignOrReassignFieldVisitProvider = async (
   scheduledDate?: string,
   timeSlot?: string
 ): Promise<IFieldVisit> => {
-  const visit = await FieldVisit.findById(visitId);
+  let visit = null;
+  if (mongoose.Types.ObjectId.isValid(visitId)) {
+    visit = await FieldVisit.findById(visitId);
+  }
+  if (!visit) {
+    visit = await FieldVisit.findOne({ visitNumber: visitId });
+  }
   if (!visit) {
     throw new AppError(`Field visit '${visitId}' not found`, 404);
   }
@@ -1531,13 +1984,22 @@ export const assignOrReassignFieldVisitProvider = async (
     throw new AppError('Cannot reassign a visit that has been cancelled', 400);
   }
 
-  const provider = await User.findById(newProviderId);
+  let provider = null;
+  if (mongoose.Types.ObjectId.isValid(newProviderId)) {
+    provider = await User.findById(newProviderId);
+  }
+  if (!provider) {
+    const cleanPhone = String(newProviderId).replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length === 10) {
+      provider = await User.findOne({ phone: cleanPhone });
+    }
+  }
   if (!provider) {
     throw new AppError(`Provider '${newProviderId}' not found`, 404);
   }
 
   if (provider.status !== 'active') {
-    throw new AppError(`Selected caregiver '${provider.fullName}' is ${provider.status || 'inactive'}. Please select an active caregiver.`, 400);
+    throw new AppError(`The selected caregiver is no longer available (${provider.fullName} is ${provider.status || 'inactive'}). Please select an active caregiver.`, 400);
   }
 
   if (!['caregiver', 'nurse', 'professional'].includes(provider.role)) {
@@ -1547,18 +2009,23 @@ export const assignOrReassignFieldVisitProvider = async (
   const targetDate = (scheduledDate && scheduledDate.trim()) || visit.scheduledDate;
   const targetTimeSlot = (timeSlot && timeSlot.trim()) || visit.timeSlot;
 
-  // Conflict check for target caregiver
-  const conflictVisit = await FieldVisit.findOne({
+  // Conflict check for target caregiver (normalizing AM/PM variations)
+  const normalizeSlot = (s: string) => (s || '').replace(/\s*(AM|PM)\b/gi, '').trim().toLowerCase();
+  const existingVisits = await FieldVisit.find({
     providerId: provider._id,
     _id: { $ne: visit._id },
     scheduledDate: targetDate,
-    timeSlot: targetTimeSlot,
     status: { $in: ['assigned', 'accepted', 'en_route', 'arrived', 'in_progress'] },
+  });
+
+  const conflictVisit = existingVisits.find((ev) => {
+    if (ev.timeSlot === targetTimeSlot) return true;
+    return normalizeSlot(ev.timeSlot) === normalizeSlot(targetTimeSlot);
   });
 
   if (conflictVisit) {
     throw new AppError(
-      `Scheduling conflict: Caregiver ${provider.fullName} already has an active visit (${conflictVisit.visitNumber}) scheduled on ${targetDate} during ${targetTimeSlot}`,
+      `This caregiver has a scheduling conflict: Caregiver ${provider.fullName} already has an active visit (${conflictVisit.visitNumber}) scheduled on ${targetDate} during ${conflictVisit.timeSlot}`,
       409
     );
   }
@@ -1571,22 +2038,27 @@ export const assignOrReassignFieldVisitProvider = async (
   visit.providerName = provider.fullName;
   visit.providerPhone = provider.phone;
   visit.providerRole = provider.role === 'caregiver' ? 'Palliative Caregiver' : 'Registered Nurse';
-  if (scheduledDate) visit.scheduledDate = scheduledDate.trim();
-  if (timeSlot) visit.timeSlot = timeSlot.trim();
+  if (scheduledDate && scheduledDate.trim()) visit.scheduledDate = scheduledDate.trim();
+  if (timeSlot && timeSlot.trim()) visit.timeSlot = timeSlot.trim();
 
-  // Reset status to 'assigned' if it was cancelled or failed
-  if (['failed', 'cancelled'].includes(visit.status)) {
-    visit.status = 'assigned';
-  }
-
+  // Reset status to 'assigned' and assignmentStatus to 'pending' on assignment / reassignment
+  visit.status = 'assigned';
+  visit.assignmentStatus = 'pending';
+  visit.replacementRequired = false;
+  visit.assignmentRejection = undefined;
   const now = new Date();
+  visit.timestamps.assignedAt = now;
+  visit.timestamps.acceptedAt = undefined;
+  visit.timestamps.rejectedAt = undefined;
+
   visit.statusHistory.push({
     status: visit.status,
     changedBy: operatorUser._id,
     changedByRole: operatorUser.role,
     changedByName: operatorUser.fullName,
     timestamp: now,
-    notes: `Reassigned from ${prevProviderName} to ${provider.fullName}. Note: ${notes || 'Staff re-allocation'}`,
+    reason: notes || 'Staff re-allocation',
+    notes: `Reassigned from ${prevProviderName} to ${provider.fullName}. Reason: ${notes || 'Staff re-allocation'}`,
   });
 
   await visit.save();
@@ -1615,10 +2087,16 @@ export const assignOrReassignFieldVisitProvider = async (
     targetType: 'FieldVisit',
     targetId: visit._id.toString(),
     details: {
+      visitId: visit._id.toString(),
       visitNumber: visit.visitNumber,
       previousProvider: prevProviderName,
+      previousProviderId: prevProviderId ? prevProviderId.toString() : undefined,
       newProvider: provider.fullName,
+      newProviderId: provider._id.toString(),
+      reason: notes || 'Caregiver reassignment',
       notes,
+      scheduledDate: visit.scheduledDate,
+      timeSlot: visit.timeSlot,
     },
     severity: 'info',
     timestamp: now,
@@ -1633,6 +2111,8 @@ export const assignOrReassignFieldVisitProvider = async (
         recipientRole: 'caregiver',
         channel: 'in_app',
         templateId: 'CAREGIVER_REASSIGNED_REMOVED',
+        type: 'CAREGIVER_REASSIGNED_REMOVED',
+        relatedEntityType: 'FieldVisit',
         messageBody: `Notice: Visit ${visit.visitNumber} scheduled for ${targetDate} (${targetTimeSlot}) has been reassigned to another clinician.`,
         consentChecked: true,
         status: 'delivered',
@@ -1653,6 +2133,8 @@ export const assignOrReassignFieldVisitProvider = async (
         recipientRole: 'caregiver',
         channel: 'in_app',
         templateId: 'CAREGIVER_ASSIGNED_NEW',
+        type: 'CAREGIVER_ASSIGNED_NEW',
+        relatedEntityType: 'FieldVisit',
         messageBody: `New Visit Assigned: You have been assigned to visit ${visit.visitNumber} for patient ${visit.patientDetails?.fullName} on ${targetDate} (${targetTimeSlot}).`,
         consentChecked: true,
         status: 'delivered',
@@ -2289,6 +2771,7 @@ export const scheduleVisitForSubscription = async (
     visitNumber,
     visitType: params.visitType,
     status: 'assigned',
+    assignmentStatus: 'pending',
     providerId: caregiver._id,
     providerName: caregiver.fullName,
     providerRole: caregiver.role === 'caregiver' ? 'Palliative Caregiver' : 'Registered Nurse',
@@ -2393,6 +2876,33 @@ export const scheduleVisitForSubscription = async (
     });
   } catch (notifErr) {
     console.warn('[VisitSchedule] Patient notification warning:', notifErr);
+  }
+
+  // 11. Dispatch Caregiver Assignment Notification (Pending Acceptance)
+  try {
+    if (caregiver.phone) {
+      await NotificationLog.create({
+        recipientPhone: caregiver.phone,
+        recipientName: caregiver.fullName,
+        recipientRole: 'caregiver',
+        channel: 'in_app',
+        templateId: 'CAREGIVER_ASSIGNED_NEW',
+        messageBody: `New Visit Assigned: You have been assigned to visit ${visit.visitNumber} for patient ${visit.patientDetails?.fullName} on ${visit.scheduledDate} (${visit.timeSlot}). Please review and accept or reject.`,
+        consentChecked: true,
+        status: 'delivered',
+        provider: 'in_app_system',
+        idempotencyKey: `notif_visit_sched_caregiver_${visit.visitNumber}`,
+        isRead: false,
+        metadata: {
+          visitId: visit._id.toString(),
+          visitNumber: visit.visitNumber,
+          targetDate: visit.scheduledDate,
+          targetTimeSlot: visit.timeSlot,
+        },
+      });
+    }
+  } catch (cgNotifErr: any) {
+    console.warn('[VisitSchedule] Caregiver notification warning:', cgNotifErr?.message);
   }
 
   return { visit, subscription: sub };

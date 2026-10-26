@@ -438,5 +438,28 @@ describe('Milestone A — Subscription Lifecycle Actions & State Validation Test
       assert.equal(res.status, 200);
       assert.ok(res.body.data.some((s: any) => s.subscriptionNumber === testSubNumber));
     });
+
+    it('should PERMANENTLY DELETE subscription from database when permanent confirmation is supplied', async () => {
+      const res = await request(app)
+        .delete(`/api/v1/admin/caregiver-subscriptions/${testSubId}?permanent=true`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ permanent: true, reason: 'Administrative test cleanup of subscription' });
+
+      assert.equal(res.status, 200);
+      assert.equal(res.body.success, true);
+      assert.match(res.body.message, /permanently deleted/i);
+
+      // Verify subscription is gone from MongoDB
+      const doc = await CaregiverSubscription.findById(testSubId);
+      assert.equal(doc, null, 'Subscription document must be permanently removed from MongoDB');
+
+      // Verify audit trail logged the permanent deletion
+      const audit = await AuditLog.findOne({
+        action: 'CAREGIVER_SUBSCRIPTION_PERMANENTLY_DELETED',
+        targetId: testSubNumber,
+      });
+      assert.ok(audit, 'Permanent deletion audit log must be recorded');
+    });
   });
 });
+

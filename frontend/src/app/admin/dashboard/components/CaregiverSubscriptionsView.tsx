@@ -35,7 +35,10 @@ import {
   Thermometer,
   Heart,
   ChevronRight,
+  ChevronLeft,
   Shield,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { adminApi } from '@/lib/api';
 
@@ -85,6 +88,12 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [selectedSubForArchive, setSelectedSubForArchive] = useState<any>(null);
   const [archiveReason, setArchiveReason] = useState('');
+
+  // Permanent Delete Modal State
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [selectedSubForDelete, setSelectedSubForDelete] = useState<any>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [confirmDeleteCheckbox, setConfirmDeleteCheckbox] = useState(false);
 
   // Audit History & Timeline State
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -143,16 +152,17 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
     features: 'Daily 8-hour shift, vitals monitoring, medication assistance',
   });
 
-  const loadData = async () => {
+  const loadData = async (pageOverride?: number) => {
     setIsLoading(true);
     setError(null);
     try {
       if (subTab === 'subscriptions') {
+        const targetPage = typeof pageOverride === 'number' ? pageOverride : subPagination.page;
         const [res, profRes, plansRes, patientsRes] = await Promise.all([
           adminApi.getCaregiverSubscriptions({
             status: statusFilter,
             search: search.trim() || undefined,
-            page: subPagination.page,
+            page: targetPage,
             limit: 10,
           }),
           adminApi.getHealthcareProfessionals({ limit: 50 }),
@@ -160,7 +170,9 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
           adminApi.getUsers({ role: 'patient', limit: 100 }),
         ]);
         setSubscriptions(res.data);
-        setSubPagination(res.pagination);
+        if (res.pagination) {
+          setSubPagination(res.pagination);
+        }
         setCaregiversList(profRes.data || []);
         setPlans(plansRes.data || []);
         setPatientsList(patientsRes.data || []);
@@ -176,7 +188,7 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
   };
 
   useEffect(() => {
-    loadData();
+    loadData(1);
   }, [subTab, statusFilter]);
 
   const matchingRegisteredPatient = search.trim()
@@ -236,7 +248,7 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
         emergencyContactRelation: '',
         paymentMethod: 'online',
       });
-      loadData();
+      loadData(1);
     } catch (err: any) {
       setError(err.message || 'Failed to activate caregiver subscription');
     } finally {
@@ -560,6 +572,40 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
     }
   };
 
+  const handleDeleteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSubForDelete) return;
+
+    setActionLoading(true);
+    setError(null);
+    try {
+      const res = await adminApi.deleteCaregiverSubscription(
+        selectedSubForDelete._id || selectedSubForDelete.id,
+        deleteReason.trim() || undefined
+      );
+      setSuccessMsg(res.message || `Subscription ${selectedSubForDelete.subscriptionNumber} was permanently deleted.`);
+      setShowDeleteModal(false);
+      setSelectedSubForDelete(null);
+      setDeleteReason('');
+      setConfirmDeleteCheckbox(false);
+      const targetPage =
+        subscriptions.length === 1 && subPagination.page > 1
+          ? subPagination.page - 1
+          : subPagination.page;
+      await loadData(targetPage);
+    } catch (err: any) {
+      setError(err.message || 'Failed to permanently delete subscription');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Computed KPI Metrics for Top Summary Bar
+  const activeSubs = subscriptions.filter((s) => s.status === 'active' && !s.isArchived);
+  const totalVisitsRemaining = activeSubs.reduce((acc, s) => acc + (s.visitsRemaining || 0), 0);
+  const totalAssignedStaff = activeSubs.filter((s) => s.assignedCaregiverName || s.assignedCaregiverId).length;
+  const totalActiveMRR = activeSubs.reduce((acc, s) => acc + (s.pricing?.customerPrice || 0), 0);
+
   return (
     <div className="space-y-6">
       {/* Alert Notices */}
@@ -576,25 +622,41 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
         </div>
       )}
 
-      {/* Navigation Sub-Tabs */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+      {/* Navigation Sub-Tabs & Actions Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4.5 rounded-2xl border border-slate-200/80 shadow-xs">
         <div className="flex items-center gap-2">
-          <div className="flex bg-slate-100 p-1 rounded-xl">
+          <div className="flex bg-slate-100/90 p-1 rounded-xl border border-slate-200/60">
             <button
               onClick={() => setSubTab('subscriptions')}
-              className={`px-4 py-2 rounded-lg text-xs font-semibold transition ${
-                subTab === 'subscriptions' ? 'bg-white text-navy shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition ${
+                subTab === 'subscriptions'
+                  ? 'bg-white text-navy shadow-xs border border-slate-200/50'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Patient Subscriptions & Daily Care
+              <HeartPulse size={14} className={subTab === 'subscriptions' ? 'text-teal-600' : 'text-slate-400'} />
+              <span>Patient Subscriptions &amp; Daily Care</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                subTab === 'subscriptions' ? 'bg-teal-50 text-teal-700 border border-teal-200' : 'bg-slate-200/70 text-slate-600'
+              }`}>
+                {activeSubs.length} Active
+              </span>
             </button>
             <button
               onClick={() => setSubTab('plans')}
-              className={`px-4 py-2 rounded-lg text-xs font-semibold transition ${
-                subTab === 'plans' ? 'bg-white text-navy shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition ${
+                subTab === 'plans'
+                  ? 'bg-white text-navy shadow-xs border border-slate-200/50'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Subscription Plans & Packages
+              <Layers size={14} className={subTab === 'plans' ? 'text-purple-600' : 'text-slate-400'} />
+              <span>Subscription Plans &amp; Packages</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                subTab === 'plans' ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'bg-slate-200/70 text-slate-600'
+              }`}>
+                {plans.length}
+              </span>
             </button>
           </div>
         </div>
@@ -602,7 +664,7 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => loadData()}
-            className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+            className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition"
             title="Refresh subscriptions"
           >
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
@@ -610,29 +672,93 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
           {subTab === 'subscriptions' && (
             <button
               onClick={() => setShowActivateModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-semibold shadow-sm transition"
+              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm shadow-teal-600/20 transition transform active:scale-98"
             >
-              <Plus size={14} />
+              <Plus size={15} />
               <span>Activate Patient Subscription</span>
             </button>
           )}
           {subTab === 'plans' && (
             <button
               onClick={() => setShowCreatePlanModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-semibold shadow-sm transition"
+              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm shadow-purple-600/20 transition"
             >
-              <Plus size={14} />
+              <Plus size={15} />
               <span>Create Care Package</span>
             </button>
           )}
         </div>
       </div>
 
+      {/* KPI Summary Cards */}
+      {subTab === 'subscriptions' && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white p-4.5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Active Subscriptions</div>
+              <div className="text-2xl font-black text-slate-900 mt-1 flex items-center gap-2">
+                <span>{activeSubs.length}</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              </div>
+              <div className="text-[11px] text-slate-500 mt-0.5">
+                {subPagination.total} total enrolled records in DB
+              </div>
+            </div>
+            <div className="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center border border-teal-100 shadow-2xs">
+              <HeartPulse size={22} />
+            </div>
+          </div>
+
+          <div className="bg-white p-4.5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Scheduled Visits Left</div>
+              <div className="text-2xl font-black text-slate-900 mt-1">{totalVisitsRemaining}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">
+                Remaining bedside care visits
+              </div>
+            </div>
+            <div className="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100 shadow-2xs">
+              <Calendar size={22} />
+            </div>
+          </div>
+
+          <div className="bg-white p-4.5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Staff Coverage</div>
+              <div className="text-2xl font-black text-slate-900 mt-1">
+                {activeSubs.length > 0 ? `${Math.round((totalAssignedStaff / activeSubs.length) * 100)}%` : '100%'}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-0.5">
+                {totalAssignedStaff} of {activeSubs.length} active assigned
+              </div>
+            </div>
+            <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shadow-2xs">
+              <UserCheck size={22} />
+            </div>
+          </div>
+
+          <div className="bg-white p-4.5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+            <div>
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Monthly Care Volume</div>
+              <div className="text-2xl font-black text-slate-900 mt-1">
+                ₹{totalActiveMRR.toLocaleString('en-IN')}
+              </div>
+              <div className="text-[11px] text-emerald-600 font-semibold mt-0.5">
+                Active monthly subscription value
+              </div>
+            </div>
+            <div className="w-11 h-11 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100 shadow-2xs">
+              <DollarSign size={22} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Informational Guidance Banner */}
       {subTab === 'subscriptions' && (
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between text-xs text-slate-500 bg-blue-50/70 border border-blue-100 rounded-xl px-4 py-2.5 mb-2 gap-2">
-          <div className="flex items-center gap-2">
-            <HeartPulse size={15} className="text-primary shrink-0" />
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between text-xs text-slate-600 bg-blue-50/80 border border-blue-100/90 rounded-2xl px-4 py-3 gap-2 shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <HeartPulse size={16} className="text-primary shrink-0" />
             <span>
               Tracking active bedside caregiver plans. Newly registered mobile patients appear in{' '}
               <strong className="text-slate-800">Accounts &amp; Users</strong> until an active caregiver subscription is enrolled.
@@ -641,9 +767,10 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
           {onNavigateToAccounts && (
             <button
               onClick={() => onNavigateToAccounts()}
-              className="text-primary font-semibold hover:underline shrink-0 text-xs text-left"
+              className="text-primary font-bold hover:underline shrink-0 text-xs text-left inline-flex items-center gap-1"
             >
-              Open Accounts &amp; Users →
+              <span>Open Accounts &amp; Users</span>
+              <ArrowRight size={12} />
             </button>
           )}
         </div>
@@ -651,10 +778,10 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
 
       {/* Main Sub-Tab Views */}
       {subTab === 'subscriptions' ? (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           {/* Filters Bar */}
-          <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
-            <div className="flex items-center gap-2 flex-1 min-w-[260px]">
+          <div className="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 bg-slate-50/70">
+            <div className="flex items-center gap-2 flex-1 min-w-[280px] bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-2xs focus-within:ring-2 focus-within:ring-teal-500/20 focus-within:border-teal-500 transition">
               <Search size={16} className="text-slate-400 shrink-0" />
               <input
                 type="text"
@@ -663,42 +790,60 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    setSubPagination((p) => ({ ...p, page: 1 }));
-                    setTimeout(() => loadData(), 0);
+                    loadData(1);
                   }
                 }}
-                className="bg-transparent text-xs w-full focus:outline-none text-slate-800 placeholder-slate-400"
+                className="bg-transparent text-xs w-full focus:outline-none text-slate-800 placeholder-slate-400 font-medium"
               />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch('');
+                    setTimeout(() => loadData(1), 0);
+                  }}
+                  className="text-slate-400 hover:text-slate-600 p-0.5"
+                >
+                  <X size={14} />
+                </button>
+              )}
             </div>
-            <select
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setSubPagination((p) => ({ ...p, page: 1 }));
-              }}
-              className="text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none"
-            >
-              <option value="all">All Statuses</option>
-              <option value="active">Active</option>
-              <option value="suspended">Suspended / Paused</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
-              <option value="archived">Compliance Archived</option>
-            </select>
+
+            <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+                <Filter size={14} className="text-slate-400" />
+                <span>Filter Status:</span>
+              </div>
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setSubPagination((p) => ({ ...p, page: 1 }));
+                }}
+                className="text-xs bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-700 font-semibold focus:outline-none focus:ring-2 focus:ring-teal-500/20 shadow-2xs"
+              >
+                <option value="all">All Statuses ({subPagination.total})</option>
+                <option value="active">Active Plans</option>
+                <option value="suspended">Suspended / Paused</option>
+                <option value="completed">Completed Care</option>
+                <option value="cancelled">Cancelled</option>
+                <option value="archived">Compliance Archived</option>
+              </select>
+            </div>
           </div>
 
           {/* Subscriptions Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-700 uppercase tracking-wider font-semibold border-b border-slate-100">
+          <div className="overflow-x-auto rounded-b-2xl">
+            <table className="w-full text-left text-xs min-w-[1150px]">
+              <thead className="bg-slate-50 text-slate-600 uppercase tracking-wider text-[11px] font-bold border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-5">Subscription # & Patient</th>
-                  <th className="py-3 px-5">Plan Package</th>
-                  <th className="py-3 px-5">Assigned Caregiver</th>
-                  <th className="py-3 px-5">Visits Balance</th>
-                  <th className="py-3 px-5">Financial Details</th>
-                  <th className="py-3 px-5">Status</th>
-                  <th className="py-3 px-5 text-right">Actions</th>
+                  <th className="py-3.5 px-5 w-[260px]">Subscription # &amp; Patient</th>
+                  <th className="py-3.5 px-5 w-[210px]">Plan Package</th>
+                  <th className="py-3.5 px-5 w-[180px]">Assigned Caregiver</th>
+                  <th className="py-3.5 px-5 w-[140px]">Visits Balance</th>
+                  <th className="py-3.5 px-5 w-[130px]">Financial Details</th>
+                  <th className="py-3.5 px-5 w-[110px]">Status</th>
+                  <th className="py-3.5 px-5 w-[220px] text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -809,221 +954,281 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
                         onClick={() => {
                           if (resolvedId) openPatientProfile(resolvedId);
                         }}
-                        className="hover:bg-teal-50/30 transition cursor-pointer group/row"
-                        title="Click to view verified patient profile & full details"
+                        className="hover:bg-teal-50/20 transition cursor-pointer group/row"
+                        title="Click row to view verified patient profile & full details"
                       >
-                        <td className="py-3.5 px-5">
-                          <div className="font-mono font-bold text-slate-900">{sub.subscriptionNumber}</div>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (resolvedId) openPatientProfile(resolvedId);
-                            }}
-                            className="font-semibold text-slate-900 hover:text-teal-700 hover:underline inline-flex items-center gap-1.5 transition text-left cursor-pointer group/btn"
-                            title="View verified patient details, subscriptions, visits, and clinical records"
-                          >
-                            <span>{sub.patientName}</span>
-                            <ExternalLink size={12} className="text-teal-600 opacity-60 group-hover/btn:opacity-100 transition shrink-0" />
-                          </button>
-                          <div className="text-[11px] text-slate-500">{sub.patientPhone}</div>
-                        </td>
-                        <td className="py-3.5 px-5">
-                          <div className="font-semibold text-slate-900 max-w-[200px] truncate">{sub.planTitle}</div>
-                          <div className="text-[11px] text-slate-500">
-                            {new Date(sub.startDate).toLocaleDateString()} - {new Date(sub.endDate).toLocaleDateString()}
+                        <td className="py-4 px-5">
+                          <div className="flex items-start gap-2.5">
+                            <div className="w-8 h-8 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 font-bold flex items-center justify-center shrink-0 text-xs shadow-2xs mt-0.5">
+                              {sub.patientName ? sub.patientName[0].toUpperCase() : 'P'}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono font-bold text-slate-900 text-xs tracking-tight">{sub.subscriptionNumber}</span>
+                                {sub.pricing?.paymentStatus === 'test_mode' && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    TEST
+                                  </span>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (resolvedId) openPatientProfile(resolvedId);
+                                }}
+                                className="font-semibold text-slate-900 hover:text-teal-700 inline-flex items-center gap-1 transition text-left cursor-pointer group/btn mt-0.5"
+                                title="View verified patient profile"
+                              >
+                                <span>{sub.patientName}</span>
+                                <ExternalLink size={11} className="text-teal-600 opacity-60 group-hover/btn:opacity-100 transition shrink-0" />
+                              </button>
+                              <div className="text-[11px] text-slate-500 font-mono mt-0.5 flex items-center gap-1">
+                                <Phone size={10} className="text-slate-400" />
+                                <span>{sub.patientPhone}</span>
+                              </div>
+                            </div>
                           </div>
                         </td>
-                        <td className="py-3.5 px-5">
+
+                        <td className="py-4 px-5">
+                          <div className="font-bold text-slate-900 leading-snug">{sub.planTitle}</div>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                              {sub.category || 'PALLIATIVE'}
+                            </span>
+                            {sub.planCode && (
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {sub.planCode}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
+                            <Calendar size={11} className="text-slate-400" />
+                            <span>{new Date(sub.startDate).toLocaleDateString()} - {new Date(sub.endDate).toLocaleDateString()}</span>
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-5">
                           {sub.assignedCaregiverName ? (
-                            <div className="flex items-center gap-1.5 text-slate-900 font-medium">
-                              <UserCheck size={14} className="text-teal-600" />
-                              <span>{sub.assignedCaregiverName}</span>
+                            <div className="space-y-1">
+                              <div className="inline-flex items-center gap-1.5 font-semibold text-slate-800 bg-teal-50/70 border border-teal-100 px-2.5 py-1 rounded-xl text-xs">
+                                <UserCheck size={13} className="text-teal-600 shrink-0" />
+                                <span className="truncate max-w-[140px]">{sub.assignedCaregiverName}</span>
+                              </div>
+                              {sub.carePlanNotes && (
+                                <p className="text-[11px] text-slate-500 line-clamp-1 italic max-w-[170px]" title={sub.carePlanNotes}>
+                                  "{sub.carePlanNotes}"
+                                </p>
+                              )}
                             </div>
                           ) : (
-                            <span className="text-rose-600 font-semibold bg-rose-50 px-2 py-0.5 rounded text-[11px]">
-                              Unassigned
-                            </span>
-                          )}
-                          {sub.carePlanNotes && (
-                            <p className="text-[11px] text-slate-500 mt-0.5 max-w-[180px] truncate">{sub.carePlanNotes}</p>
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                <AlertCircle size={12} />
+                                <span>Unassigned</span>
+                              </span>
+                              <p className="text-[10px] text-slate-400">Requires staff assignment</p>
+                            </div>
                           )}
                         </td>
-                        <td className="py-3.5 px-5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-slate-900 text-sm">
-                              {sub.visitsRemaining}
-                            </span>
-                            <span className="text-slate-400">/ {sub.totalVisitsIncluded} remaining</span>
+
+                        <td className="py-4 px-5">
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="font-extrabold text-slate-900 text-base">{sub.visitsRemaining}</span>
+                            <span className="text-slate-400 text-xs">/ {sub.totalVisitsIncluded} left</span>
                           </div>
-                          <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                          <div className="w-28 bg-slate-100 h-2 rounded-full overflow-hidden mt-1.5 border border-slate-200/60">
                             <div
-                              className="bg-teal-600 h-full rounded-full"
-                              style={{
-                                width: `${(sub.visitsCompleted / sub.totalVisitsIncluded) * 100}%`,
-                              }}
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                sub.visitsRemaining === 0 ? 'bg-slate-400' : 'bg-gradient-to-r from-teal-500 to-emerald-500'
+                              }`}
+                              style={{ width: `${Math.min(100, Math.max(0, (sub.visitsCompleted / (sub.totalVisitsIncluded || 1)) * 100))}%` }}
                             />
                           </div>
+                          <div className="text-[10px] text-slate-400 mt-1">
+                            {sub.visitsCompleted || 0} visits completed
+                          </div>
                         </td>
-                        <td className="py-3.5 px-5">
-                          <div className="font-bold text-slate-900">₹{sub.pricing?.customerPrice?.toLocaleString()}</div>
-                          <div className="text-[11px] text-slate-500">Payout: ₹{sub.pricing?.caregiverPayout?.toLocaleString()}</div>
+
+                        <td className="py-4 px-5">
+                          <div className="font-extrabold text-slate-900 text-sm">₹{sub.pricing?.customerPrice?.toLocaleString('en-IN') || '0'}</div>
+                          <div className="text-[11px] text-slate-500 mt-0.5">
+                            Payout: <span className="font-medium text-slate-700">₹{sub.pricing?.caregiverPayout?.toLocaleString('en-IN') || '0'}</span>
+                          </div>
                         </td>
-                        <td className="py-3.5 px-5">
+
+                        <td className="py-4 px-5">
                           {sub.isArchived ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
-                              <Archive size={11} />
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shadow-2xs">
+                              <Archive size={12} className="text-slate-500" />
                               <span>Archived</span>
                             </span>
                           ) : sub.status === 'active' ? (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                               <span>Active</span>
                             </span>
                           ) : sub.status === 'paused' || sub.status === 'suspended' ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                              <PauseCircle size={11} className="text-amber-700" />
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200 shadow-2xs">
+                              <PauseCircle size={12} className="text-amber-600" />
                               <span>Suspended</span>
                             </span>
                           ) : sub.status === 'completed' ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
-                              <CheckCircle2 size={11} />
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200 shadow-2xs">
+                              <CheckCircle2 size={12} className="text-blue-600" />
                               <span>Completed</span>
                             </span>
                           ) : sub.status === 'cancelled' ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
-                              <Ban size={11} />
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-rose-50 text-rose-800 border border-rose-200 shadow-2xs">
+                              <Ban size={12} className="text-rose-600" />
                               <span>Cancelled</span>
                             </span>
                           ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">
+                            <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
                               {sub.status}
                             </span>
                           )}
                         </td>
-                        <td className="py-3.5 px-5 text-right space-x-1.5 whitespace-nowrap">
-                          {!sub.isArchived && sub.status !== 'cancelled' && sub.status !== 'completed' && (
+
+                        <td className="py-4 px-5 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Primary Care Actions */}
+                            {!sub.isArchived && sub.status !== 'cancelled' && sub.status !== 'completed' && !sub.assignedCaregiverId && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedSubForAssign(sub);
+                                  setAssignCaregiverUserId('');
+                                  setAssignNotes(sub.carePlanNotes || '');
+                                  setShowAssignModal(true);
+                                }}
+                                className="px-2.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-lg text-xs shadow-xs transition flex items-center gap-1"
+                                title="Assign qualified caregiver"
+                              >
+                                <UserCheck size={12} />
+                                <span>Assign</span>
+                              </button>
+                            )}
+
+                            {sub.visitsRemaining > 0 && sub.status === 'active' && !sub.isArchived && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openScheduleModal(sub);
+                                }}
+                                className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg text-xs shadow-xs transition flex items-center gap-1"
+                                title="Schedule visits"
+                              >
+                                <Calendar size={12} />
+                                <span>Schedule</span>
+                              </button>
+                            )}
+
+                            {sub.visitsRemaining > 0 && sub.status === 'active' && !sub.isArchived && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedSubForVisit(sub);
+                                  setVisitNotes('');
+                                  setShowRecordVisitModal(true);
+                                }}
+                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs shadow-xs transition flex items-center gap-1"
+                                title="Record completed visit"
+                              >
+                                <Check size={12} />
+                                <span>Visit</span>
+                              </button>
+                            )}
+
+                            {sub.status === 'active' && !sub.isArchived && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedSubForSuspend(sub);
+                                  setSuspendReason('');
+                                  setShowSuspendModal(true);
+                                }}
+                                className="px-2 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-semibold rounded-lg text-xs transition"
+                                title="Pause / Suspend service"
+                              >
+                                Suspend
+                              </button>
+                            )}
+
+                            {(sub.status === 'paused' || sub.status === 'suspended') && !sub.isArchived && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedSubForResume(sub);
+                                  setResumeReason('');
+                                  setShowResumeModal(true);
+                                }}
+                                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs transition"
+                                title="Resume active care"
+                              >
+                                Resume
+                              </button>
+                            )}
+
+                            {!sub.isArchived && sub.status !== 'cancelled' && sub.status !== 'completed' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedSubForCancel(sub);
+                                  setCancelReason('');
+                                  setShowCancelModal(true);
+                                }}
+                                className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-semibold rounded-lg text-xs transition"
+                                title="Cancel subscription"
+                              >
+                                Cancel
+                              </button>
+                            )}
+
+                            {!sub.isArchived && (sub.status === 'cancelled' || sub.status === 'completed') && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedSubForArchive(sub);
+                                  setArchiveReason('');
+                                  setShowArchiveModal(true);
+                                }}
+                                className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition flex items-center gap-1"
+                                title="Move to compliance archive"
+                              >
+                                <Archive size={12} />
+                                <span>Archive</span>
+                              </button>
+                            )}
+
+                            {/* Audit History Button */}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelectedSubForAssign(sub);
-                                setAssignCaregiverUserId(sub.assignedCaregiverId || '');
-                                setAssignNotes(sub.carePlanNotes || '');
-                                setShowAssignModal(true);
+                                openHistoryModal(sub);
                               }}
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded text-[11px] transition"
-                              title="Assign or reassign qualified bedside nurse/caregiver"
+                              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition"
+                              title="View audit history"
                             >
-                              Assign Staff
+                              <History size={14} />
                             </button>
-                          )}
 
-                          {sub.visitsRemaining > 0 && sub.status === 'active' && !sub.isArchived && (
+                            {/* Permanent Delete Button */}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                openScheduleModal(sub);
+                                setSelectedSubForDelete(sub);
+                                setDeleteReason('');
+                                setConfirmDeleteCheckbox(false);
+                                setShowDeleteModal(true);
                               }}
-                              className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded text-[11px] transition shadow-xs inline-flex items-center gap-1"
-                              title="Schedule and assign visits for this active subscription"
+                              className="p-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 hover:text-rose-800 rounded-lg transition shadow-2xs"
+                              title="Permanently delete subscription from MongoDB"
                             >
-                              <Calendar size={11} />
-                              <span>Schedule Visits</span>
+                              <Trash2 size={14} />
                             </button>
-                          )}
-
-                          {sub.visitsRemaining > 0 && sub.status === 'active' && !sub.isArchived && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedSubForVisit(sub);
-                                setVisitNotes('');
-                                setShowRecordVisitModal(true);
-                              }}
-                              className="px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded text-[11px] transition shadow-xs"
-                              title="Document completed bedside care shift"
-                            >
-                              Record Visit
-                            </button>
-                          )}
-
-                          {sub.status === 'active' && !sub.isArchived && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedSubForSuspend(sub);
-                                setSuspendReason('');
-                                setShowSuspendModal(true);
-                              }}
-                              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-semibold rounded text-[11px] transition"
-                              title="Temporarily pause visits and caregiver service"
-                            >
-                              Suspend
-                            </button>
-                          )}
-
-                          {(sub.status === 'paused' || sub.status === 'suspended') && !sub.isArchived && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedSubForResume(sub);
-                                setResumeReason('');
-                                setShowResumeModal(true);
-                              }}
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded text-[11px] transition shadow-xs"
-                              title="Reactivate caregiver service and resume visits"
-                            >
-                              Resume
-                            </button>
-                          )}
-
-                          {!sub.isArchived && sub.status !== 'cancelled' && sub.status !== 'completed' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedSubForCancel(sub);
-                                setCancelReason('');
-                                setShowCancelModal(true);
-                              }}
-                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-semibold rounded text-[11px] transition"
-                              title="Permanently terminate care subscription"
-                            >
-                              Cancel
-                            </button>
-                          )}
-
-                          {!sub.isArchived && (sub.status === 'cancelled' || sub.status === 'completed') && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedSubForArchive(sub);
-                                setArchiveReason('');
-                                setShowArchiveModal(true);
-                              }}
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold rounded text-[11px] transition"
-                              title="Move to compliance archive"
-                            >
-                              Archive
-                            </button>
-                          )}
-
-                          {sub.isArchived && (
-                            <span className="text-[11px] text-slate-400 italic mr-1.5">
-                              Archived Record
-                            </span>
-                          )}
-
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openHistoryModal(sub);
-                            }}
-                            className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-semibold rounded text-[11px] transition inline-flex items-center gap-1 shadow-2xs"
-                            title="View authorized audit history and timeline"
-                          >
-                            <History size={11} />
-                            <span>History</span>
-                          </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1033,36 +1238,92 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
             </table>
           </div>
 
-          {/* Subscriptions Pagination Controls */}
-          {subPagination.totalPages > 1 && (
-            <div className="flex items-center justify-between p-4 border-t border-slate-100 text-xs text-slate-500 bg-slate-50/40">
-              <span>
-                Showing page {subPagination.page} of {subPagination.totalPages} ({subPagination.total} total subscriptions)
+          {/* Subscriptions Pagination Controls (10 items per page) */}
+          <div className="flex flex-col sm:flex-row items-center justify-between p-4 border-t border-slate-200 text-xs text-slate-600 bg-slate-50/80 gap-3">
+            <div className="flex items-center gap-3">
+              <span className="font-medium text-slate-600">
+                Showing{' '}
+                <strong className="font-bold text-slate-900">
+                  {subPagination.total > 0 ? (subPagination.page - 1) * subPagination.limit + 1 : 0}
+                </strong>
+                –
+                <strong className="font-bold text-slate-900">
+                  {Math.min(subPagination.page * subPagination.limit, subPagination.total)}
+                </strong>{' '}
+                of <strong className="font-bold text-slate-900">{subPagination.total}</strong> subscriptions
               </span>
-              <div className="flex items-center gap-2">
+              <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                10 per page
+              </span>
+            </div>
+
+            {subPagination.totalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                {/* Previous Button */}
                 <button
-                  disabled={subPagination.page <= 1}
-                  onClick={() => {
-                    setSubPagination((prev) => ({ ...prev, page: prev.page - 1 }));
-                    setTimeout(() => loadData(), 0);
-                  }}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-white bg-white font-medium"
+                  type="button"
+                  disabled={subPagination.page <= 1 || isLoading}
+                  onClick={() => loadData(subPagination.page - 1)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-2xs"
+                  title="Go to previous page"
                 >
-                  Previous
+                  <ChevronLeft size={14} />
+                  <span>Previous</span>
                 </button>
+
+                {/* Page Number Buttons */}
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: subPagination.totalPages }, (_, i) => i + 1).map((pageNum) => {
+                    const isCurrent = pageNum === subPagination.page;
+                    const showPage =
+                      subPagination.totalPages <= 7 ||
+                      pageNum === 1 ||
+                      pageNum === subPagination.totalPages ||
+                      Math.abs(pageNum - subPagination.page) <= 1;
+
+                    if (!showPage) {
+                      if (pageNum === 2 || pageNum === subPagination.totalPages - 1) {
+                        return (
+                          <span key={`ellipsis-${pageNum}`} className="px-1.5 text-slate-400 select-none">
+                            ...
+                          </span>
+                        );
+                      }
+                      return null;
+                    }
+
+                    return (
+                      <button
+                        key={pageNum}
+                        type="button"
+                        disabled={isLoading}
+                        onClick={() => loadData(pageNum)}
+                        className={`min-w-[32px] h-8 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center ${
+                          isCurrent
+                            ? 'bg-teal-600 text-white shadow-xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 hover:border-slate-300'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Next Button */}
                 <button
-                  disabled={subPagination.page >= subPagination.totalPages}
-                  onClick={() => {
-                    setSubPagination((prev) => ({ ...prev, page: prev.page + 1 }));
-                    setTimeout(() => loadData(), 0);
-                  }}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 disabled:opacity-40 hover:bg-white bg-white font-medium"
+                  type="button"
+                  disabled={subPagination.page >= subPagination.totalPages || isLoading}
+                  onClick={() => loadData(subPagination.page + 1)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-2xs"
+                  title="Go to next page"
                 >
-                  Next
+                  <span>Next</span>
+                  <ChevronRight size={14} />
                 </button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -1768,6 +2029,97 @@ export function CaregiverSubscriptionsView({ onNavigateToAccounts }: CaregiverSu
                   className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-semibold shadow-sm transition disabled:opacity-50"
                 >
                   {actionLoading ? 'Archiving...' : 'Confirm Archival'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Modal */}
+      {showDeleteModal && selectedSubForDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden p-6 space-y-4 border border-rose-200">
+            <div className="flex items-center justify-between border-b border-rose-100 pb-3">
+              <div className="flex items-center gap-2.5 text-rose-600">
+                <div className="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 border border-rose-200">
+                  <Trash2 size={20} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Delete Subscription Permanently</h3>
+                  <p className="text-[11px] text-rose-600 font-medium">Irreversible database operation</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="bg-rose-50/80 border border-rose-200 text-rose-900 text-xs rounded-2xl p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-mono font-bold text-slate-900">{selectedSubForDelete.subscriptionNumber}</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-white border border-rose-200 text-rose-700">
+                  {selectedSubForDelete.status}
+                </span>
+              </div>
+              <p className="font-semibold text-slate-900">
+                Patient: {selectedSubForDelete.patientName} ({selectedSubForDelete.patientPhone})
+              </p>
+              <p className="text-[11px] text-slate-600">
+                Plan: <span className="font-medium text-slate-800">{selectedSubForDelete.planTitle}</span>
+              </p>
+              <div className="p-2.5 rounded-xl bg-white/80 border border-rose-300 text-[11px] text-rose-800 flex items-start gap-2">
+                <AlertTriangle size={15} className="shrink-0 text-rose-600 mt-0.5" />
+                <span>
+                  <strong>Warning:</strong> This will permanently delete this subscription record, its linked scheduled visits, and patient care assignment from MongoDB. This action CANNOT be undone.
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleDeleteSubmit} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  Reason for Deletion (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g., Duplicate test enrollment, patient cancelled before first visit, administrative purge..."
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                />
+              </div>
+
+              <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={confirmDeleteCheckbox}
+                  onChange={(e) => setConfirmDeleteCheckbox(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                />
+                <span className="text-[11px] text-slate-700 leading-tight">
+                  I confirm that I want to <strong>permanently purge</strong> this subscription from MongoDB.
+                </span>
+              </label>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading || !confirmDeleteCheckbox}
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition disabled:opacity-40 inline-flex items-center gap-1.5 shadow-sm shadow-rose-600/20"
+                >
+                  <Trash2 size={14} />
+                  <span>{actionLoading ? 'Deleting...' : 'Delete Permanently'}</span>
                 </button>
               </div>
             </form>

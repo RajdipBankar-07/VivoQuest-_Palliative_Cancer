@@ -700,6 +700,32 @@ export const patientsApi = {
     }>('/api/v1/patients/health-updates/me');
     return res.data;
   },
+
+  async getMySubscriptions() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/patients/me/subscriptions');
+    return res;
+  },
+
+  async activateSubscription(data: {
+    planId: string;
+    emergencyContact?: { name: string; phone: string; relation: string };
+    carePlanNotes?: string;
+    idempotencyKey?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/patients/me/subscriptions/activate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
 };
 
 // -----------------------------------------------------------------------------
@@ -1463,6 +1489,9 @@ export const adminApi = {
         overdueCount: number;
         exceptionsCount: number;
         pendingInstallationsCount: number;
+        pendingAcceptanceCount?: number;
+        acceptedCount?: number;
+        rejectedCount?: number;
       };
     }>('/api/v1/admin/field-visits/stats');
     return res.data;
@@ -1953,6 +1982,18 @@ export const adminApi = {
     return res;
   },
 
+  async deleteCaregiverSubscription(id: string, reason?: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/caregiver-subscriptions/${id}?permanent=true`, {
+      method: 'DELETE',
+      body: JSON.stringify({ permanent: true, reason }),
+    });
+    return res;
+  },
+
   async getCaregiverSubscriptionHistory(id: string, params?: { page?: number; limit?: number }) {
     const query = new URLSearchParams();
     if (params?.page) query.set('page', params.page.toString());
@@ -2041,6 +2082,18 @@ export const adminApi = {
     }>(`/api/v1/admin/reschedule-requests/${requestId}/reject`, {
       method: 'POST',
       body: JSON.stringify({ rejectionReason }),
+    });
+    return res;
+  },
+
+  async hideRescheduleRequest(requestId: string, reason?: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/reschedule-requests/${requestId}`, {
+      method: 'DELETE',
+      body: reason ? JSON.stringify({ reason }) : undefined,
     });
     return res;
   },

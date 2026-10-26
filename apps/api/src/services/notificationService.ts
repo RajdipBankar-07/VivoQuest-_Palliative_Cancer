@@ -251,10 +251,24 @@ export const listNotificationLogs = async (params: {
     ];
   }
 
-  const [logs, total] = await Promise.all([
+  const [rawLogs, total] = await Promise.all([
     NotificationLog.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
     NotificationLog.countDocuments(query),
   ]);
+
+  const logs = rawLogs.map((log: any) => ({
+    ...log,
+    type: log.type || log.templateId,
+    relatedEntityType:
+      log.relatedEntityType ||
+      (log.metadata?.visitId
+        ? 'FieldVisit'
+        : log.metadata?.subscriptionId
+        ? 'CaregiverSubscription'
+        : log.metadata?.requestId
+        ? 'VisitRescheduleRequest'
+        : undefined),
+  }));
 
   return {
     logs,

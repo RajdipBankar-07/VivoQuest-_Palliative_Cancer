@@ -54,6 +54,13 @@ export default function CaregiverApp() {
   const [isSubmittingRejection, setIsSubmittingRejection] = useState<boolean>(false);
   const [rejectionError, setRejectionError] = useState<string | null>(null);
 
+  // Phase 3: Assignment Acceptance / Rejection State
+  const [rejectingVisit, setRejectingVisit] = useState<FieldVisit | null>(null);
+  const [visitRejectionReason, setVisitRejectionReason] = useState<string>('');
+  const [isSubmittingVisitRejection, setIsSubmittingVisitRejection] = useState<boolean>(false);
+  const [visitRejectionError, setVisitRejectionError] = useState<string | null>(null);
+  const [processingVisitId, setProcessingVisitId] = useState<string | null>(null);
+
   // Vitals & Care Report Form State
   const [selectedVisitId, setSelectedVisitId] = useState<string>('');
   const [systolicBP, setSystolicBP] = useState('120');
@@ -254,6 +261,50 @@ export default function CaregiverApp() {
   };
 
   // ---------------------------------------------------------------------------
+  // Phase 3: Assignment Acceptance & Rejection Handlers
+  // ---------------------------------------------------------------------------
+  const handleAcceptAssignment = async (visitId: string) => {
+    setProcessingVisitId(visitId);
+    try {
+      const updated = await caregiverApi.acceptVisitAssignment(visitId);
+      setVisits((prev) => prev.map((v) => (v.id === visitId ? updated : v)));
+      Alert.alert('Assignment Accepted', 'Visit confirmed and moved to your active schedule.');
+      await loadVisits();
+    } catch (err: any) {
+      Alert.alert('Acceptance Failed', err.message || 'Could not accept visit assignment.');
+    } finally {
+      setProcessingVisitId(null);
+    }
+  };
+
+  const handleOpenRejectVisitModal = (visit: FieldVisit) => {
+    setRejectingVisit(visit);
+    setVisitRejectionReason('');
+    setVisitRejectionError(null);
+  };
+
+  const handleSubmitVisitRejection = async () => {
+    if (!rejectingVisit) return;
+    const trimmed = visitRejectionReason.trim();
+    if (trimmed.length < 3) {
+      setVisitRejectionError('Please enter a rejection reason of at least 3 characters.');
+      return;
+    }
+    setIsSubmittingVisitRejection(true);
+    setVisitRejectionError(null);
+    try {
+      await caregiverApi.rejectVisitAssignment(rejectingVisit.id, trimmed);
+      Alert.alert('Assignment Rejected', 'The assignment has been rejected and the operational desk notified.');
+      setRejectingVisit(null);
+      await loadVisits();
+    } catch (err: any) {
+      setVisitRejectionError(err.message || 'Failed to reject assignment.');
+    } finally {
+      setIsSubmittingVisitRejection(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
   // 4. Submit Daily Care Report
   // ---------------------------------------------------------------------------
   const handleSubmitDailyReport = async () => {
@@ -320,9 +371,42 @@ export default function CaregiverApp() {
           setUserSession(null);
           setVisits([]);
           setAssignedPatients([]);
+          setRescheduleRequests([]);
+          setSelectedVisitId('');
+          setClinicalNotes('');
+          setRecommendations('');
+          setProceduresPerformed([]);
+          setReportSuccessMsg(null);
+          setSystolicBP('120');
+          setDiastolicBP('80');
+          setPulseRate('74');
+          setSpo2('98');
         },
       },
     ]);
+  };
+
+  const handleHideCompletedVisit = (visitId: string, visitNumber: string) => {
+    Alert.alert(
+      'Hide Completed Visit',
+      `Are you sure you want to remove completed Visit #${visitNumber} from your history? Clinical documentation and audit trails remain permanently preserved.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Hide',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await caregiverApi.hideVisit(visitId);
+              Alert.alert('Visit Hidden', 'The completed visit has been hidden from your history.');
+              await loadVisits();
+            } catch (err: any) {
+              Alert.alert('Unable to Hide Visit', err.message || 'An error occurred while hiding the visit.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   // ---------------------------------------------------------------------------
@@ -481,7 +565,7 @@ export default function CaregiverApp() {
                 </View>
 
                 {rescheduleRequests.map((req) => (
-                  <View key={req.id} style={styles.rescheduleCard}>
+                  <View key={req.id || (req as any)._id || 'resched-' + req.visitNumber} style={styles.rescheduleCard}>
                     <View style={styles.cardRowBetween}>
                       <Text style={styles.rescheduleBadge}>Caregiver Approval Required</Text>
                       <Text style={styles.rescheduleTimestamp}>
@@ -550,22 +634,105 @@ export default function CaregiverApp() {
               </View>
             )}
 
+            {/* Phase 3: Dedicated Pending Assignment Acceptance Section */}
+            {visits.some((v) => v.status === 'assigned') && (
+              <View style={styles.rescheduleSectionContainer}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={[styles.sectionTitle, { color: '#b45309' }]}>
+                    ⏳ Pending Acceptance ({visits.filter((v) => v.status === 'assigned').length})
+                  </Text>
+                </View>
+
+                {visits
+                  .filter((v) => v.status === 'assigned')
+                  .map((vis) => (
+                    <View
+                      key={vis.id || (vis as any)._id || vis.visitNumber}
+                      style={[
+                        styles.card,
+                        { borderColor: '#f59e0b', borderWidth: 1.5, backgroundColor: '#fffbeb' },
+                      ]}
+                    >
+                      <View style={styles.cardRowBetween}>
+                        <Text style={styles.visitTime}>⏰ {vis.timeSlot}</Text>
+                        <Text
+                          style={[
+                            styles.statusPill,
+                            { backgroundColor: '#fef3c7', color: '#92400e', fontWeight: '800' },
+                          ]}
+                        >
+                          ACTION REQUIRED: PENDING ACCEPTANCE
+                        </Text>
+                      </View>
+
+                      <Text style={styles.patientName}>{vis.patientDetails.fullName}</Text>
+                      <Text style={styles.patientSubtext}>
+                        Visit #{vis.visitNumber} • {vis.visitType.replace('_', ' ').toUpperCase()} • Date: {vis.scheduledDate}
+                      </Text>
+                      <Text style={styles.patientAddress}>{formatPatientAddress(vis.patientDetails)}</Text>
+
+                      {vis.patientDetails.instructions ? (
+                        <Text style={styles.instructionsText}>
+                          ℹ️ Clinical Notes: {vis.patientDetails.instructions}
+                        </Text>
+                      ) : null}
+
+                      <View style={styles.divider} />
+
+                      <View style={styles.rescheduleButtonRow}>
+                        <TouchableOpacity
+                          style={styles.rejectOutlineButton}
+                          onPress={() => handleOpenRejectVisitModal(vis)}
+                          disabled={processingVisitId === vis.id}
+                        >
+                          <Text style={styles.rejectOutlineButtonText}>✕ Reject Assignment</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.approveButton}
+                          onPress={() => handleAcceptAssignment(vis.id)}
+                          disabled={processingVisitId === vis.id}
+                        >
+                          {processingVisitId === vis.id ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <Text style={styles.approveButtonText}>✓ Accept Assignment</Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+              </View>
+            )}
+
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Assigned Patient Visits</Text>
+              <Text style={styles.sectionTitle}>
+                {visits.some((v) => v.status === 'assigned')
+                  ? 'Confirmed & In-Progress Visits'
+                  : 'Assigned Patient Visits'}
+              </Text>
               {isLoadingVisits && <ActivityIndicator size="small" color="#0284c7" />}
             </View>
 
-            {visits.length === 0 && !isLoadingVisits && (
+            {visits.filter((v) => v.status !== 'assigned').length === 0 && !isLoadingVisits && (
               <View style={styles.emptyCard}>
                 <Text style={styles.emptyIcon}>📋</Text>
-                <Text style={styles.emptyTitle}>No Visits Scheduled</Text>
+                <Text style={styles.emptyTitle}>
+                  {visits.some((v) => v.status === 'assigned')
+                    ? 'Pending Acceptance Required'
+                    : 'No Visits Scheduled'}
+                </Text>
                 <Text style={styles.emptySubtitle}>
-                  You have no field visits assigned for today. Pull down to refresh or check back later.
+                  {visits.some((v) => v.status === 'assigned')
+                    ? 'You have pending visit assignments awaiting your acceptance above.'
+                    : 'You have no field visits assigned for today. Pull down to refresh or check back later.'}
                 </Text>
               </View>
             )}
 
-            {visits.map((vis) => {
+            {visits
+              .filter((v) => v.status !== 'assigned')
+              .map((vis) => {
               const isCompleted = vis.status === 'completed';
               const isInProgress = vis.status === 'in_progress';
               const isArrived = vis.status === 'arrived';
@@ -575,7 +742,7 @@ export default function CaregiverApp() {
 
               return (
                 <View
-                  key={vis.id}
+                  key={vis.id || (vis as any)._id || vis.visitNumber}
                   style={[
                     styles.card,
                     (isInProgress || isArrived) && styles.cardActiveBorder,
@@ -669,6 +836,15 @@ export default function CaregiverApp() {
                         onPress={() => handleDownloadCaregiverReport(vis.id)}
                       >
                         <Text style={styles.buttonText}>📥 PDF</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {isCompleted && (
+                      <TouchableOpacity
+                        style={[styles.recordButton, { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5' }]}
+                        onPress={() => handleHideCompletedVisit(vis.id, vis.visitNumber)}
+                      >
+                        <Text style={[styles.buttonText, { color: '#b91c1c' }]}>🗑️ Hide</Text>
                       </TouchableOpacity>
                     )}
 
@@ -814,11 +990,11 @@ export default function CaregiverApp() {
                   'Nebulization / O2 Therapy Review',
                   'Pressure Sore Prevention & Repositioning',
                   'Hydration & Nutrition Counseling',
-                ].map((proc, pIdx) => {
+                ].map((proc) => {
                   const isChecked = proceduresPerformed.includes(proc);
                   return (
                     <TouchableOpacity
-                      key={pIdx}
+                      key={proc}
                       style={styles.checkItem}
                       onPress={() => toggleProcedure(proc)}
                     >
@@ -871,7 +1047,7 @@ export default function CaregiverApp() {
                 Verified daily clinical documentation and signed vitals recorded for your patients
               </Text>
 
-              {visits.filter((v) => v.status === 'completed' || v.clinicalDocumentation?.signedAt).length === 0 ? (
+              {visits.filter((v) => (v.status === 'completed' || v.clinicalDocumentation?.signedAt) && !v.clinicalDocumentation?.isDeleted && !v.clinicalDocumentation?.hiddenFromCaregiver).length === 0 ? (
                 <View style={styles.emptyCard}>
                   <Text style={styles.emptyIcon}>📄</Text>
                   <Text style={styles.emptyTitle}>No Reports Submitted Yet</Text>
@@ -881,9 +1057,9 @@ export default function CaregiverApp() {
                 </View>
               ) : (
                 visits
-                  .filter((v) => v.status === 'completed' || v.clinicalDocumentation?.signedAt)
+                  .filter((v) => (v.status === 'completed' || v.clinicalDocumentation?.signedAt) && !v.clinicalDocumentation?.isDeleted && !v.clinicalDocumentation?.hiddenFromCaregiver)
                   .map((v) => (
-                    <View key={v.id} style={styles.card}>
+                    <View key={v.id || (v as any)._id || v.visitNumber} style={styles.card}>
                       <View style={styles.cardRowBetween}>
                         <Text style={styles.visitTime}>
                           Visit #{v.visitNumber} • {v.scheduledDate}
@@ -926,12 +1102,20 @@ export default function CaregiverApp() {
                         </Text>
                       ) : null}
 
-                      <TouchableOpacity
-                        style={[styles.actionButton, { marginTop: 6, backgroundColor: '#0284c7' }]}
-                        onPress={() => handleDownloadCaregiverReport(v.id)}
-                      >
-                        <Text style={styles.buttonText}>📥 Download PDF Report</Text>
-                      </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                        <TouchableOpacity
+                          style={[styles.actionButton, { flex: 1, backgroundColor: '#0284c7', marginTop: 0 }]}
+                          onPress={() => handleDownloadCaregiverReport(v.id)}
+                        >
+                          <Text style={styles.buttonText}>📥 Download PDF Report</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.actionButton, { backgroundColor: '#fee2e2', borderWidth: 1, borderColor: '#fca5a5', marginTop: 0, paddingHorizontal: 12 }]}
+                          onPress={() => handleHideCompletedVisit(v.id, v.visitNumber)}
+                        >
+                          <Text style={[styles.buttonText, { color: '#b91c1c' }]}>🗑️ Hide</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   ))
               )}
@@ -958,7 +1142,7 @@ export default function CaregiverApp() {
             )}
 
             {assignedPatients.map((pat) => (
-              <View key={pat.patientId} style={styles.card}>
+              <View key={pat.patientId || (pat as any)._id || pat.phone} style={styles.card}>
                 <View style={styles.cardRowBetween}>
                   <Text style={styles.patientName}>{pat.fullName}</Text>
                   <Text style={styles.assignedCountBadge}>
@@ -1153,6 +1337,71 @@ export default function CaregiverApp() {
                 disabled={isSubmittingRejection}
               >
                 {isSubmittingRejection ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalConfirmRejectButtonText}>Confirm Rejection</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Phase 3: Visit Assignment Rejection Modal */}
+      <Modal
+        visible={!!rejectingVisit}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setRejectingVisit(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.cardRowBetween}>
+              <Text style={styles.modalTitle}>Reject Visit Assignment</Text>
+              <TouchableOpacity onPress={() => setRejectingVisit(null)}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSubheading}>
+              Visit #{rejectingVisit?.visitNumber} for {rejectingVisit?.patientDetails?.fullName}
+            </Text>
+
+            <Text style={styles.modalInstructionText}>
+              A mandatory reason is required to reject this assignment. This will be transmitted to the clinical operations desk for immediate reassignment.
+            </Text>
+
+            {visitRejectionError && (
+              <View style={styles.rejectionErrorBox}>
+                <Text style={styles.rejectionErrorText}>⚠️ {visitRejectionError}</Text>
+              </View>
+            )}
+
+            <TextInput
+              style={styles.rejectionInput}
+              value={visitRejectionReason}
+              onChangeText={setVisitRejectionReason}
+              placeholder="e.g., Unavailability due to prior shift overlap, transport constraint, clinical procedure mismatch..."
+              placeholderTextColor="#94a3b8"
+              multiline={true}
+              numberOfLines={3}
+            />
+
+            <View style={styles.modalActionButtons}>
+              <TouchableOpacity
+                style={styles.modalCancelButton}
+                onPress={() => setRejectingVisit(null)}
+                disabled={isSubmittingVisitRejection}
+              >
+                <Text style={styles.modalCancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalConfirmRejectButton}
+                onPress={handleSubmitVisitRejection}
+                disabled={isSubmittingVisitRejection}
+              >
+                {isSubmittingVisitRejection ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
                   <Text style={styles.modalConfirmRejectButtonText}>Confirm Rejection</Text>

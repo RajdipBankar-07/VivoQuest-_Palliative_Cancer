@@ -23,7 +23,7 @@ import {
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/Button';
-import { adminApi, authApi } from '@/lib/api';
+import { adminApi, authApi, patientsApi } from '@/lib/api';
 
 export default function CaregiverPlansPage() {
   const [plans, setPlans] = useState<any[]>([]);
@@ -55,6 +55,18 @@ export default function CaregiverPlansPage() {
       }
     }
     loadPlans();
+
+    // Prefill patient data if logged in
+    if (typeof window !== 'undefined') {
+      try {
+        const storedUser = localStorage.getItem('vivo_user');
+        if (storedUser) {
+          const user = JSON.parse(storedUser);
+          if (user.fullName && !patientName) setPatientName(user.fullName);
+          if (user.phone && !patientPhone) setPatientPhone(user.phone);
+        }
+      } catch (e) {}
+    }
   }, []);
 
   const handleSubscribeSubmit = async (e: React.FormEvent) => {
@@ -64,11 +76,26 @@ export default function CaregiverPlansPage() {
     setError(null);
 
     try {
-      // Simulate Razorpay Mock Checkout
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      const token = typeof window !== 'undefined' ? localStorage.getItem('vivo_token') : null;
+      if (!token) {
+        // Patient is not logged in on the web frontend
+        throw new Error('Please log in with your patient account to activate this care plan, or activate it directly in the VivoQuest Patient Mobile App.');
+      }
 
+      // Activate subscription in backend MongoDB
+      const res = await patientsApi.activateSubscription({
+        planId: selectedPlan._id || selectedPlan.id,
+        emergencyContact: {
+          name: patientName,
+          phone: patientPhone,
+          relation: 'Self/Family',
+        },
+        carePlanNotes: `Address: ${address}. Requested Start Date: ${startDate}`,
+      });
+
+      const subData = res.data;
       setSubscriptionSuccess(
-        `Subscription confirmed for ${selectedPlan.name}! A dedicated palliative care coordinator will call ${patientPhone} to confirm your assigned caregiver.`
+        `Subscription confirmed & persisted for ${selectedPlan.name} (ID: ${subData?.subscriptionNumber || 'Active'})! Plan details and daily reports are now live in your Patient App and Admin Portal.`
       );
       setSelectedPlan(null);
     } catch (err: any) {

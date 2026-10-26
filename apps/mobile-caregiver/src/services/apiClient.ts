@@ -266,6 +266,92 @@ export const caregiverApi = {
       visitNumber: v.visitNumber,
       visitType: v.visitType,
       status: v.status,
+      assignmentStatus: v.assignmentStatus,
+      assignmentRejection: v.assignmentRejection,
+      providerId: v.providerId,
+      providerName: v.providerName,
+      providerRole: v.providerRole,
+      providerPhone: v.providerPhone,
+      patientId: v.patientId,
+      patientDetails: {
+        fullName: v.patientDetails?.fullName || 'Assigned Patient',
+        phone: v.patientDetails?.phone || '',
+        address: v.patientDetails?.address || '',
+        city: v.patientDetails?.city,
+        pincode: v.patientDetails?.pincode,
+        cluster: v.patientDetails?.cluster,
+        instructions: v.patientDetails?.instructions,
+        emergencyContact: v.patientDetails?.emergencyContact,
+      },
+      scheduledDate: v.scheduledDate,
+      timeSlot: v.timeSlot,
+      clinicalDocumentation: v.clinicalDocumentation,
+      timestamps: v.timestamps || {},
+    };
+  },
+
+  /**
+   * Phase 3: Accept assigned field visit
+   */
+  async acceptVisitAssignment(
+    visitId: string,
+    baseUrl?: string
+  ): Promise<FieldVisit> {
+    const res = await apiRequest<any>(`/visits/${encodeURIComponent(visitId)}/accept`, {
+      method: 'POST',
+    }, baseUrl);
+
+    const v = res.data;
+    return {
+      id: v.id || v._id,
+      visitNumber: v.visitNumber,
+      visitType: v.visitType,
+      status: v.status,
+      assignmentStatus: v.assignmentStatus,
+      assignmentRejection: v.assignmentRejection,
+      providerId: v.providerId,
+      providerName: v.providerName,
+      providerRole: v.providerRole,
+      providerPhone: v.providerPhone,
+      patientId: v.patientId,
+      patientDetails: {
+        fullName: v.patientDetails?.fullName || 'Assigned Patient',
+        phone: v.patientDetails?.phone || '',
+        address: v.patientDetails?.address || '',
+        city: v.patientDetails?.city,
+        pincode: v.patientDetails?.pincode,
+        cluster: v.patientDetails?.cluster,
+        instructions: v.patientDetails?.instructions,
+        emergencyContact: v.patientDetails?.emergencyContact,
+      },
+      scheduledDate: v.scheduledDate,
+      timeSlot: v.timeSlot,
+      clinicalDocumentation: v.clinicalDocumentation,
+      timestamps: v.timestamps || {},
+    };
+  },
+
+  /**
+   * Phase 3: Reject assigned field visit with mandatory reason
+   */
+  async rejectVisitAssignment(
+    visitId: string,
+    reason: string,
+    baseUrl?: string
+  ): Promise<FieldVisit> {
+    const res = await apiRequest<any>(`/visits/${encodeURIComponent(visitId)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }, baseUrl);
+
+    const v = res.data;
+    return {
+      id: v.id || v._id,
+      visitNumber: v.visitNumber,
+      visitType: v.visitType,
+      status: v.status,
+      assignmentStatus: v.assignmentStatus,
+      assignmentRejection: v.assignmentRejection,
       providerId: v.providerId,
       providerName: v.providerName,
       providerRole: v.providerRole,
@@ -416,7 +502,29 @@ export const caregiverApi = {
       },
       baseUrl
     );
-    return res.data || [];
+    return (res.data || []).map((r: any) => ({
+      ...r,
+      id: r.id || (r._id ? r._id.toString() : undefined) || `req-${r.visitNumber}`,
+    }));
+  },
+
+  /**
+   * Hide a completed or past field visit from caregiver's history
+   */
+  async hideVisit(
+    visitId: string,
+    reason?: string,
+    baseUrl?: string
+  ): Promise<{ success: boolean; message: string; visitId: string }> {
+    const res = await apiRequest<any>(
+      `/visits/${encodeURIComponent(visitId)}/hide`,
+      {
+        method: 'DELETE',
+        body: JSON.stringify({ reason }),
+      },
+      baseUrl
+    );
+    return res.data || res;
   },
 
   /**

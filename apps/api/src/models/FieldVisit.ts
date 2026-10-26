@@ -10,6 +10,7 @@ export type FieldVisitType =
 export type FieldVisitStatus =
   | 'assigned'
   | 'accepted'
+  | 'rejected'
   | 'en_route'
   | 'arrived'
   | 'in_progress'
@@ -45,6 +46,15 @@ export interface IFieldVisit extends Document {
   visitNumber: string;
   visitType: FieldVisitType;
   status: FieldVisitStatus;
+  assignmentStatus?: 'pending' | 'accepted' | 'rejected';
+  replacementRequired?: boolean;
+  assignmentRejection?: {
+    reason: string;
+    rejectedAt: Date;
+    rejectedBy: mongoose.Types.ObjectId;
+    rejectedByName: string;
+    rejectedByPhone?: string;
+  };
   providerId: mongoose.Types.ObjectId;
   providerName: string;
   providerRole: string;
@@ -67,6 +77,7 @@ export interface IFieldVisit extends Document {
   timestamps: {
     assignedAt: Date;
     acceptedAt?: Date;
+    rejectedAt?: Date;
     enRouteAt?: Date;
     arrivedAt?: Date;
     startedAt?: Date;
@@ -94,6 +105,10 @@ export interface IFieldVisit extends Document {
     deletedByRole?: string;
     deletedByName?: string;
     deletionReason?: string;
+    hiddenFromPatient?: boolean;
+    hiddenFromPatientAt?: Date;
+    hiddenFromCaregiver?: boolean;
+    hiddenFromCaregiverAt?: Date;
     versionHistory?: Array<{
       editedAt: Date;
       editedBy: mongoose.Types.ObjectId;
@@ -144,6 +159,11 @@ export interface IFieldVisit extends Document {
     reason?: string;
     notes?: string;
   }>;
+  hiddenFromCaregiver?: boolean;
+  hiddenFromCaregiverAt?: Date;
+  hiddenFromPatient?: boolean;
+  hiddenFromPatientAt?: Date;
+  hiddenFromUserIds?: mongoose.Types.ObjectId[];
   isDemo: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -189,6 +209,7 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
       enum: [
         'assigned',
         'accepted',
+        'rejected',
         'en_route',
         'arrived',
         'in_progress',
@@ -198,6 +219,24 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
       ],
       default: 'assigned',
       index: true,
+    },
+    assignmentStatus: {
+      type: String,
+      enum: ['pending', 'accepted', 'rejected'],
+      default: 'pending',
+      index: true,
+    },
+    replacementRequired: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    assignmentRejection: {
+      reason: { type: String, trim: true },
+      rejectedAt: { type: Date },
+      rejectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      rejectedByName: { type: String, trim: true },
+      rejectedByPhone: { type: String, trim: true },
     },
     providerId: {
       type: Schema.Types.ObjectId,
@@ -226,6 +265,7 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
     timestamps: {
       assignedAt: { type: Date, default: Date.now },
       acceptedAt: { type: Date },
+      rejectedAt: { type: Date },
       enRouteAt: { type: Date },
       arrivedAt: { type: Date },
       startedAt: { type: Date },
@@ -279,6 +319,10 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
       deletedByRole: { type: String },
       deletedByName: { type: String },
       deletionReason: { type: String, trim: true },
+      hiddenFromPatient: { type: Boolean, default: false },
+      hiddenFromPatientAt: { type: Date },
+      hiddenFromCaregiver: { type: Boolean, default: false },
+      hiddenFromCaregiverAt: { type: Date },
       versionHistory: [
         {
           editedAt: { type: Date, default: Date.now },
@@ -343,6 +387,11 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
         notes: { type: String },
       },
     ],
+    hiddenFromCaregiver: { type: Boolean, default: false },
+    hiddenFromCaregiverAt: { type: Date },
+    hiddenFromPatient: { type: Boolean, default: false },
+    hiddenFromPatientAt: { type: Date },
+    hiddenFromUserIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     isDemo: { type: Boolean, default: false },
   },
   {

@@ -61,12 +61,14 @@ import { SupplierManagementView } from './components/SupplierManagementView';
 import { CaregiverSubscriptionsView } from './components/CaregiverSubscriptionsView';
 import { DocumentExpiryAlertsView } from './components/DocumentExpiryAlertsView';
 import { HealthcareProfessionalsView } from './components/HealthcareProfessionalsView';
+import { AdminRescheduleRequestsView } from './components/AdminRescheduleRequestsView';
 
 type TabType =
   | 'overview'
   | 'finances'
   | 'suppliers'
   | 'subscriptions'
+  | 'reschedule_requests'
   | 'expiry_alerts'
   | 'professionals'
   | 'accounts'
@@ -192,6 +194,7 @@ export default function AdminDashboardPage() {
   const [reassignScheduledDate, setReassignScheduledDate] = useState(new Date().toISOString().slice(0, 10));
   const [reassignTimeSlot, setReassignTimeSlot] = useState('11:00 AM - 01:00 PM');
   const [availableCaregivers, setAvailableCaregivers] = useState<any[]>([]);
+  const [reassignModalError, setReassignModalError] = useState<string | null>(null);
 
   // Phase 4 & Phase 7: Offline Edge Sync Operations & In-App / Gateway Notifications
   const [fieldOpsSubTab, setFieldOpsSubTab] = useState<'visits' | 'sync_logs' | 'notifications' | 'reschedules'>('visits');
@@ -312,6 +315,31 @@ export default function AdminDashboardPage() {
     }
   };
 
+  // Periodic background refresh to detect caregiver acceptances/rejections and alerts immediately
+  useEffect(() => {
+    if (!isAuthorized) return;
+    const interval = setInterval(() => {
+      adminApi.getAdminFieldVisitStats().then(setFieldStats).catch(() => null);
+      adminApi.getUnreadNotificationsCount().then((res) => setUnreadNotifCount(res.unreadCount || 0)).catch(() => null);
+      adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).then((res) => setInAppNotifs(res.data || [])).catch(() => null);
+      if (activeTab === 'field_ops') {
+        adminApi.getAdminFieldVisits({
+          status: fieldStatusFilter === 'all' ? undefined : fieldStatusFilter,
+          visitType: fieldVisitTypeFilter === 'all' ? undefined : fieldVisitTypeFilter,
+          date: fieldDateFilter || undefined,
+          search: fieldSearch.trim() || undefined,
+          page: fieldVisitsPagination.page,
+          limit: 10,
+        }).then((res) => {
+          setFieldVisits(res.data);
+          setFieldVisitsPagination(res.pagination);
+        }).catch(() => null);
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [isAuthorized, activeTab, fieldStatusFilter, fieldVisitTypeFilter, fieldDateFilter, fieldSearch, fieldVisitsPagination.page]);
+
   const loadUsersData = async (opts?: { page?: number; role?: string; status?: string; search?: string }) => {
     try {
       const page = opts?.page ?? usersPagination.page;
@@ -339,20 +367,21 @@ export default function AdminDashboardPage() {
     }
   };
 
-  const loadTabData = async (tab: TabType) => {
+  const loadTabData = async (tab: TabType, overrides?: { fieldStatus?: string; fieldPage?: number }) => {
     setError(null);
     try {
       if (tab === 'overview') {
         const data = await adminApi.getOverview();
         setOverview(data);
       } else if (tab === 'field_ops') {
-        const [visitsRes, statsRes, syncLogsRes, syncStatsRes, notifRes, reschedulesRes, caregiversRes, unreadRes, inAppRes] = await Promise.all([
+        const activeStatus = overrides?.fieldStatus ?? fieldStatusFilter;
+        const [visitsRes, statsRes, syncLogsRes, syncStatsRes, notifRes, reschedulesRes, caregiversRes, nurseCaregiversRes, unreadRes, inAppRes] = await Promise.all([
           adminApi.getAdminFieldVisits({
-            status: fieldStatusFilter === 'all' ? undefined : fieldStatusFilter,
+            status: activeStatus === 'all' ? undefined : activeStatus,
             visitType: fieldVisitTypeFilter === 'all' ? undefined : fieldVisitTypeFilter,
             date: fieldDateFilter || undefined,
             search: fieldSearch.trim() || undefined,
-            page: fieldVisitsPagination.page,
+            page: overrides?.fieldPage ?? fieldVisitsPagination.page,
             limit: 10,
           }),
           adminApi.getAdminFieldVisitStats(),
@@ -373,6 +402,7 @@ export default function AdminDashboardPage() {
           }),
           adminApi.getRescheduleRequests(rescheduleStatusFilter === 'all' ? undefined : rescheduleStatusFilter).catch(() => ({ data: [] })),
           adminApi.getUsers({ role: 'professional', status: 'active', limit: 50 }).catch(() => ({ data: [] })),
+          adminApi.getUsers({ role: 'caregiver', status: 'active', limit: 50 }).catch(() => ({ data: [] })),
           adminApi.getUnreadNotificationsCount().catch(() => ({ unreadCount: 0 })),
           adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).catch(() => ({ data: [] })),
         ]);
@@ -385,7 +415,9 @@ export default function AdminDashboardPage() {
         setNotificationLogs(notifRes.data);
         setNotifPagination(notifRes.pagination);
         setRescheduleRequests(reschedulesRes.data || []);
-        setAvailableCaregivers(caregiversRes.data || []);
+        const combinedStaff = [...(caregiversRes.data || []), ...(nurseCaregiversRes.data || [])];
+        const uniqueStaff = Array.from(new Map(combinedStaff.map((u: any) => [u._id || u.id, u])).values());
+        setAvailableCaregivers(uniqueStaff);
         setUnreadNotifCount(unreadRes.unreadCount || 0);
         setInAppNotifs(inAppRes.data || []);
       } else if (tab === 'orders') {
@@ -528,24 +560,53 @@ export default function AdminDashboardPage() {
   // Reassign Field Visit Provider
   const handleReassignVisitSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedVisitForAssign || !reassignProviderName.trim() || !reassignReason.trim()) return;
+    setReassignModalError(null);
+
+    if (actionLoading) return;
+
+    if (!selectedVisitForAssign) {
+      setReassignModalError('No field visit selected for reassignment.');
+      return;
+    }
+
+    if (!reassignProviderName.trim()) {
+      setReassignModalError('Please select or specify an eligible active caregiver.');
+      return;
+    }
+
+    if (!reassignReason.trim()) {
+      setReassignModalError('Mandatory reassignment reason is required for administrative audit trail.');
+      return;
+    }
 
     setActionLoading(true);
     try {
-      await adminApi.reassignFieldVisit(selectedVisitForAssign._id, {
+      const visitId = selectedVisitForAssign._id || selectedVisitForAssign.id || selectedVisitForAssign.visitNumber;
+      await adminApi.reassignFieldVisit(visitId, {
         providerId: reassignProviderId || undefined,
         providerName: reassignProviderName.trim(),
-        providerPhone: reassignProviderPhone.trim() || undefined,
+        providerPhone: reassignProviderPhone.trim() ? reassignProviderPhone.trim().replace(/\D/g, '').slice(-10) : undefined,
         reason: reassignReason.trim(),
         scheduledDate: reassignScheduledDate || undefined,
         timeSlot: reassignTimeSlot || undefined,
       });
-      setSuccessMsg(`Visit ${selectedVisitForAssign.visitNumber} successfully reassigned to ${reassignProviderName}`);
+
+      // Phase 3: Required exact user-facing success banner/toast
+      setSuccessMsg('Reassignment Successful! The new caregiver has been assigned to this visit, and the Patient and Caregiver Apps have been updated.');
       setShowReassignModal(false);
       setSelectedVisitForAssign(null);
-      await loadTabData('field_ops');
+      setReassignModalError(null);
+
+      // Refresh Dashboard data and statistics
+      await Promise.all([
+        loadTabData('field_ops'),
+        adminApi.getAdminFieldVisitStats().then((stats: any) => setFieldStats(stats)).catch(() => {}),
+        adminApi.getOverview().then((data) => setOverview(data)).catch(() => {}),
+        adminApi.getUnreadNotificationsCount().then((u: any) => setUnreadNotifCount(u.unreadCount || 0)).catch(() => {}),
+      ]);
     } catch (err: any) {
-      setError(err.message || 'Failed to reassign visit provider');
+      // Keep modal open and display actionable error message inside the modal
+      setReassignModalError(err.message || 'Reassignment failed to save. Please retry.');
     } finally {
       setActionLoading(false);
     }
@@ -576,14 +637,21 @@ export default function AdminDashboardPage() {
         prev.map((n) => (n._id === id ? { ...n, isRead: true, readAt: new Date().toISOString() } : n))
       );
       if (notif) {
-        if (notif.relatedEntityType === 'CaregiverSubscription' || notif.type === 'SUBSCRIPTION_ACTIVATED') {
+        const notifType = notif.type || notif.templateId;
+        if (notifType === 'VISIT_ASSIGNMENT_REJECTED' || notif.messageBody?.includes('Assignment Rejected')) {
+          setActiveTab('field_ops');
+          setFieldOpsSubTab('visits');
+          setFieldStatusFilter('rejected');
+          loadTabData('field_ops', { fieldStatus: 'rejected' });
+          setShowNotifDrawer(false);
+        } else if (notif.relatedEntityType === 'CaregiverSubscription' || notifType === 'SUBSCRIPTION_ACTIVATED') {
           setActiveTab('subscriptions');
           setShowNotifDrawer(false);
-        } else if (notif.relatedEntityType === 'VisitRescheduleRequest' || notif.type === 'VISIT_RESCHEDULE_REQUESTED') {
+        } else if (notif.relatedEntityType === 'VisitRescheduleRequest' || notifType === 'VISIT_RESCHEDULE_REQUESTED') {
           setActiveTab('field_ops');
           setFieldOpsSubTab('reschedules');
           setShowNotifDrawer(false);
-        } else if (notif.relatedEntityType === 'FieldVisit') {
+        } else if (notif.relatedEntityType === 'FieldVisit' || notifType?.includes('VISIT')) {
           setActiveTab('field_ops');
           setFieldOpsSubTab('visits');
           setShowNotifDrawer(false);
@@ -935,7 +1003,7 @@ export default function AdminDashboardPage() {
 
       {/* Top Operations Header */}
       <div className="bg-navy text-white border-b border-navy-light/40 py-6 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="max-w-[1560px] mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="px-2.5 py-0.5 rounded text-xs font-bold bg-primary text-white uppercase tracking-wider">
@@ -980,7 +1048,11 @@ export default function AdminDashboardPage() {
               Sync Data
             </Button>
             <button
-              onClick={() => setShowNotifDrawer(true)}
+              onClick={() => {
+                setShowNotifDrawer(true);
+                adminApi.getUnreadNotificationsCount().then((res) => setUnreadNotifCount(res.unreadCount || 0)).catch(() => null);
+                adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).then((res) => setInAppNotifs(res.data || [])).catch(() => null);
+              }}
               className="relative p-2 rounded-xl bg-navy-light/50 border border-white/20 text-white hover:bg-white/10 transition flex items-center justify-center"
               title="View In-App Alerts"
             >
@@ -997,7 +1069,7 @@ export default function AdminDashboardPage() {
 
       {/* Sandbox & Demonstration Data Banner */}
       <div className="bg-primary-light/40 border-b border-primary/20 py-2.5 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto flex items-center justify-between text-xs text-navy/80 gap-2">
+        <div className="max-w-[1560px] mx-auto flex items-center justify-between text-xs text-navy/80 gap-2">
           <div className="flex items-center gap-2">
             <Info size={15} className="text-primary shrink-0" />
             <span>
@@ -1017,7 +1089,7 @@ export default function AdminDashboardPage() {
       </div>
 
       {/* Main Content Area */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex-1">
+      <div className="max-w-[1560px] mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex-1">
         {/* Alerts / Error display */}
         {error && (
           <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start justify-between gap-3 shadow-sm">
@@ -1056,6 +1128,7 @@ export default function AdminDashboardPage() {
             { id: 'finances', label: 'Finances & P&L', icon: CreditCard },
             { id: 'suppliers', label: 'Suppliers & Procurement', icon: Truck },
             { id: 'subscriptions', label: 'Caregiver Plans', icon: HeartPulse },
+            { id: 'reschedule_requests', label: 'Reschedule Requests', icon: Calendar, badge: overview?.pendingRescheduleCount, alert: overview?.pendingRescheduleCount > 0 },
             { id: 'expiry_alerts', label: 'Expiry Alerts', icon: AlertTriangle, badge: overview?.pendingCredentialsCount, alert: overview?.pendingCredentialsCount > 0 },
             { id: 'professionals', label: 'Healthcare Staff', icon: Stethoscope },
             { id: 'orders', label: 'Orders & DME Fulfillment', icon: Package, badge: ordersPagination.total || undefined },
@@ -1125,12 +1198,40 @@ export default function AdminDashboardPage() {
           />
         )}
         {activeTab === 'professionals' && <HealthcareProfessionalsView />}
+        {activeTab === 'reschedule_requests' && <AdminRescheduleRequestsView />}
 
         {/* ========================================================================= */}
         {/* TAB 1: OVERVIEW */}
         {/* ========================================================================= */}
         {activeTab === 'overview' && (
           <div className="space-y-8">
+            {/* Urgent Caregiver Rejection Alert Banner */}
+            {(fieldStats?.rejectedCount ?? 0) > 0 && (
+              <div className="p-5 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 animate-in fade-in shadow-xs">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-rose-900 font-bold text-sm">
+                    <AlertTriangle size={18} className="text-rose-600 shrink-0" />
+                    <span>Immediate Action Required: Caregiver Assignment Rejection(s)</span>
+                  </div>
+                  <p className="text-xs text-rose-800 leading-relaxed">
+                    <strong>{fieldStats.rejectedCount} visit assignment(s)</strong> have been rejected by assigned staff with documented reasons. An administrator must assign replacement caregivers to restore the confirmed patient schedule.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setActiveTab('field_ops');
+                    setFieldOpsSubTab('visits');
+                    setFieldStatusFilter('rejected');
+                    loadTabData('field_ops', { fieldStatus: 'rejected' });
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 text-white hover:bg-rose-700 shadow-sm shrink-0 flex items-center gap-1.5 transition"
+                >
+                  <span>Go to Field Operations &amp; Reassign</span>
+                  <span>→</span>
+                </button>
+              </div>
+            )}
+
             {/* KPI Metrics Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
               <div className="bg-white p-5 rounded-2xl border border-border shadow-sm flex items-center justify-between">
@@ -1349,46 +1450,84 @@ export default function AdminDashboardPage() {
             </div>
 
             {/* Metrics Row */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-              <div className="bg-white p-4 rounded-2xl border border-border shadow-sm">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
                 <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Field Visits</div>
-                <div className="text-2xl font-black text-navy mt-1">{fieldStats?.totalVisits ?? '—'}</div>
+                <div className="text-xl font-black text-navy mt-1">{fieldStats?.totalVisits ?? '—'}</div>
                 <div className="text-[10px] text-slate-400 mt-0.5">Cumulative roster</div>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Active In-Flight</div>
-                <div className="text-2xl font-black text-primary mt-1">{fieldStats?.activeVisits ?? '—'}</div>
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pending Acceptance</div>
+                <div className="text-xl font-black text-amber-600 mt-1">{fieldStats?.pendingAcceptanceCount ?? 0}</div>
+                <div className="text-[10px] text-amber-600 font-semibold mt-0.5">Awaiting caregiver</div>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Accepted</div>
+                <div className="text-xl font-black text-emerald-600 mt-1">{fieldStats?.acceptedCount ?? '—'}</div>
                 <div className="text-[10px] text-emerald-600 font-semibold mt-0.5 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Assigned / En Route
+                  Confirmed
                 </div>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-border shadow-sm">
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Rejected by Caregiver</div>
+                <div className="text-xl font-black text-rose-600 mt-1">{fieldStats?.rejectedCount ?? 0}</div>
+                <div className="text-[10px] text-rose-500 font-semibold mt-0.5">Reassignment needed</div>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
                 <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Overdue Visits</div>
-                <div className="text-2xl font-black text-amber-600 mt-1">{fieldStats?.overdueVisits ?? 0}</div>
+                <div className="text-xl font-black text-amber-600 mt-1">{fieldStats?.overdueVisits ?? 0}</div>
                 <div className="text-[10px] text-amber-600 font-semibold mt-0.5">SLA attention needed</div>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-border shadow-sm">
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
                 <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Exceptions / Failed</div>
-                <div className="text-2xl font-black text-rose-600 mt-1">{fieldStats?.failedVisits ?? 0}</div>
+                <div className="text-xl font-black text-rose-600 mt-1">{fieldStats?.failedVisits ?? 0}</div>
                 <div className="text-[10px] text-rose-500 font-semibold mt-0.5">Requires reassignment</div>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-border shadow-sm">
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
                 <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Completed Today</div>
-                <div className="text-2xl font-black text-secondary mt-1">{fieldStats?.completedVisits ?? 0}</div>
+                <div className="text-xl font-black text-secondary mt-1">{fieldStats?.completedVisits ?? 0}</div>
                 <div className="text-[10px] text-secondary font-semibold mt-0.5">Documented &amp; signed</div>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-border shadow-sm">
+              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
                 <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">DME Setups Verified</div>
-                <div className="text-2xl font-black text-indigo-600 mt-1">{fieldStats?.equipmentInstallationsVerified ?? 0}</div>
+                <div className="text-xl font-black text-indigo-600 mt-1">{fieldStats?.equipmentInstallationsVerified ?? 0}</div>
                 <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">Barcode / Serial logged</div>
               </div>
             </div>
+
+            {/* Urgent Caregiver Rejection Alert Banner */}
+            {(fieldStats?.rejectedCount ?? 0) > 0 && (
+              <div className="p-5 rounded-2xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 animate-in fade-in shadow-xs">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-rose-900 font-bold text-sm">
+                    <AlertTriangle size={18} className="text-rose-600 shrink-0" />
+                    <span>Immediate Action Required: Caregiver Assignment Rejection(s)</span>
+                  </div>
+                  <p className="text-xs text-rose-800 leading-relaxed">
+                    <strong>{fieldStats.rejectedCount} visit assignment(s)</strong> have been rejected by assigned staff with documented reasons. An administrator must assign replacement caregivers to restore the confirmed patient schedule.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setFieldOpsSubTab('visits');
+                    setFieldStatusFilter('rejected');
+                    loadTabData('field_ops', { fieldStatus: 'rejected' });
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 text-white hover:bg-rose-700 shadow-sm shrink-0 flex items-center gap-1.5 transition"
+                >
+                  <span>Filter Rejected &amp; Reassign</span>
+                  <span>→</span>
+                </button>
+              </div>
+            )}
 
             {/* Overdue Visits & Exceptions Alert Banner */}
             {(fieldStats?.failedVisits > 0 || fieldStats?.overdueVisits > 0) && (
@@ -1497,14 +1636,16 @@ export default function AdminDashboardPage() {
                   <select
                     value={fieldStatusFilter}
                     onChange={(e) => {
-                      setFieldStatusFilter(e.target.value);
-                      setTimeout(() => loadTabData('field_ops'), 0);
+                      const val = e.target.value;
+                      setFieldStatusFilter(val);
+                      loadTabData('field_ops', { fieldStatus: val });
                     }}
                     className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
                   >
                     <option value="all">All Statuses</option>
-                    <option value="assigned">Assigned</option>
-                    <option value="accepted">Accepted</option>
+                    <option value="assigned">Pending Acceptance (Assigned)</option>
+                    <option value="accepted">Accepted by Caregiver</option>
+                    <option value="rejected">Rejected by Caregiver</option>
                     <option value="en_route">En Route</option>
                     <option value="arrived">Arrived</option>
                     <option value="in_progress">In Progress</option>
@@ -1619,14 +1760,43 @@ export default function AdminDashboardPage() {
                               <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${
                                 v.status === 'completed'
                                   ? 'bg-emerald-100 text-emerald-800'
+                                  : v.status === 'accepted'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                   : v.status === 'in_progress'
                                   ? 'bg-blue-100 text-primary animate-pulse'
+                                  : v.status === 'rejected'
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-300 font-extrabold'
                                   : v.status === 'failed' || v.status === 'cancelled'
                                   ? 'bg-rose-100 text-rose-800'
                                   : 'bg-amber-100 text-amber-800'
                               }`}>
-                                {v.status?.replace('_', ' ')}
+                                {v.status === 'assigned' ? 'Pending Acceptance' : v.status?.replace('_', ' ')}
                               </span>
+
+                              {v.status === 'rejected' && (
+                                <div className="mt-1 text-[11px] text-rose-700 bg-rose-50 p-1.5 rounded-lg border border-rose-200">
+                                  <div className="font-bold flex items-center gap-1 text-[10px]">
+                                    <span>❌ Rejected by Caregiver</span>
+                                  </div>
+                                  {v.assignmentRejection?.reason && (
+                                    <div className="mt-0.5 text-[10px] text-slate-700 leading-tight">
+                                      <span className="font-semibold text-rose-800">Reason:</span> "{v.assignmentRejection.reason}"
+                                    </div>
+                                  )}
+                                  {v.timestamps?.rejectedAt && (
+                                    <div className="text-[9px] text-slate-400 mt-0.5">
+                                      {new Date(v.timestamps.rejectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {v.status === 'accepted' && v.timestamps?.acceptedAt && (
+                                <div className="mt-0.5 text-[10px] text-emerald-600 font-medium">
+                                  ✓ Accepted {new Date(v.timestamps.acceptedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                              )}
+
                               {v.exceptionDetails?.reason && (
                                 <div className="text-[10px] text-rose-600 mt-1 max-w-[130px] truncate" title={v.exceptionDetails.reason}>
                                   Ex: {v.exceptionDetails.reason}
@@ -1701,18 +1871,26 @@ export default function AdminDashboardPage() {
                                 )}
                                 <Button
                                   size="sm"
-                                  variant="outline"
+                                  variant={v.status === 'rejected' ? 'primary' : 'outline'}
+                                  className={v.status === 'rejected' ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-sm' : ''}
                                   onClick={() => {
                                     setSelectedVisitForAssign(v);
-                                    setReassignProviderId(v.providerId || '');
-                                    setReassignProviderName(v.providerName || 'Dr. Priya Deshmukh');
-                                    setReassignProviderPhone(v.providerPhone || '9820011003');
+                                    setReassignModalError(null);
+                                    setReassignProviderId(v.status === 'rejected' ? '' : (v.providerId || ''));
+                                    setReassignProviderName(v.status === 'rejected' ? '' : (v.providerName || ''));
+                                    setReassignProviderPhone(v.status === 'rejected' ? '' : (v.providerPhone || ''));
                                     setReassignScheduledDate(v.scheduledDate || new Date().toISOString().slice(0, 10));
-                                    setReassignTimeSlot(v.timeSlot || '11:00 AM - 01:00 PM');
+                                    setReassignTimeSlot(v.timeSlot || '09:00 AM - 11:00 AM');
+                                    const rejectionMsg = v.rejectionReason || v.assignmentRejection?.reason || '';
+                                    setReassignReason(
+                                      v.status === 'rejected'
+                                        ? `Replacement for rejected caregiver ${v.providerName || ''}${rejectionMsg ? ` (${rejectionMsg})` : ''}`
+                                        : 'Clinical route balancing and priority assignment'
+                                    );
                                     setShowReassignModal(true);
                                   }}
                                 >
-                                  Reassign
+                                  {v.status === 'rejected' ? 'Reassign Caregiver' : 'Reassign'}
                                 </Button>
                               </div>
                             </td>
@@ -4310,12 +4488,41 @@ export default function AdminDashboardPage() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setShowReassignModal(false)}
+                  onClick={() => {
+                    setShowReassignModal(false);
+                    setReassignModalError(null);
+                  }}
                   className="text-slate-400 hover:text-slate-600"
                 >
                   <X size={18} />
                 </button>
               </div>
+
+              {selectedVisitForAssign.status === 'rejected' && (
+                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800">
+                  <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-rose-900">Assignment Rejected — Replacement Caregiver Required</p>
+                    <p className="mt-0.5 text-rose-700">
+                      Caregiver <span className="font-semibold text-rose-900">{selectedVisitForAssign.providerName || 'Assigned Caregiver'}</span> rejected this assignment.
+                      {(selectedVisitForAssign.rejectionReason || selectedVisitForAssign.assignmentRejection?.reason) && (
+                        <span className="block mt-0.5 italic text-slate-700">Reason: &ldquo;{selectedVisitForAssign.rejectionReason || selectedVisitForAssign.assignmentRejection?.reason}&rdquo;</span>
+                      )}
+                    </p>
+                    <p className="text-[11px] text-rose-600 mt-1">Please select an alternate active caregiver below to reassign this visit.</p>
+                  </div>
+                </div>
+              )}
+
+              {reassignModalError && (
+                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800 animate-in fade-in">
+                  <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-rose-900">Reassignment Failed</p>
+                    <p className="mt-0.5 text-rose-700">{reassignModalError}</p>
+                  </div>
+                </div>
+              )}
 
               <form onSubmit={handleReassignVisitSubmit} className="space-y-4">
                 <div>
@@ -4336,11 +4543,17 @@ export default function AdminDashboardPage() {
                     className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white mb-2"
                   >
                     <option value="">-- Choose from Registered Active Staff --</option>
-                    {availableCaregivers.map((u) => (
-                      <option key={u._id || u.id} value={u._id || u.id}>
-                        {u.fullName} ({u.role?.toUpperCase()}) — +91 {u.phone}
-                      </option>
-                    ))}
+                    {availableCaregivers.map((u) => {
+                      const uid = u._id || u.id;
+                      const isRejector =
+                        selectedVisitForAssign.status === 'rejected' &&
+                        (uid === selectedVisitForAssign.providerId || u.phone === selectedVisitForAssign.providerPhone);
+                      return (
+                        <option key={uid} value={uid} disabled={isRejector}>
+                          {u.fullName} ({u.role?.toUpperCase()}) — +91 {u.phone} {isRejector ? '(REJECTED THIS VISIT)' : ''}
+                        </option>
+                      );
+                    })}
                   </select>
 
                   <div className="grid grid-cols-2 gap-2">
@@ -4391,7 +4604,9 @@ export default function AdminDashboardPage() {
                       className="w-full px-3 py-2 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
                     >
                       <option value="09:00 AM - 11:00 AM">09:00 AM - 11:00 AM</option>
+                      <option value="09:00 - 11:00">09:00 - 11:00 (Morning Slot)</option>
                       <option value="11:00 AM - 01:00 PM">11:00 AM - 01:00 PM</option>
+                      <option value="11:00 - 13:00">11:00 - 13:00 (Midday Slot)</option>
                       <option value="02:00 PM - 04:00 PM">02:00 PM - 04:00 PM</option>
                       <option value="04:00 PM - 06:00 PM">04:00 PM - 06:00 PM</option>
                     </select>
@@ -4417,7 +4632,10 @@ export default function AdminDashboardPage() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => setShowReassignModal(false)}
+                    onClick={() => {
+                      setShowReassignModal(false);
+                      setReassignModalError(null);
+                    }}
                   >
                     Cancel
                   </Button>
@@ -4893,22 +5111,32 @@ export default function AdminDashboardPage() {
                 {inAppNotifs.length > 0 ? (
                   inAppNotifs.map((notif) => {
                     const isUnread = !notif.isRead;
-                    const isSubscription = notif.relatedEntityType === 'CaregiverSubscription' || notif.type === 'SUBSCRIPTION_ACTIVATED';
-                    const isReschedule = notif.relatedEntityType === 'VisitRescheduleRequest' || notif.type?.includes('RESCHEDULE');
+                    const notifType = notif.type || notif.templateId;
+                    const isSubscription = notif.relatedEntityType === 'CaregiverSubscription' || notifType === 'SUBSCRIPTION_ACTIVATED';
+                    const isReschedule = notif.relatedEntityType === 'VisitRescheduleRequest' || notifType?.includes('RESCHEDULE');
+                    const isRejection = notifType === 'VISIT_ASSIGNMENT_REJECTED' || notif.messageBody?.includes('Assignment Rejected');
 
                     return (
                       <div
                         key={notif._id}
                         onClick={() => handleMarkNotificationRead(notif._id, notif)}
                         className={`p-4 hover:bg-slate-50/80 transition cursor-pointer flex items-start gap-3 ${
-                          isUnread ? 'bg-primary-light/20' : ''
+                          isUnread
+                            ? isRejection
+                              ? 'bg-rose-50/70 border-l-4 border-l-rose-500'
+                              : 'bg-primary-light/20 border-l-4 border-l-primary'
+                            : ''
                         }`}
                       >
-                        <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${isUnread ? 'bg-primary' : 'bg-slate-300'}`} />
+                        <div
+                          className={`mt-1.5 w-2.5 h-2.5 rounded-full shrink-0 ${
+                            isUnread ? (isRejection ? 'bg-rose-600' : 'bg-primary') : 'bg-slate-300'
+                          }`}
+                        />
                         <div className="flex-1 space-y-1">
                           <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-xs text-navy">
-                              {notif.type?.replace(/_/g, ' ') || 'Notification'}
+                            <span className={`font-bold text-xs ${isRejection ? 'text-rose-900' : 'text-navy'}`}>
+                              {isRejection ? '🚨 Assignment Rejected' : notifType?.replace(/_/g, ' ') || 'Notification'}
                             </span>
                             <span className="text-[10px] text-slate-400 font-mono">
                               {new Date(notif.sentAt || notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -4919,7 +5147,12 @@ export default function AdminDashboardPage() {
                             {notif.messageBody}
                           </p>
 
-                          <div className="flex items-center gap-2 pt-1">
+                          <div className="flex items-center gap-2 pt-1 flex-wrap">
+                            {isRejection && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200">
+                                REASSIGNMENT REQUIRED
+                              </span>
+                            )}
                             {isSubscription && (
                               <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
                                 TEST MODE

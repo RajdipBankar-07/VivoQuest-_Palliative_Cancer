@@ -19,6 +19,14 @@ export interface PatientSubscription {
   subscriptionNumber: string;
   planId: string;
   planTitle: string;
+  planCode?: string;
+  planType?: string;
+  category?: string;
+  durationDays?: number;
+  hoursPerVisit?: number;
+  features?: string[];
+  planDescription?: string;
+  plan?: SubscriptionPlan;
   status: 'active' | 'paused' | 'suspended' | 'completed' | 'cancelled' | 'expired';
   startDate: string;
   endDate: string;

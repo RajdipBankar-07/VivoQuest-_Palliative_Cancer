@@ -15,6 +15,7 @@ import { Supplier } from '../models/Supplier.js';
 import { SupplierPurchaseOrder } from '../models/SupplierPurchaseOrder.js';
 import { CaregiverPlan } from '../models/CaregiverPlan.js';
 import { CaregiverSubscription } from '../models/CaregiverSubscription.js';
+import { VisitRescheduleRequest } from '../models/VisitRescheduleRequest.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { hashPassword } from './authService.js';
 import { seedServicesIfEmpty } from './serviceCatalogService.js';
@@ -329,6 +330,7 @@ export const getAdminDashboardOverview = async () => {
     totalProductOrders,
     supplierCount,
     activeSubscriptionsCount,
+    pendingRescheduleCount,
   ] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ role: { $in: ['patient', 'caregiver'] } }),
@@ -346,6 +348,7 @@ export const getAdminDashboardOverview = async () => {
     ProductOrder.countDocuments(),
     Supplier.countDocuments(),
     CaregiverSubscription.countDocuments({ status: 'active' }),
+    VisitRescheduleRequest.countDocuments({ status: 'pending' }),
   ]);
 
   const overviewMetrics = {
@@ -364,6 +367,7 @@ export const getAdminDashboardOverview = async () => {
     totalProductOrders,
     supplierCount,
     activeSubscriptionsCount,
+    pendingRescheduleCount,
   };
 
   return {

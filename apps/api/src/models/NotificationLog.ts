@@ -21,7 +21,9 @@ export type NotificationTemplateId =
   | 'CAREGIVER_REASSIGNED'
   | 'CAREGIVER_REASSIGNED_PATIENT'
   | 'CAREGIVER_REASSIGNED_REMOVED'
-  | 'FIELD_VISIT_SCHEDULED';
+  | 'FIELD_VISIT_SCHEDULED'
+  | 'VISIT_ASSIGNMENT_ACCEPTED'
+  | 'VISIT_ASSIGNMENT_REJECTED';
 
 export type NotificationStatus = 'sent' | 'delivered' | 'failed' | 'simulated';
 
@@ -50,6 +52,8 @@ export interface INotificationLog extends Document {
     appointmentId?: string;
     [key: string]: any;
   };
+  type?: string;
+  relatedEntityType?: string;
   isRead?: boolean;
   readAt?: Date;
   sentAt?: Date;
@@ -105,6 +109,8 @@ const NotificationLogSchema = new Schema<INotificationLog>(
         'CAREGIVER_REASSIGNED_PATIENT',
         'CAREGIVER_REASSIGNED_REMOVED',
         'FIELD_VISIT_SCHEDULED',
+        'VISIT_ASSIGNMENT_ACCEPTED',
+        'VISIT_ASSIGNMENT_REJECTED',
       ],
       required: true,
       index: true,
@@ -148,6 +154,16 @@ const NotificationLogSchema = new Schema<INotificationLog>(
     },
     metadata: {
       type: Schema.Types.Mixed,
+    },
+    type: {
+      type: String,
+      trim: true,
+      index: true,
+    },
+    relatedEntityType: {
+      type: String,
+      trim: true,
+      index: true,
     },
     isRead: {
       type: Boolean,

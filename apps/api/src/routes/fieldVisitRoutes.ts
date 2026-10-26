@@ -6,6 +6,8 @@ import {
   listProviderFieldVisits,
   getFieldVisitById,
   updateFieldVisitStatus,
+  acceptFieldVisitAssignment,
+  rejectFieldVisitAssignment,
   recordFieldVisitClinicalDoc,
   generateFieldVisitReportDownload,
   adminEditFieldVisitClinicalDoc,
@@ -15,12 +17,14 @@ import {
   failOrRescheduleInstallation,
   processSyncBatch,
   scheduleVisitForSubscription,
+  hideProviderFieldVisit,
 } from '../services/fieldOperationsService.js';
-import { getCaregiverAssignedPatients } from '../services/patientService.js';
+import { getCaregiverAssignedPatients, deleteOrHideCareReport } from '../services/patientService.js';
 import {
   getPendingRescheduleRequestsForApprover,
   approveRescheduleRequest,
   rejectRescheduleRequest,
+  hideRescheduleRequest,
 } from '../services/visitRescheduleService.js';
 import { FieldVisitStatus, VisitExceptionType } from '../models/FieldVisit.js';
 
@@ -245,6 +249,66 @@ router.patch(
 );
 
 /**
+ * POST /api/v1/visits/:id/accept
+ * Caregiver accepts assigned field visit
+ */
+router.post(
+  '/:id/accept',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const updated = await acceptFieldVisitAssignment(req.params.id, {
+        _id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+        phone: user.phone,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Field visit assignment accepted successfully.',
+        data: updated,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/visits/:id/reject
+ * Caregiver rejects assigned field visit with mandatory reason
+ */
+router.post(
+  '/:id/reject',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const reason = req.body.reason || req.body.rejectionReason;
+
+      const updated = await rejectFieldVisitAssignment(req.params.id, reason, {
+        _id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+        phone: user.phone,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Field visit assignment rejected. Operational desk notified.',
+        data: updated,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /api/v1/visits/:id/documentation
  * Record structured clinical observations, vitals, procedures, and recommendations
  */
@@ -360,26 +424,132 @@ router.patch(
 
 /**
  * DELETE /api/v1/visits/:id/documentation
- * Admin soft-delete clinical documentation with mandatory audit reason
+ * Caregiver/Admin soft-delete clinical documentation with mandatory audit reason.
+ * Enforces role and assignment authorization.
  */
 router.delete(
   '/:id/documentation',
   authenticateUser,
-  requireRole(['admin', 'super_admin']),
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const user = req.user!;
       const { reason } = req.body;
-      const updated = await adminSoftDeleteFieldVisitClinicalDoc(req.params.id, {
-        _id: user._id,
-        role: user.role,
-        fullName: user.fullName,
-      }, reason);
+      const result = await deleteOrHideCareReport(req.params.id, user, reason);
 
       res.status(200).json({
         success: true,
-        message: 'Clinical care report soft-deleted and archived',
-        data: updated,
+        message: result.message,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/visits/:id/report
+ * Caregiver/Admin soft-delete clinical care report
+ */
+router.delete(
+  '/:id/report',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { reason } = req.body;
+      const result = await deleteOrHideCareReport(req.params.id, user, reason);
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/visits/reports/:reportId
+ * Caregiver/Admin soft-delete clinical care report by report identifier
+ */
+router.delete(
+  '/reports/:reportId',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { reason } = req.body;
+      const result = await deleteOrHideCareReport(req.params.reportId, user, reason);
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/visits/:id/hide
+ * Hide a visit entry from caregiver's assigned view without cancelling or modifying the schedule
+ */
+router.delete(
+  '/:id/hide',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { reason } = req.body;
+      const result = await hideProviderFieldVisit(req.params.id, user, reason);
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/visits/reschedule-requests/:requestId
+ * Hide reschedule request from caregiver/admin view
+ */
+router.delete(
+  '/reschedule-requests/:requestId',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const { reason } = req.body;
+      const result = await hideRescheduleRequest(
+        req.params.requestId,
+        {
+          _id: user._id,
+          fullName: user.fullName,
+          phone: user.phone,
+          role: user.role,
+        },
+        reason
+      );
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
+        data: result,
       });
     } catch (error) {
       next(error);

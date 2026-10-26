@@ -21,6 +21,14 @@ export interface PatientSubscriptionDTO {
   subscriptionNumber: string;
   planId: string;
   planTitle: string;
+  planCode?: string;
+  planType?: string;
+  category?: string;
+  durationDays?: number;
+  hoursPerVisit?: number;
+  features?: string[];
+  planDescription?: string;
+  plan?: any;
   status: SubscriptionStatus;
   startDate: Date;
   endDate: Date;
@@ -36,6 +44,7 @@ export interface PatientSubscriptionDTO {
     customerPrice: number;
     paymentStatus: string;
     paymentMethod?: string;
+    razorpayPaymentId?: string;
   };
   emergencyContact?: {
     name?: string;
@@ -43,6 +52,7 @@ export interface PatientSubscriptionDTO {
     relation?: string;
   };
   carePlanNotes?: string;
+  isArchived?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -197,7 +207,7 @@ export interface AssignedPatientSummaryDTO {
 // -----------------------------------------------------------------------------
 
 // Helper to generate standard Indian mobile phone variants for robust database querying
-const getPhoneVariants = (phone?: string): string[] => {
+export const getPhoneVariants = (phone?: string): string[] => {
   if (!phone) return [];
   const cleanDigits = phone.replace(/\D/g, '');
   const variants = new Set<string>([phone.trim(), cleanDigits]);
@@ -245,36 +255,54 @@ export const getPatientSubscriptions = async (
     query.status = statusFilter;
   }
 
-  const subs = await CaregiverSubscription.find(query).sort({ createdAt: -1 }).lean();
+  const subs = await CaregiverSubscription.find(query)
+    .populate('planId')
+    .sort({ createdAt: -1 })
+    .lean();
 
-  return subs.map((sub: any) => ({
-    id: sub._id.toString(),
-    subscriptionNumber: sub.subscriptionNumber,
-    planId: sub.planId ? sub.planId.toString() : '',
-    planTitle: sub.planTitle,
-    status: sub.status,
-    startDate: sub.startDate,
-    endDate: sub.endDate,
-    assignedCaregiver: sub.assignedCaregiverId
-      ? {
-          id: sub.assignedCaregiverId.toString(),
-          name: sub.assignedCaregiverName || 'Assigned Caregiver',
-          phone: sub.assignedCaregiverPhone || '',
-        }
-      : null,
-    totalVisitsIncluded: sub.totalVisitsIncluded,
-    visitsCompleted: sub.visitsCompleted,
-    visitsRemaining: sub.visitsRemaining,
-    pricing: {
-      customerPrice: sub.pricing?.customerPrice ?? 0,
-      paymentStatus: sub.pricing?.paymentStatus ?? 'pending',
-      paymentMethod: sub.pricing?.paymentMethod,
-    },
-    emergencyContact: sub.emergencyContact,
-    carePlanNotes: sub.carePlanNotes,
-    createdAt: sub.createdAt,
-    updatedAt: sub.updatedAt,
-  }));
+  return subs.map((sub: any) => {
+    const planObj = sub.planId && typeof sub.planId === 'object' && sub.planId._id ? sub.planId : null;
+    const resolvedPlanId = planObj ? planObj._id.toString() : (sub.planId ? sub.planId.toString() : '');
+
+    return {
+      id: sub._id.toString(),
+      subscriptionNumber: sub.subscriptionNumber,
+      planId: resolvedPlanId,
+      planTitle: sub.planTitle || planObj?.title || 'Care Plan',
+      planCode: planObj?.planCode || '',
+      planType: planObj?.planType || '',
+      category: planObj?.category || '',
+      durationDays: planObj?.durationDays || 30,
+      hoursPerVisit: planObj?.hoursPerVisit || 8,
+      features: planObj?.features || [],
+      planDescription: planObj?.description || '',
+      plan: planObj ? { ...planObj, id: resolvedPlanId } : undefined,
+      status: sub.status,
+      startDate: sub.startDate,
+      endDate: sub.endDate,
+      assignedCaregiver: sub.assignedCaregiverId
+        ? {
+            id: sub.assignedCaregiverId.toString(),
+            name: sub.assignedCaregiverName || 'Assigned Caregiver',
+            phone: sub.assignedCaregiverPhone || '',
+          }
+        : null,
+      totalVisitsIncluded: sub.totalVisitsIncluded,
+      visitsCompleted: sub.visitsCompleted,
+      visitsRemaining: sub.visitsRemaining,
+      pricing: {
+        customerPrice: sub.pricing?.customerPrice ?? planObj?.customerPrice ?? 0,
+        paymentStatus: sub.pricing?.paymentStatus ?? 'pending',
+        paymentMethod: sub.pricing?.paymentMethod,
+        razorpayPaymentId: sub.pricing?.razorpayPaymentId,
+      },
+      emergencyContact: sub.emergencyContact,
+      carePlanNotes: sub.carePlanNotes,
+      isArchived: Boolean(sub.isArchived),
+      createdAt: sub.createdAt,
+      updatedAt: sub.updatedAt,
+    };
+  });
 };
 
 // -----------------------------------------------------------------------------
@@ -360,6 +388,7 @@ export const getPatientCareReports = async (
       },
       {
         'clinicalDocumentation.isDeleted': { $ne: true },
+        'clinicalDocumentation.hiddenFromPatient': { $ne: true },
       },
     ],
   })
@@ -367,7 +396,11 @@ export const getPatientCareReports = async (
     .lean();
 
   // 2. Patient & Caregiver reported health updates
-  const updates = await DailyHealthUpdate.find({ patientId: patientObjId })
+  const updates = await DailyHealthUpdate.find({
+    patientId: patientObjId,
+    isDeleted: { $ne: true },
+    hiddenFromPatient: { $ne: true },
+  })
     .sort({ submittedAt: -1 })
     .lean();
 
@@ -435,6 +468,218 @@ export const getPatientCareReports = async (
     dailyUpdatesCount: updates.length,
   };
 };
+
+/**
+ * Phase 1: Soft-delete or hide a care report (FieldVisit or DailyHealthUpdate)
+ * - Patient: hides report only from the Patient App normal report list.
+ * - Caregiver: hides report from all 3 normal lists (Caregiver, Patient, Admin).
+ * - Admin: soft-deletes report with administrative audit trail.
+ * Authorization is strictly enforced.
+ */
+export const deleteOrHideCareReport = async (
+  reportId: string,
+  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string; phone?: string },
+  reason?: string
+): Promise<{
+  success: boolean;
+  message: string;
+  sourceType: 'field_visit' | 'daily_health_update';
+  hiddenOnlyFromPatient: boolean;
+  reportId: string;
+}> => {
+  if (!mongoose.Types.ObjectId.isValid(reportId)) {
+    throw new AppError('Invalid care report identifier', 400);
+  }
+
+  // Find either FieldVisit or DailyHealthUpdate
+  let fieldVisit = await FieldVisit.findById(reportId);
+  let dailyUpdate: IDailyHealthUpdate | null = null;
+  let sourceType: 'field_visit' | 'daily_health_update' = 'field_visit';
+
+  if (!fieldVisit) {
+    dailyUpdate = await DailyHealthUpdate.findById(reportId);
+    if (!dailyUpdate) {
+      throw new AppError('Care report not found', 404);
+    }
+    sourceType = 'daily_health_update';
+  }
+
+  // 1. PATIENT Role: hides report ONLY from Patient's own interface
+  if (user.role === 'patient') {
+    if (sourceType === 'field_visit') {
+      const userPhoneVariants = getPhoneVariants(user.phone);
+      const isOwner =
+        (fieldVisit!.patientId && fieldVisit!.patientId.toString() === user._id.toString()) ||
+        (fieldVisit!.patientDetails?.phone && userPhoneVariants.includes(fieldVisit!.patientDetails.phone));
+
+      if (!isOwner) {
+        throw new AppError('Forbidden: Patients cannot delete or hide another patient\'s report', 403);
+      }
+
+      if (!fieldVisit!.clinicalDocumentation) {
+        fieldVisit!.clinicalDocumentation = {};
+      }
+      fieldVisit!.clinicalDocumentation.hiddenFromPatient = true;
+      fieldVisit!.clinicalDocumentation.hiddenFromPatientAt = new Date();
+      await fieldVisit!.save();
+    } else {
+      if (dailyUpdate!.patientId.toString() !== user._id.toString()) {
+        throw new AppError('Forbidden: Patients cannot delete or hide another patient\'s report', 403);
+      }
+
+      dailyUpdate!.hiddenFromPatient = true;
+      dailyUpdate!.hiddenFromPatientAt = new Date();
+      await dailyUpdate!.save();
+    }
+
+    await AuditLog.create({
+      action: 'CARE_REPORT_HIDDEN_BY_PATIENT',
+      category: 'clinical_governance',
+      actorId: user._id,
+      actorName: user.fullName,
+      actorRole: 'patient',
+      targetType: sourceType === 'field_visit' ? 'FieldVisit' : 'DailyHealthUpdate',
+      targetId: sourceType === 'field_visit' ? fieldVisit!.visitNumber : dailyUpdate!._id.toString(),
+      severity: 'info',
+      timestamp: new Date(),
+      details: {
+        reportId,
+        sourceType,
+        hiddenFrom: 'patient_view_only',
+        clinicalRecordPreserved: true,
+        reason: reason?.trim() || 'Hidden from view by patient',
+      },
+    }).catch(() => {});
+
+    return {
+      success: true,
+      message: 'Care report hidden from your patient dashboard. Clinical record remains preserved.',
+      sourceType,
+      hiddenOnlyFromPatient: true,
+      reportId,
+    };
+  }
+
+  // 2. CAREGIVER / NURSE / PROFESSIONAL Role: hides report from Caregiver, Patient, and Admin normal lists
+  if (['professional', 'caregiver', 'nurse'].includes(user.role)) {
+    if (sourceType === 'field_visit') {
+      const userPhoneVariants = getPhoneVariants(user.phone);
+      const isAssigned =
+        (fieldVisit!.providerId && fieldVisit!.providerId.toString() === user._id.toString()) ||
+        (fieldVisit!.providerPhone && userPhoneVariants.includes(fieldVisit!.providerPhone));
+      if (!isAssigned) {
+        throw new AppError('Forbidden: Caregivers can only delete reports for their assigned visits/patients', 403);
+      }
+
+      if (!fieldVisit!.clinicalDocumentation) {
+        fieldVisit!.clinicalDocumentation = {};
+      }
+      fieldVisit!.clinicalDocumentation.isDeleted = true;
+      fieldVisit!.clinicalDocumentation.deletedAt = new Date();
+      fieldVisit!.clinicalDocumentation.deletedBy = user._id;
+      fieldVisit!.clinicalDocumentation.deletedByRole = user.role;
+      fieldVisit!.clinicalDocumentation.deletedByName = user.fullName;
+      fieldVisit!.clinicalDocumentation.deletionReason = reason?.trim() || 'Soft-deleted by attending caregiver';
+      fieldVisit!.clinicalDocumentation.hiddenFromPatient = true;
+      fieldVisit!.clinicalDocumentation.hiddenFromCaregiver = true;
+      await fieldVisit!.save();
+    } else {
+      const isAssignedToPatient = await verifyCaregiverPatientAssignment(user._id.toString(), dailyUpdate!.patientId.toString());
+      if (!isAssignedToPatient) {
+        throw new AppError('Forbidden: Caregivers can only delete reports for their assigned visits/patients', 403);
+      }
+
+      dailyUpdate!.isDeleted = true;
+      dailyUpdate!.deletedAt = new Date();
+      dailyUpdate!.deletedBy = user._id;
+      dailyUpdate!.deletedByRole = user.role;
+      dailyUpdate!.deletedByName = user.fullName;
+      dailyUpdate!.deletionReason = reason?.trim() || 'Soft-deleted by attending caregiver';
+      dailyUpdate!.hiddenFromPatient = true;
+      dailyUpdate!.hiddenFromCaregiver = true;
+      await dailyUpdate!.save();
+    }
+
+    await AuditLog.create({
+      action: 'CARE_REPORT_DELETED_BY_CAREGIVER',
+      category: 'clinical_governance',
+      actorId: user._id,
+      actorName: user.fullName,
+      actorRole: user.role,
+      targetType: sourceType === 'field_visit' ? 'FieldVisit' : 'DailyHealthUpdate',
+      targetId: sourceType === 'field_visit' ? fieldVisit!.visitNumber : dailyUpdate!._id.toString(),
+      severity: 'warning',
+      timestamp: new Date(),
+      details: {
+        reportId,
+        sourceType,
+        hiddenFromNormalLists: true,
+        clinicalRecordPreserved: true,
+        reason: reason?.trim() || 'Soft-deleted by attending caregiver',
+      },
+    }).catch(() => {});
+
+    return {
+      success: true,
+      message: 'Clinical care report removed from normal report listings.',
+      sourceType,
+      hiddenOnlyFromPatient: false,
+      reportId,
+    };
+  }
+
+  // 3. ADMIN / SUPER_ADMIN Role: soft-delete
+  if (['admin', 'super_admin'].includes(user.role)) {
+    if (sourceType === 'field_visit') {
+      if (!fieldVisit!.clinicalDocumentation) {
+        fieldVisit!.clinicalDocumentation = {};
+      }
+      fieldVisit!.clinicalDocumentation.isDeleted = true;
+      fieldVisit!.clinicalDocumentation.deletedAt = new Date();
+      fieldVisit!.clinicalDocumentation.deletedBy = user._id;
+      fieldVisit!.clinicalDocumentation.deletedByRole = user.role;
+      fieldVisit!.clinicalDocumentation.deletedByName = user.fullName;
+      fieldVisit!.clinicalDocumentation.deletionReason = reason?.trim() || 'Administrative soft deletion';
+      await fieldVisit!.save();
+    } else {
+      dailyUpdate!.isDeleted = true;
+      dailyUpdate!.deletedAt = new Date();
+      dailyUpdate!.deletedBy = user._id;
+      dailyUpdate!.deletedByRole = user.role;
+      dailyUpdate!.deletedByName = user.fullName;
+      dailyUpdate!.deletionReason = reason?.trim() || 'Administrative soft deletion';
+      await dailyUpdate!.save();
+    }
+
+    await AuditLog.create({
+      action: 'CLINICAL_REPORT_SOFT_DELETED',
+      category: 'clinical_governance',
+      actorId: user._id,
+      actorName: user.fullName,
+      actorRole: user.role,
+      targetType: sourceType === 'field_visit' ? 'FieldVisit' : 'DailyHealthUpdate',
+      targetId: sourceType === 'field_visit' ? fieldVisit!.visitNumber : dailyUpdate!._id.toString(),
+      severity: 'warning',
+      timestamp: new Date(),
+      details: {
+        reportId,
+        sourceType,
+        reason: reason?.trim() || 'Administrative soft deletion',
+      },
+    }).catch(() => {});
+
+    return {
+      success: true,
+      message: 'Clinical care report soft-deleted and archived.',
+      sourceType,
+      hiddenOnlyFromPatient: false,
+      reportId,
+    };
+  }
+
+  throw new AppError(`Forbidden: Role '${user.role}' cannot delete care reports`, 403);
+};
+
 
 // -----------------------------------------------------------------------------
 // 4. Caregiver-Patient Assignment Verification (Rock-solid Security Guardrail)
@@ -744,48 +989,61 @@ export const getAuthorizedPatientDetails = async (
 
   const [patientProfile, rawSubscriptions, rawVisits, careReports] = await Promise.all([
     PatientProfile.findOne({ userId: patientObjId }).lean(),
-    CaregiverSubscription.find({ $or: subOr }).sort({ createdAt: -1 }).lean(),
+    CaregiverSubscription.find({ $or: subOr }).populate('planId').sort({ createdAt: -1 }).lean(),
     FieldVisit.find({ $or: visitOr }).sort({ scheduledDate: -1, 'timestamps.assignedAt': -1 }).lean(),
     getPatientCareReports(patientId, patientUser.phone),
   ]);
 
   // 4. Map Subscriptions (Full overview for current and past)
-  const mappedSubscriptions = rawSubscriptions.map((sub: any) => ({
-    id: sub._id.toString(),
-    subscriptionNumber: sub.subscriptionNumber,
-    planId: sub.planId ? sub.planId.toString() : '',
-    planTitle: sub.planTitle,
-    status: sub.status,
-    isArchived: Boolean(sub.isArchived),
-    startDate: sub.startDate,
-    endDate: sub.endDate,
-    totalVisitsIncluded: sub.totalVisitsIncluded,
-    visitsCompleted: sub.visitsCompleted,
-    visitsRemaining: sub.visitsRemaining,
-    assignedCaregiver: sub.assignedCaregiverId
-      ? {
-          id: sub.assignedCaregiverId.toString(),
-          name: sub.assignedCaregiverName || 'Assigned Caregiver',
-          phone: sub.assignedCaregiverPhone || '',
-        }
-      : null,
-    pricing: {
-      customerPrice: sub.pricing?.customerPrice ?? 0,
-      paymentStatus: sub.pricing?.paymentStatus ?? 'pending',
-      paymentMethod: sub.pricing?.paymentMethod || 'online',
-      razorpayPaymentId: sub.pricing?.razorpayPaymentId,
-    },
-    emergencyContact: sub.emergencyContact,
-    carePlanNotes: sub.carePlanNotes,
-    suspendedAt: sub.suspendedAt,
-    suspensionReason: sub.suspensionReason,
-    cancelledAt: sub.cancelledAt,
-    cancellationReason: sub.cancellationReason,
-    archivedAt: sub.archivedAt,
-    archiveReason: sub.archiveReason,
-    createdAt: sub.createdAt,
-    updatedAt: sub.updatedAt,
-  }));
+  const mappedSubscriptions = rawSubscriptions.map((sub: any) => {
+    const planObj = sub.planId && typeof sub.planId === 'object' && sub.planId._id ? sub.planId : null;
+    const resolvedPlanId = planObj ? planObj._id.toString() : (sub.planId ? sub.planId.toString() : '');
+
+    return {
+      id: sub._id.toString(),
+      subscriptionNumber: sub.subscriptionNumber,
+      planId: resolvedPlanId,
+      planTitle: sub.planTitle || planObj?.title || 'Care Plan',
+      planCode: planObj?.planCode || '',
+      planType: planObj?.planType || '',
+      category: planObj?.category || '',
+      durationDays: planObj?.durationDays || 30,
+      hoursPerVisit: planObj?.hoursPerVisit || 8,
+      features: planObj?.features || [],
+      planDescription: planObj?.description || '',
+      plan: planObj ? { ...planObj, id: resolvedPlanId } : undefined,
+      status: sub.status,
+      isArchived: Boolean(sub.isArchived),
+      startDate: sub.startDate,
+      endDate: sub.endDate,
+      totalVisitsIncluded: sub.totalVisitsIncluded,
+      visitsCompleted: sub.visitsCompleted,
+      visitsRemaining: sub.visitsRemaining,
+      assignedCaregiver: sub.assignedCaregiverId
+        ? {
+            id: sub.assignedCaregiverId.toString(),
+            name: sub.assignedCaregiverName || 'Assigned Caregiver',
+            phone: sub.assignedCaregiverPhone || '',
+          }
+        : null,
+      pricing: {
+        customerPrice: sub.pricing?.customerPrice ?? planObj?.customerPrice ?? 0,
+        paymentStatus: sub.pricing?.paymentStatus ?? 'pending',
+        paymentMethod: sub.pricing?.paymentMethod || 'online',
+        razorpayPaymentId: sub.pricing?.razorpayPaymentId,
+      },
+      emergencyContact: sub.emergencyContact,
+      carePlanNotes: sub.carePlanNotes,
+      suspendedAt: sub.suspendedAt,
+      suspensionReason: sub.suspensionReason,
+      cancelledAt: sub.cancelledAt,
+      cancellationReason: sub.cancellationReason,
+      archivedAt: sub.archivedAt,
+      archiveReason: sub.archiveReason,
+      createdAt: sub.createdAt,
+      updatedAt: sub.updatedAt,
+    };
+  });
 
   const activeSubscription = mappedSubscriptions.find((s) => s.status === 'active' && !s.isArchived) || null;
 
@@ -961,9 +1219,11 @@ export const formatVisitTypeName = (type: string): string => {
 export const formatVisitStatusLabel = (status: string): string => {
   switch (status) {
     case 'assigned':
-      return 'Caregiver Assigned';
+      return 'Caregiver Assigned (Pending Acceptance)';
     case 'accepted':
-      return 'Visit Confirmed';
+      return 'Visit Confirmed (Accepted)';
+    case 'rejected':
+      return 'Reassignment in Progress';
     case 'en_route':
       return 'Caregiver En Route';
     case 'arrived':
@@ -1021,27 +1281,36 @@ export const getPatientAssignedCaregiver = async (
   let fallbackRole = '';
 
   if (activeSub && activeSub.assignedCaregiverId) {
-    caregiverId = activeSub.assignedCaregiverId as mongoose.Types.ObjectId;
-    fallbackName = activeSub.assignedCaregiverName || 'Assigned Caregiver';
-    fallbackPhone = activeSub.assignedCaregiverPhone || '';
-    fallbackRole = 'Primary Bedside Nurse';
+    // Check if this caregiver recently rejected an upcoming visit for this patient
+    const rejectedUpcoming = await FieldVisit.findOne({
+      $or: subOr.map((c) => ({ ...c, providerId: activeSub.assignedCaregiverId, status: 'rejected' })),
+    });
 
-    // Lookup plan to get hoursPerVisit if available
-    let hoursPerVisit: number | undefined;
-    if (activeSub.planId) {
-      const planDoc = await CaregiverPlan.findById(activeSub.planId).lean();
-      hoursPerVisit = planDoc?.hoursPerVisit;
+    if (!rejectedUpcoming) {
+      caregiverId = activeSub.assignedCaregiverId as mongoose.Types.ObjectId;
+      fallbackName = activeSub.assignedCaregiverName || 'Assigned Caregiver';
+      fallbackPhone = activeSub.assignedCaregiverPhone || '';
+      fallbackRole = 'Primary Bedside Nurse';
+
+      // Lookup plan to get hoursPerVisit if available
+      let hoursPerVisit: number | undefined;
+      if (activeSub.planId) {
+        const planDoc = await CaregiverPlan.findById(activeSub.planId).lean();
+        hoursPerVisit = planDoc?.hoursPerVisit;
+      }
+
+      serviceInfo = {
+        planTitle: activeSub.planTitle,
+        shiftInfo: hoursPerVisit ? `${hoursPerVisit} hours per visit` : 'Daily Home Visit',
+        hoursPerVisit,
+        visitsRemaining: activeSub.visitsRemaining,
+        totalVisitsIncluded: activeSub.totalVisitsIncluded,
+        validThrough: activeSub.endDate,
+      };
     }
+  }
 
-    serviceInfo = {
-      planTitle: activeSub.planTitle,
-      shiftInfo: hoursPerVisit ? `${hoursPerVisit} hours per visit` : 'Daily Home Visit',
-      hoursPerVisit,
-      visitsRemaining: activeSub.visitsRemaining,
-      totalVisitsIncluded: activeSub.totalVisitsIncluded,
-      validThrough: activeSub.endDate,
-    };
-  } else {
+  if (!caregiverId) {
     // 2. Fallback: Check upcoming active FieldVisit
     const visitOr: any[] = [{ patientId: patientObjId }];
     if (phoneVariants.length > 0) {
@@ -1179,13 +1448,17 @@ export const getPatientVisitSchedule = async (
     visitOr.push({ 'patientDetails.phone': { $in: phoneVariants } });
   }
 
-  const rawVisits = await FieldVisit.find({ $or: visitOr })
+  const rawVisits = await FieldVisit.find({
+    $or: visitOr,
+    hiddenFromPatient: { $ne: true },
+  })
     .sort({ scheduledDate: -1, 'timestamps.assignedAt': -1 })
     .lean();
 
   const visitIds = rawVisits.map((v: any) => v._id);
   const rescheduleRequests = await VisitRescheduleRequest.find({
     visitId: { $in: visitIds },
+    hiddenFromPatient: { $ne: true },
   })
     .sort({ createdAt: -1 })
     .lean();
@@ -1225,14 +1498,15 @@ export const getPatientVisitSchedule = async (
       serviceName: formatVisitTypeName(v.visitType),
       status: v.status,
       statusLabel: formatVisitStatusLabel(v.status),
-      assignedCaregiver: v.providerId
-        ? {
-            id: v.providerId.toString(),
-            name: v.providerName || 'Caregiver',
-            role: v.providerRole || 'Clinical Specialist',
-            phone: providerPhone || undefined,
-          }
-        : null,
+      assignedCaregiver:
+        v.status === 'rejected' || v.assignmentStatus === 'rejected' || !v.providerId
+          ? null
+          : {
+              id: v.providerId.toString(),
+              name: v.providerName || 'Caregiver',
+              role: v.providerRole || 'Clinical Specialist',
+              phone: providerPhone || undefined,
+            },
       rescheduleRequest,
       instructions: v.patientDetails?.instructions || v.installationVerification?.installationNotes || undefined,
       recommendations: v.clinicalDocumentation?.recommendations || undefined,
@@ -1271,5 +1545,76 @@ export const getPatientVisitSchedule = async (
     upcomingCount: upcoming.length,
     pastCount: past.length,
     totalCount: mappedVisits.length,
+  };
+};
+
+/**
+ * Phase 1 Follow-up: Patient Can Hide Completed Visits
+ * Soft-hide completed or past field visits from the patient's personal visit history.
+ * Enforces ownership: only the assigned patient can hide their visit.
+ * Enforces eligibility: only completed, cancelled, or failed visits can be hidden (not active/upcoming).
+ * Preserves clinical documentation, reports, and audit history.
+ */
+export const hidePatientFieldVisit = async (
+  visitId: string,
+  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string; phone?: string },
+  reason?: string
+): Promise<{ success: boolean; message: string; visitId: string; hiddenFromPatient: boolean }> => {
+  if (!mongoose.Types.ObjectId.isValid(visitId)) {
+    throw new AppError('Invalid field visit identifier', 400);
+  }
+
+  const visit = await FieldVisit.findById(visitId);
+  if (!visit) {
+    throw new AppError('Field visit not found', 404);
+  }
+
+  // 1. Enforce Patient Ownership
+  const userPhoneVariants = getPhoneVariants(user.phone);
+  const isOwner =
+    (visit.patientId && visit.patientId.toString() === user._id.toString()) ||
+    (visit.patientDetails?.phone && userPhoneVariants.includes(visit.patientDetails.phone));
+
+  if (!isOwner && user.role !== 'admin' && user.role !== 'super_admin') {
+    throw new AppError('Forbidden: Patients cannot delete or hide another patient\'s visit', 403);
+  }
+
+  // 2. Enforce Eligibility: Only completed or past visits can be hidden
+  if (!['completed', 'cancelled', 'failed'].includes(visit.status)) {
+    throw new AppError('Only completed or past visits can be hidden from history', 400);
+  }
+
+  // 3. Mark hidden from patient while preserving status, clinical documentation, and audit trail
+  visit.hiddenFromPatient = true;
+  visit.hiddenFromPatientAt = new Date();
+  await visit.save();
+
+  // 4. Record Audit Log
+  await AuditLog.create({
+    action: 'FIELD_VISIT_HIDDEN_BY_PATIENT',
+    category: 'field_operations',
+    actorId: user._id,
+    actorName: user.fullName,
+    actorRole: 'patient',
+    targetType: 'FieldVisit',
+    targetId: visit.visitNumber,
+    severity: 'info',
+    timestamp: new Date(),
+    details: {
+      visitId: visit._id.toString(),
+      visitNumber: visit.visitNumber,
+      status: visit.status,
+      scheduledDate: visit.scheduledDate,
+      timeSlot: visit.timeSlot,
+      clinicalRecordPreserved: true,
+      reason: reason?.trim() || 'Hidden from history by patient',
+    },
+  }).catch(() => {});
+
+  return {
+    success: true,
+    message: 'Visit entry removed from your visit history. Clinical documentation and records remain preserved.',
+    visitId: visit._id.toString(),
+    hiddenFromPatient: true,
   };
 };

@@ -53,6 +53,7 @@ import {
   suspendCaregiverSubscription,
   resumeCaregiverSubscription,
   archiveCaregiverSubscription,
+  deleteCaregiverSubscriptionPermanently,
   getSubscriptionAuditHistory,
 } from '../services/caregiverPlanService.js';
 import {
@@ -682,9 +683,21 @@ adminRoutes.patch(
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
     try {
-      let { providerId, notes, reason, providerPhone, scheduledDate, timeSlot } = req.body;
+      let { providerId, notes, reason, providerPhone, scheduledDate, timeSlot, providerName } = req.body;
       if (!providerId && providerPhone) {
-        const found = await User.findOne({ phone: providerPhone.trim() });
+        const cleanPhone = String(providerPhone).replace(/\D/g, '').slice(-10);
+        if (cleanPhone.length === 10) {
+          const found = await User.findOne({ phone: cleanPhone });
+          if (found) {
+            providerId = found._id.toString();
+          }
+        }
+      }
+      if (!providerId && providerName) {
+        const found = await User.findOne({
+          fullName: { $regex: new RegExp(`^${providerName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+          role: { $in: ['caregiver', 'nurse', 'professional'] },
+        });
         if (found) {
           providerId = found._id.toString();
         }
@@ -775,10 +788,10 @@ adminRoutes.get(
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
     try {
-      const { channel, status, isRead, search, page, limit } = req.query;
+      const { channel, status, isRead, search, page, limit, unread } = req.query;
       let parsedIsRead: boolean | undefined = undefined;
       if (isRead === 'true') parsedIsRead = true;
-      if (isRead === 'false') parsedIsRead = false;
+      if (isRead === 'false' || unread === 'true') parsedIsRead = false;
 
       const result = await listNotificationLogs({
         channel: channel as string,
@@ -814,7 +827,11 @@ adminRoutes.get(
       const { NotificationLog } = await import('../models/NotificationLog.js');
       const count = await NotificationLog.countDocuments({
         channel: 'in_app',
-        isRead: false,
+        isRead: { $ne: true },
+        $or: [
+          { recipientPhone: 'ADMIN_DESK' },
+          { recipientRole: { $in: ['admin', 'super_admin'] } },
+        ],
       });
       res.json({ success: true, data: { unreadCount: count } });
     } catch (err) {
@@ -836,7 +853,14 @@ adminRoutes.patch(
       const { NotificationLog } = await import('../models/NotificationLog.js');
       const now = new Date();
       const result = await NotificationLog.updateMany(
-        { channel: 'in_app', isRead: false },
+        {
+          channel: 'in_app',
+          isRead: { $ne: true },
+          $or: [
+            { recipientPhone: 'ADMIN_DESK' },
+            { recipientRole: { $in: ['admin', 'super_admin'] } },
+          ],
+        },
         { $set: { isRead: true, readAt: now } }
       );
       res.json({ success: true, message: 'All in-app notifications marked as read', data: { markedRead: result.modifiedCount } });
@@ -1432,7 +1456,7 @@ adminRoutes.get(
         caregiverId: caregiverId as string,
         search: search as string,
         page: page ? parseInt(page as string, 10) : 1,
-        limit: limit ? parseInt(limit as string, 10) : 20,
+        limit: limit ? parseInt(limit as string, 10) : 10,
       });
       res.json({
         success: true,
@@ -1624,18 +1648,39 @@ adminRoutes.post(
 
 /**
  * DELETE /api/v1/admin/caregiver-subscriptions/:id
- * Prohibit permanent deletion of financial and clinical history
+ * Permanently delete a subscription record and linked visits when confirmed by authorized admin
  */
 adminRoutes.delete(
   '/caregiver-subscriptions/:id',
   authenticateUser,
   requireRole(['admin', 'super_admin']),
-  async (_req: AuthRequest, _res: Response, next) => {
+  async (req: AuthRequest, res: Response, next) => {
     try {
-      throw new AppError(
-        'Permanent deletion of caregiver subscriptions is prohibited due to regulatory, clinical, and financial retention requirements. Use the archive workflow for eligible records instead.',
-        403
+      const isPermanent =
+        req.query?.permanent === 'true' ||
+        req.body?.permanent === true ||
+        req.body?.isPermanent === true ||
+        req.query?.force === 'true';
+
+      if (!isPermanent) {
+        throw new AppError(
+          'Permanent deletion of caregiver subscriptions is prohibited due to regulatory, clinical, and financial retention requirements. Use the archive workflow for eligible records instead, or confirm permanent deletion with permanent=true.',
+          403
+        );
+      }
+
+      const reason = req.body?.reason || (req.query?.reason as string);
+      const result = await deleteCaregiverSubscriptionPermanently(
+        req.params.id,
+        req.user!,
+        typeof reason === 'string' ? reason : undefined
       );
+
+      res.status(200).json({
+        success: true,
+        message: 'Caregiver subscription permanently deleted from database',
+        data: result,
+      });
     } catch (err) {
       next(err);
     }
@@ -1790,162 +1835,7 @@ adminRoutes.post(
     }
   }
 );
-// =============================================================================
-// ADMIN NOTIFICATIONS — In-App Notification Bell Feed
-// =============================================================================
 
-/**
- * GET /api/v1/admin/notifications
- * List notifications for the admin console
- */
-adminRoutes.get(
-  '/notifications',
-  authenticateUser,
-  requireRole(['admin', 'super_admin']),
-  async (req: AuthRequest, res: Response, next) => {
-    try {
-      const page = parseInt((req.query.page as string) || '1', 10);
-      const limit = parseInt((req.query.limit as string) || '20', 10);
-      const unreadOnly = req.query.unread === 'true';
-
-      const filter: any = {
-        channel: 'in_app',
-        $or: [
-          { recipientPhone: 'ADMIN_DESK' },
-          { recipientRole: { $in: ['admin', 'super_admin'] } },
-        ],
-      };
-      if (unreadOnly) {
-        filter.isRead = { $ne: true };
-      }
-
-      const [notifications, total, unreadCount] = await Promise.all([
-        NotificationLog.find(filter)
-          .sort({ createdAt: -1 })
-          .skip((page - 1) * limit)
-          .limit(limit)
-          .lean(),
-        NotificationLog.countDocuments(filter),
-        NotificationLog.countDocuments({
-          channel: 'in_app',
-          isRead: { $ne: true },
-          $or: [
-            { recipientPhone: 'ADMIN_DESK' },
-            { recipientRole: { $in: ['admin', 'super_admin'] } },
-          ],
-        }),
-      ]);
-
-      res.json({
-        success: true,
-        data: notifications,
-        unreadCount,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit) || 1,
-        },
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-/**
- * GET /api/v1/admin/notifications/unread-count
- * Return unread count for bell icon
- */
-adminRoutes.get(
-  '/notifications/unread-count',
-  authenticateUser,
-  requireRole(['admin', 'super_admin']),
-  async (_req: AuthRequest, res: Response, next) => {
-    try {
-      const unreadCount = await NotificationLog.countDocuments({
-        channel: 'in_app',
-        isRead: { $ne: true },
-        $or: [
-          { recipientPhone: 'ADMIN_DESK' },
-          { recipientRole: { $in: ['admin', 'super_admin'] } },
-        ],
-      });
-      res.json({
-        success: true,
-        data: { unreadCount },
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-/**
- * PATCH /api/v1/admin/notifications/mark-all-read
- * Mark all admin notifications as read
- */
-adminRoutes.patch(
-  '/notifications/mark-all-read',
-  authenticateUser,
-  requireRole(['admin', 'super_admin']),
-  async (_req: AuthRequest, res: Response, next) => {
-    try {
-      await NotificationLog.updateMany(
-        {
-          channel: 'in_app',
-          isRead: { $ne: true },
-          $or: [
-            { recipientPhone: 'ADMIN_DESK' },
-            { recipientRole: { $in: ['admin', 'super_admin'] } },
-          ],
-        },
-        {
-          $set: {
-            isRead: true,
-            readAt: new Date(),
-          },
-        }
-      );
-      res.json({
-        success: true,
-        message: 'All notifications marked as read',
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-/**
- * PATCH /api/v1/admin/notifications/:id/read
- * Mark a single notification as read
- */
-adminRoutes.patch(
-  '/notifications/:id/read',
-  authenticateUser,
-  requireRole(['admin', 'super_admin']),
-  async (req: AuthRequest, res: Response, next) => {
-    try {
-      const updated = await NotificationLog.findByIdAndUpdate(
-        req.params.id,
-        {
-          $set: {
-            isRead: true,
-            readAt: new Date(),
-          },
-        },
-        { new: true }
-      );
-      res.json({
-        success: true,
-        data: updated,
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
 // =============================================================================
 // ADMIN RESCHEDULE REQUESTS — Visibility, Approval, and Rejection
 // =============================================================================
@@ -2036,6 +1926,39 @@ adminRoutes.post(
   }
 );
 
+/**
+ * DELETE /api/v1/admin/reschedule-requests/:requestId
+ * Hide an eligible non-pending reschedule request from Admin view.
+ * Keeps pending operational requests visible to the Admin responsible for managing them.
+ */
+adminRoutes.delete(
+  '/reschedule-requests/:requestId',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { hideRescheduleRequest } = await import('../services/visitRescheduleService.js');
+      const result = await hideRescheduleRequest(
+        req.params.requestId,
+        {
+          _id: req.user!._id,
+          fullName: req.user!.fullName,
+          phone: req.user!.phone,
+          role: req.user!.role,
+        },
+        req.body?.reason
+      );
+      res.json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 // =============================================================================
 // ADMIN FIELD VISITS — Visit Status Dashboard & Management
 // =============================================================================
@@ -2058,7 +1981,7 @@ adminRoutes.get(
         page: page ? parseInt(page as string, 10) : 1,
         limit: limit ? parseInt(limit as string, 10) : 20,
       });
-      res.json({ success: true, ...result });
+      res.json({ success: true, data: result.visits, ...result });
     } catch (err) {
       next(err);
     }
@@ -2090,18 +2013,40 @@ adminRoutes.get(
  */
 const handleVisitReassign = async (req: AuthRequest, res: Response, next: any) => {
   try {
-    const newProviderId = req.body.newProviderId || req.body.providerId || req.body.caregiverId;
-    const reason = req.body.reason || req.body.reassignmentReason;
-    if (!newProviderId) throw new AppError('newProviderId is required', 400);
+    let newProviderId = req.body.newProviderId || req.body.providerId || req.body.caregiverId;
+    const reason = req.body.reason || req.body.reassignmentReason || req.body.notes;
+    const providerPhone = req.body.providerPhone || req.body.phone;
+    const providerName = req.body.providerName;
+    if (!newProviderId && providerPhone) {
+      const cleanPhone = String(providerPhone).replace(/\D/g, '').slice(-10);
+      if (cleanPhone.length === 10) {
+        const found = await User.findOne({ phone: cleanPhone });
+        if (found) {
+          newProviderId = found._id.toString();
+        }
+      }
+    }
+    if (!newProviderId && providerName) {
+      const found = await User.findOne({
+        fullName: { $regex: new RegExp(`^${providerName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+        role: { $in: ['caregiver', 'nurse', 'professional'] },
+      });
+      if (found) {
+        newProviderId = found._id.toString();
+      }
+    }
+    if (!newProviderId) throw new AppError("Valid 'newProviderId' or 'providerPhone' of an authorized caregiver is required", 400);
     const result = await assignOrReassignFieldVisitProvider(
       req.params.visitId,
       newProviderId,
       req.user!,
-      reason
+      reason,
+      req.body.scheduledDate,
+      req.body.timeSlot
     );
     res.json({
       success: true,
-      message: 'Field visit reassigned to new caregiver successfully.',
+      message: `Field visit assigned to ${result.providerName} successfully`,
       data: result,
     });
   } catch (err) {

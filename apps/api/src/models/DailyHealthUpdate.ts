@@ -39,6 +39,17 @@ export interface IDailyHealthUpdate extends Document {
   clinicianNotes?: string;
   followUpAction?: string;
   riskIndicators: IRiskIndicator[];
+  isDeleted?: boolean;
+  deletedAt?: Date;
+  deletedBy?: mongoose.Types.ObjectId;
+  deletedByRole?: string;
+  deletedByName?: string;
+  deletionReason?: string;
+  hiddenFromPatient?: boolean;
+  hiddenFromPatientAt?: Date;
+  hiddenFromCaregiver?: boolean;
+  hiddenFromCaregiverAt?: Date;
+  hiddenFromUserIds?: mongoose.Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -131,6 +142,17 @@ const DailyHealthUpdateSchema = new Schema<IDailyHealthUpdate>(
       type: [RiskIndicatorSchema],
       default: [],
     },
+    isDeleted: { type: Boolean, default: false },
+    deletedAt: { type: Date },
+    deletedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    deletedByRole: { type: String },
+    deletedByName: { type: String },
+    deletionReason: { type: String, trim: true },
+    hiddenFromPatient: { type: Boolean, default: false },
+    hiddenFromPatientAt: { type: Date },
+    hiddenFromCaregiver: { type: Boolean, default: false },
+    hiddenFromCaregiverAt: { type: Date },
+    hiddenFromUserIds: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   },
   {
     timestamps: true,

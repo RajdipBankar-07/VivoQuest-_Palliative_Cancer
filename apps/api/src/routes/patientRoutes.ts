@@ -11,6 +11,8 @@ import {
   getPatientSubscriptions,
   getPublicCaregiverPlans,
   getPatientCareReports,
+  deleteOrHideCareReport,
+  hidePatientFieldVisit,
   getCaregiverAssignedPatients,
   getAuthorizedPatientDetails,
   getPatientAssignedCaregiver,
@@ -21,6 +23,7 @@ import {
   submitRescheduleRequest,
   getPatientRescheduleRequests,
   cancelRescheduleRequest,
+  hideRescheduleRequest,
 } from '../services/visitRescheduleService.js';
 import { activatePatientSubscriptionTestMode } from '../services/caregiverPlanService.js';
 
@@ -270,6 +273,29 @@ router.get(
 );
 
 // -----------------------------------------------------------------------------
+// 5b. DELETE /api/v1/patients/me/care-reports/:id - Hide or Delete Care Report
+// -----------------------------------------------------------------------------
+router.delete(
+  '/me/care-reports/:id',
+  authenticateUser,
+  requireRole(['patient', 'caregiver', 'professional', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const result = await deleteOrHideCareReport(req.params.id, user, req.body?.reason);
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
 // 6. GET /api/v1/patients/assigned-to-me - Caregiver Assigned Patients Listing
 // -----------------------------------------------------------------------------
 router.get(
@@ -332,6 +358,29 @@ router.get(
 
       res.status(200).json({
         success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 8a. DELETE /api/v1/patients/me/visits/:visitId - Patient Hide Completed Visit from History
+// -----------------------------------------------------------------------------
+router.delete(
+  '/me/visits/:visitId',
+  authenticateUser,
+  requireRole(['patient', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const result = await hidePatientFieldVisit(req.params.visitId, user, req.body?.reason);
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
         data: result,
       });
     } catch (error) {
@@ -423,6 +472,38 @@ router.post(
       res.status(200).json({
         success: true,
         message: 'Rescheduling request cancelled successfully.',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 8d. DELETE /api/v1/patients/me/reschedule-requests/:requestId - Hide Reschedule Request from User View
+// -----------------------------------------------------------------------------
+router.delete(
+  '/me/reschedule-requests/:requestId',
+  authenticateUser,
+  requireRole(['patient', 'caregiver', 'professional', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const result = await hideRescheduleRequest(
+        req.params.requestId,
+        {
+          _id: user._id,
+          fullName: user.fullName,
+          phone: user.phone,
+          role: user.role,
+        },
+        req.body?.reason
+      );
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
         data: result,
       });
     } catch (error) {

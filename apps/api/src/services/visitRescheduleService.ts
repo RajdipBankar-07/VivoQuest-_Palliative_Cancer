@@ -248,9 +248,163 @@ export const getPatientRescheduleRequests = async (
     orConditions.push({ patientPhone: { $in: phoneVariants } });
   }
 
-  return await VisitRescheduleRequest.find({ $or: orConditions })
+  return await VisitRescheduleRequest.find({
+    $or: orConditions,
+    hiddenFromPatient: { $ne: true },
+  })
     .sort({ createdAt: -1 })
     .lean() as any;
+};
+
+/**
+ * Phase 1: Per-User Request Deletion (Soft Hiding)
+ * Allows authenticated user to hide eligible request entries from their own interface:
+ * - Patient: hides patient-owned reschedule requests.
+ * - Caregiver: hides caregiver-assigned reschedule requests.
+ * - Admin: hides completed/cancelled/rejected entries from admin dashboard.
+ * 
+ * Critical Rules Enforced:
+ * 1. Hiding an entry MUST NOT cancel, reschedule, or otherwise modify a confirmed visit.
+ * 2. A user cannot hide another user's entries.
+ * 3. Preserve audit records; do not physically delete operational records.
+ * 4. Keep pending operational requests visible to Admin responsible for managing them.
+ */
+export const hideRescheduleRequest = async (
+  requestId: string,
+  user: UserContext,
+  reason?: string
+): Promise<{
+  success: boolean;
+  message: string;
+  requestId: string;
+  visitUnchanged: boolean;
+}> => {
+  if (!mongoose.Types.ObjectId.isValid(requestId)) {
+    throw new AppError('Invalid reschedule request identifier', 400);
+  }
+
+  const reqDoc = await VisitRescheduleRequest.findById(requestId);
+  if (!reqDoc) {
+    throw new AppError('Reschedule request not found', 404);
+  }
+
+  // Snapshot visit before to verify schedule preservation
+  const visitBefore = await FieldVisit.findById(reqDoc.visitId).lean();
+
+  if (user.role === 'patient') {
+    const isOwner =
+      reqDoc.patientId.toString() === user._id.toString() ||
+      reqDoc.requestedBy.toString() === user._id.toString();
+
+    if (!isOwner) {
+      throw new AppError('Forbidden: You cannot hide another user\'s requests', 403);
+    }
+
+    reqDoc.hiddenFromPatient = true;
+    reqDoc.hiddenFromPatientAt = new Date();
+    await reqDoc.save();
+
+    await AuditLog.create({
+      action: 'RESCHEDULE_REQUEST_HIDDEN_BY_PATIENT',
+      category: 'field_operations',
+      actorId: user._id,
+      actorName: user.fullName,
+      actorRole: 'patient',
+      targetType: 'VisitRescheduleRequest',
+      targetId: reqDoc._id.toString(),
+      severity: 'info',
+      timestamp: new Date(),
+      details: {
+        requestId: reqDoc._id.toString(),
+        visitId: reqDoc.visitId.toString(),
+        visitNumber: reqDoc.visitNumber,
+        visitScheduleUnchanged: true,
+        reason: reason || 'Hidden by patient',
+      },
+    }).catch(() => {});
+  } else if (['professional', 'caregiver', 'nurse'].includes(user.role)) {
+    const isAssigned = reqDoc.providerId && reqDoc.providerId.toString() === user._id.toString();
+    if (!isAssigned) {
+      throw new AppError('Forbidden: Caregivers can only hide requests for their assigned visits', 403);
+    }
+
+    reqDoc.hiddenFromCaregiver = true;
+    reqDoc.hiddenFromCaregiverAt = new Date();
+    await reqDoc.save();
+
+    await AuditLog.create({
+      action: 'RESCHEDULE_REQUEST_HIDDEN_BY_CAREGIVER',
+      category: 'field_operations',
+      actorId: user._id,
+      actorName: user.fullName,
+      actorRole: user.role,
+      targetType: 'VisitRescheduleRequest',
+      targetId: reqDoc._id.toString(),
+      severity: 'info',
+      timestamp: new Date(),
+      details: {
+        requestId: reqDoc._id.toString(),
+        visitId: reqDoc.visitId.toString(),
+        visitNumber: reqDoc.visitNumber,
+        visitScheduleUnchanged: true,
+        reason: reason || 'Hidden by caregiver',
+      },
+    }).catch(() => {});
+  } else if (['admin', 'super_admin'].includes(user.role)) {
+    if (reqDoc.status === 'pending') {
+      throw new AppError('Cannot hide a pending request that requires administrative review', 400);
+    }
+
+    reqDoc.hiddenFromAdmin = true;
+    reqDoc.hiddenFromAdminAt = new Date();
+    await reqDoc.save();
+
+    await AuditLog.create({
+      action: 'RESCHEDULE_REQUEST_HIDDEN_BY_ADMIN',
+      category: 'field_operations',
+      actorId: user._id,
+      actorName: user.fullName,
+      actorRole: user.role,
+      targetType: 'VisitRescheduleRequest',
+      targetId: reqDoc._id.toString(),
+      severity: 'info',
+      timestamp: new Date(),
+      details: {
+        requestId: reqDoc._id.toString(),
+        visitId: reqDoc.visitId.toString(),
+        visitNumber: reqDoc.visitNumber,
+        visitScheduleUnchanged: true,
+        reason: reason || 'Hidden by admin',
+      },
+    }).catch(() => {});
+  } else {
+    throw new AppError(`Forbidden: Role '${user.role}' cannot hide requests`, 403);
+  }
+
+  // Safety Assertion: ensure visit was NOT cancelled or rescheduled
+  if (visitBefore) {
+    const visitAfter = await FieldVisit.findById(reqDoc.visitId).lean();
+    if (
+      visitAfter &&
+      (visitAfter.status !== visitBefore.status ||
+        visitAfter.scheduledDate !== visitBefore.scheduledDate ||
+        visitAfter.timeSlot !== visitBefore.timeSlot)
+    ) {
+      // Revert if somehow touched
+      await FieldVisit.findByIdAndUpdate(reqDoc.visitId, {
+        status: visitBefore.status,
+        scheduledDate: visitBefore.scheduledDate,
+        timeSlot: visitBefore.timeSlot,
+      });
+    }
+  }
+
+  return {
+    success: true,
+    message: 'Request entry hidden from your interface. Confirmed visit schedule remains unchanged.',
+    requestId: reqDoc._id.toString(),
+    visitUnchanged: true,
+  };
 };
 
 /**
@@ -341,13 +495,29 @@ export const getPendingRescheduleRequestsForApprover = async (
   }
 
   // Restrict caregiver to their assigned visits
-  if (['professional', 'caregiver'].includes(approverRole)) {
-    query.providerId = new mongoose.Types.ObjectId(approverId);
-  } else if (!['admin', 'super_admin'].includes(approverRole)) {
+  if (['professional', 'caregiver', 'nurse'].includes(approverRole)) {
+    const approverObjId = new mongoose.Types.ObjectId(approverId);
+    const userDoc = (await mongoose.model('User').findById(approverObjId).lean()) as any;
+    const phoneVariants = getPhoneVariants(userDoc?.phone);
+    if (phoneVariants.length > 0) {
+      query.$or = [
+        { providerId: approverObjId },
+        { providerPhone: { $in: phoneVariants } },
+      ];
+    } else {
+      query.providerId = approverObjId;
+    }
+    query.hiddenFromCaregiver = { $ne: true };
+  } else if (['admin', 'super_admin'].includes(approverRole)) {
+    // Keep pending operational requests visible to the Admin responsible for managing them!
+    if (statusFilter !== 'pending') {
+      query.hiddenFromAdmin = { $ne: true };
+    }
+  } else {
     throw new AppError(`Forbidden: Role '${approverRole}' cannot review reschedule requests`, 403);
   }
 
-  return await VisitRescheduleRequest.find(query).sort({ createdAt: 1 }).lean() as any;
+  return await VisitRescheduleRequest.find(query).sort({ createdAt: -1 }).lean() as any;
 };
 
 /**
@@ -376,8 +546,11 @@ export const approveRescheduleRequest = async (
     throw new AppError('Forbidden: Patients cannot approve rescheduling requests', 403);
   }
 
-  if (['professional', 'caregiver'].includes(user.role)) {
-    if (reqDoc.providerId.toString() !== user._id.toString()) {
+  if (['professional', 'caregiver', 'nurse'].includes(user.role)) {
+    const isIdMatch = reqDoc.providerId && reqDoc.providerId.toString() === user._id.toString();
+    const phoneVariants = getPhoneVariants(user.phone);
+    const isPhoneMatch = reqDoc.providerPhone && phoneVariants.includes(reqDoc.providerPhone);
+    if (!isIdMatch && !isPhoneMatch) {
       throw new AppError('Forbidden: You are not authorized to approve rescheduling for a visit not assigned to you', 403);
     }
   } else if (!['admin', 'super_admin'].includes(user.role)) {
@@ -405,8 +578,16 @@ export const approveRescheduleRequest = async (
   }
 
   // 2. CONFLICT CHECK: Check for overlapping active visits for the assigned caregiver
+  const providerConditions: any[] = [];
+  if (reqDoc.providerId) {
+    providerConditions.push({ providerId: reqDoc.providerId });
+  }
+  if (reqDoc.providerPhone) {
+    providerConditions.push({ providerPhone: { $in: getPhoneVariants(reqDoc.providerPhone) } });
+  }
+
   const conflictVisit = await FieldVisit.findOne({
-    providerId: reqDoc.providerId,
+    ...(providerConditions.length > 0 ? { $or: providerConditions } : { providerId: reqDoc.providerId }),
     _id: { $ne: visit._id }, // Exclude the visit itself
     scheduledDate: reqDoc.requestedSchedule.scheduledDate,
     timeSlot: reqDoc.requestedSchedule.timeSlot,
@@ -551,6 +732,36 @@ export const approveRescheduleRequest = async (
           { upsert: true, new: true }
         );
       }
+
+      // Notify Admin
+      const adminKey = `notif_resched_appr_admin_${updatedReq._id}`;
+      await NotificationLog.findOneAndUpdate(
+        { idempotencyKey: adminKey },
+        {
+          $setOnInsert: {
+            recipientPhone: 'ADMIN_DESK',
+            recipientName: 'VivoQuest Clinical Care Desk',
+            recipientRole: 'admin',
+            channel: 'in_app',
+            templateId: 'VISIT_RESCHEDULE_APPROVED',
+            messageBody: `Reschedule Approved: Visit ${visit.visitNumber} for patient ${reqDoc.patientName} was approved by ${user.fullName} (${user.role}). New schedule: ${reqDoc.requestedSchedule.scheduledDate} (${reqDoc.requestedSchedule.timeSlot}).`,
+            consentChecked: true,
+            status: 'delivered',
+            provider: 'in_app_system',
+            idempotencyKey: adminKey,
+            isRead: false,
+            metadata: {
+              requestId: updatedReq._id.toString(),
+              visitNumber: visit.visitNumber,
+              newDate: reqDoc.requestedSchedule.scheduledDate,
+              newTimeSlot: reqDoc.requestedSchedule.timeSlot,
+              approvedBy: user.fullName,
+              approvedByRole: user.role,
+            },
+          },
+        },
+        { upsert: true, new: true }
+      );
     } catch (notifErr: any) {
       console.warn('[NotificationLog] Failed to record reschedule approval notification:', notifErr.message);
     }
@@ -596,12 +807,20 @@ export const rejectRescheduleRequest = async (
     throw new AppError('Forbidden: Patients cannot reject rescheduling requests', 403);
   }
 
-  if (['professional', 'caregiver'].includes(user.role)) {
-    if (reqDoc.providerId.toString() !== user._id.toString()) {
+  if (['professional', 'caregiver', 'nurse'].includes(user.role)) {
+    const isIdMatch = reqDoc.providerId && reqDoc.providerId.toString() === user._id.toString();
+    const phoneVariants = getPhoneVariants(user.phone);
+    const isPhoneMatch = reqDoc.providerPhone && phoneVariants.includes(reqDoc.providerPhone);
+    if (!isIdMatch && !isPhoneMatch) {
       throw new AppError('Forbidden: You are not authorized to review a request for a visit not assigned to you', 403);
     }
   } else if (!['admin', 'super_admin'].includes(user.role)) {
     throw new AppError(`Forbidden: Role '${user.role}' cannot review reschedule requests`, 403);
+  }
+
+  // Idempotency check: if already rejected, return current document
+  if (reqDoc.status === 'rejected') {
+    return reqDoc;
   }
 
   if (reqDoc.status !== 'pending') {
@@ -680,6 +899,64 @@ export const rejectRescheduleRequest = async (
             visitNumber: reqDoc.visitNumber,
             rejectionReason: rejectionReason.trim(),
             rejectedBy: user.fullName,
+          },
+        },
+      },
+      { upsert: true, new: true }
+    );
+    // Dispatch Notification to Caregiver
+    if (reqDoc.providerPhone) {
+      const cgKey = `notif_resched_rej_cg_${updatedReq._id}`;
+      await NotificationLog.findOneAndUpdate(
+        { idempotencyKey: cgKey },
+        {
+          $setOnInsert: {
+            recipientPhone: reqDoc.providerPhone,
+            recipientName: reqDoc.providerName,
+            recipientRole: 'caregiver',
+            channel: 'in_app',
+            templateId: 'VISIT_RESCHEDULE_REJECTED',
+            messageBody: `Reschedule Request Rejected: Request for visit ${reqDoc.visitNumber} (${reqDoc.patientName}) was rejected by ${user.fullName}: "${rejectionReason.trim()}". Original schedule remains active.`,
+            consentChecked: true,
+            status: 'delivered',
+            provider: 'in_app_system',
+            idempotencyKey: cgKey,
+            isRead: false,
+            metadata: {
+              requestId: updatedReq._id.toString(),
+              visitNumber: reqDoc.visitNumber,
+              rejectionReason: rejectionReason.trim(),
+              rejectedBy: user.fullName,
+            },
+          },
+        },
+        { upsert: true, new: true }
+      );
+    }
+
+    // Dispatch Notification to Admin
+    const adminKey = `notif_resched_rej_admin_${updatedReq._id}`;
+    await NotificationLog.findOneAndUpdate(
+      { idempotencyKey: adminKey },
+      {
+        $setOnInsert: {
+          recipientPhone: 'ADMIN_DESK',
+          recipientName: 'VivoQuest Clinical Care Desk',
+          recipientRole: 'admin',
+          channel: 'in_app',
+          templateId: 'VISIT_RESCHEDULE_REJECTED',
+          messageBody: `Reschedule Request Rejected: Visit ${reqDoc.visitNumber} for patient ${reqDoc.patientName} was rejected by ${user.fullName} (${user.role}). Reason: "${rejectionReason.trim()}".`,
+          consentChecked: true,
+          status: 'delivered',
+          provider: 'in_app_system',
+          idempotencyKey: adminKey,
+          isRead: false,
+          metadata: {
+            requestId: updatedReq._id.toString(),
+            visitNumber: reqDoc.visitNumber,
+            rejectionReason: rejectionReason.trim(),
+            rejectedBy: user.fullName,
+            rejectedByRole: user.role,
           },
         },
       },

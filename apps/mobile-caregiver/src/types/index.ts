@@ -27,6 +27,7 @@ export interface CaregiverSession {
 export type FieldVisitStatus =
   | 'assigned'
   | 'accepted'
+  | 'rejected'
   | 'en_route'
   | 'arrived'
   | 'in_progress'
@@ -52,6 +53,9 @@ export interface ClinicalDocumentation {
   recommendations?: string;
   followUpDate?: string;
   signedAt?: string | Date;
+  isDeleted?: boolean;
+  hiddenFromCaregiver?: boolean;
+  hiddenFromPatient?: boolean;
 }
 
 export interface PatientDetails {
@@ -72,6 +76,12 @@ export interface FieldVisit {
   visitNumber: string;
   visitType: string;
   status: FieldVisitStatus;
+  assignmentStatus?: 'pending' | 'accepted' | 'rejected';
+  assignmentRejection?: {
+    reason: string;
+    rejectedAt: string | Date;
+    rejectedByName?: string;
+  };
   providerId?: string;
   providerName?: string;
   providerRole?: string;
@@ -84,6 +94,7 @@ export interface FieldVisit {
   timestamps: {
     assignedAt?: string | Date;
     acceptedAt?: string | Date;
+    rejectedAt?: string | Date;
     enRouteAt?: string | Date;
     arrivedAt?: string | Date;
     startedAt?: string | Date;
@@ -92,6 +103,8 @@ export interface FieldVisit {
   };
   subscriptionId?: string;
   subscriptionNumber?: string;
+  hiddenFromCaregiver?: boolean;
+  hiddenFromPatient?: boolean;
 }
 
 export interface AssignedPatient {
