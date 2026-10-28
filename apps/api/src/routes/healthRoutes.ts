@@ -6,12 +6,14 @@ const router = Router();
 
 router.get('/health', (_req: Request, res: Response) => {
   const dbStatus = getDatabaseStatus();
+  const isHealthy = dbStatus.connected && dbStatus.readyState === 1;
 
-  res.status(200).json({
-    status: 'ok',
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? 'ok' : 'degraded',
     service: 'vivoquest-marketplace-api',
     version: '1.0.0',
     environment: env.NODE_ENV,
+    uptimeSeconds: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
     database: {
       provider: 'MongoDB Atlas / Local',
@@ -27,6 +29,20 @@ router.get('/health', (_req: Request, res: Response) => {
       isMock: env.AWS_ACCESS_KEY_ID === 'mock_aws_access_key' || !env.AWS_ACCESS_KEY_ID,
     },
   });
+});
+
+/**
+ * GET /health/ready - Kubernetes / Cloud Readiness Probe
+ */
+router.get('/health/ready', (_req: Request, res: Response) => {
+  const dbStatus = getDatabaseStatus();
+  const isReady = dbStatus.connected && dbStatus.readyState === 1;
+
+  if (isReady) {
+    res.status(200).json({ status: 'ready', timestamp: new Date().toISOString() });
+  } else {
+    res.status(503).json({ status: 'not_ready', databaseReadyState: dbStatus.readyState });
+  }
 });
 
 export const healthRoutes = router;

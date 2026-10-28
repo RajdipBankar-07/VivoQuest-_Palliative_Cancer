@@ -18,6 +18,8 @@ import { Appointment } from '../models/Appointment.js';
 import { SyncOperation, ISyncOperation, SyncOperationType, SyncOperationStatus } from '../models/SyncOperation.js';
 import { NotificationLog } from '../models/NotificationLog.js';
 import { sendPatientNotification } from './notificationService.js';
+import { HealthcareProfessionalProfile } from '../models/HealthcareProfessionalProfile.js';
+import { DoctorAvailability } from '../models/DoctorAvailability.js';
 import { logAdminAction } from './adminService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { getPhoneVariants } from './patientService.js';
@@ -26,21 +28,23 @@ import { getPhoneVariants } from './patientService.js';
 // Helper: Permitted Status Transitions State Machine
 // -----------------------------------------------------------------------------
 const PERMITTED_VISIT_TRANSITIONS: Record<FieldVisitStatus, FieldVisitStatus[]> = {
-  assigned: ['accepted', 'rejected', 'cancelled'],
-  accepted: ['en_route', 'cancelled', 'rejected'],
-  rejected: ['assigned'], // When reassigning a rejected visit
-  en_route: ['arrived', 'cancelled', 'failed'],
-  arrived: ['in_progress', 'cancelled', 'failed'],
-  in_progress: ['completed', 'failed', 'cancelled'],
+  assigned: ['accepted', 'rejected', 'cancelled', 'missed'],
+  accepted: ['en_route', 'arrived', 'in_progress', 'cancelled', 'rejected', 'missed'],
+  rejected: ['assigned', 'cancelled'],
+  en_route: ['arrived', 'in_progress', 'cancelled', 'failed', 'missed'],
+  arrived: ['in_progress', 'cancelled', 'failed', 'missed'],
+  in_progress: ['completed', 'failed', 'cancelled', 'missed'],
+  missed: ['assigned', 'cancelled'],
+  failed: ['assigned', 'cancelled'],
   completed: [],
   cancelled: [],
-  failed: ['assigned'], // Re-assigning or retrying a failed visit
 };
 
 export const isValidVisitStatusTransition = (
   current: FieldVisitStatus,
   next: FieldVisitStatus
 ): boolean => {
+  if (current === next) return true;
   const allowed = PERMITTED_VISIT_TRANSITIONS[current] || [];
   return allowed.includes(next);
 };
@@ -470,12 +474,44 @@ export const getFieldVisitById = async (
 export const updateFieldVisitStatus = async (
   visitId: string,
   newStatus: FieldVisitStatus,
-  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string },
+  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string; phone?: string },
   options?: { notes?: string; location?: string }
 ): Promise<IFieldVisit> => {
+  // 1. Role Authorization Check: Patients cannot update field visit status
+  if (user.role === 'patient') {
+    throw new AppError('Forbidden: Patients cannot update field visit status', 403);
+  }
+
   const visit = await getFieldVisitById(visitId, user);
 
-  // Validate state-machine transition
+  // 2. Caregiver Ownership Check
+  const userDoc = await User.findById(user._id).lean();
+  const phoneVariants = getPhoneVariants(user.phone || (userDoc as any)?.phone);
+  const isAssignedProvider =
+    (visit.providerId && visit.providerId.toString() === user._id.toString()) ||
+    (visit.providerPhone && phoneVariants.includes(visit.providerPhone));
+  const isAdmin = ['admin', 'super_admin'].includes(user.role);
+
+  if (!isAssignedProvider && !isAdmin) {
+    throw new AppError('Forbidden: Only the assigned caregiver or an administrator can update this visit status', 403);
+  }
+
+  // 3. Prevent rejected caregiver from performing transitions
+  if ((visit.status === 'rejected' || visit.assignmentStatus === 'rejected') && !isAdmin) {
+    throw new AppError('Forbidden: This visit assignment was rejected and cannot be modified by the caregiver', 403);
+  }
+
+  // 4. Idempotency Check: Return existing visit if status is already matching
+  if (visit.status === newStatus) {
+    return visit;
+  }
+
+  // 5. Terminal State Protection
+  if (['completed', 'cancelled'].includes(visit.status)) {
+    throw new AppError(`Cannot update visit: Status '${visit.status}' is a terminal state and cannot be modified`, 400);
+  }
+
+  // 6. Validate state-machine transition
   if (!isValidVisitStatusTransition(visit.status, newStatus)) {
     throw new AppError(
       `Invalid field visit status transition from '${visit.status}' to '${newStatus}'. Permitted: [${(
@@ -485,6 +521,12 @@ export const updateFieldVisitStatus = async (
     );
   }
 
+  // 7. Caregiver Acceptance Requirement before Starting or Completing Care
+  if ((newStatus === 'in_progress' || newStatus === 'completed') && visit.assignmentStatus !== 'accepted') {
+    throw new AppError('Cannot start or complete visit: Caregiver assignment must be accepted before starting care', 400);
+  }
+
+  const previousStatus = visit.status;
   const now = new Date();
   visit.status = newStatus;
 
@@ -505,6 +547,8 @@ export const updateFieldVisitStatus = async (
     visit.timestamps.completedAt = now;
   } else if (newStatus === 'cancelled') {
     visit.timestamps.cancelledAt = now;
+  } else if (newStatus === 'missed') {
+    visit.timestamps.missedAt = now;
   }
 
   visit.statusHistory.push({
@@ -529,55 +573,103 @@ export const updateFieldVisitStatus = async (
     targetId: visit._id.toString(),
     details: {
       visitNumber: visit.visitNumber,
-      previousStatus: visit.status,
+      previousStatus,
       newStatus,
       notes: options?.notes,
     },
-    severity: newStatus === 'cancelled' || newStatus === 'failed' ? 'warning' : 'info',
+    severity: newStatus === 'cancelled' || newStatus === 'failed' || newStatus === 'missed' ? 'warning' : 'info',
     timestamp: now,
   });
 
-  // Trigger Patient Notifications for milestone status updates
+  // Trigger Notifications for milestone status updates
   if (visit.patientDetails?.phone) {
-    if (newStatus === 'en_route') {
-      sendPatientNotification({
-        recipientPhone: visit.patientDetails.phone,
-        recipientName: visit.patientDetails.fullName,
-        channel: 'sms',
-        templateId: 'CLINICIAN_EN_ROUTE',
-        templateParams: {
-          patientName: visit.patientDetails.fullName,
-          providerName: visit.providerName,
-        },
-        idempotencyKey: `notif_${visit._id}_en_route_sms`,
-        metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
-      }).catch((err) => console.warn('[Notification Error]', err.message));
-    } else if (newStatus === 'arrived') {
-      sendPatientNotification({
-        recipientPhone: visit.patientDetails.phone,
-        recipientName: visit.patientDetails.fullName,
-        channel: 'sms',
-        templateId: 'CLINICIAN_ARRIVED',
-        templateParams: {
-          patientName: visit.patientDetails.fullName,
-          providerName: visit.providerName,
-        },
-        idempotencyKey: `notif_${visit._id}_arrived_sms`,
-        metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
-      }).catch((err) => console.warn('[Notification Error]', err.message));
-    } else if (newStatus === 'completed') {
-      sendPatientNotification({
-        recipientPhone: visit.patientDetails.phone,
-        recipientName: visit.patientDetails.fullName,
-        channel: 'sms',
-        templateId: 'VISIT_COMPLETED',
-        templateParams: {
-          patientName: visit.patientDetails.fullName,
-          providerName: visit.providerName,
-        },
-        idempotencyKey: `notif_${visit._id}_completed_sms`,
-        metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
-      }).catch((err) => console.warn('[Notification Error]', err.message));
+    try {
+      if (newStatus === 'en_route') {
+        await sendPatientNotification({
+          recipientPhone: visit.patientDetails.phone,
+          recipientName: visit.patientDetails.fullName,
+          channel: 'sms',
+          templateId: 'CLINICIAN_EN_ROUTE',
+          templateParams: {
+            patientName: visit.patientDetails.fullName,
+            providerName: visit.providerName,
+          },
+          idempotencyKey: `notif_${visit._id}_en_route_sms`,
+          metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
+        });
+      } else if (newStatus === 'arrived') {
+        await sendPatientNotification({
+          recipientPhone: visit.patientDetails.phone,
+          recipientName: visit.patientDetails.fullName,
+          channel: 'sms',
+          templateId: 'CLINICIAN_ARRIVED',
+          templateParams: {
+            patientName: visit.patientDetails.fullName,
+            providerName: visit.providerName,
+          },
+          idempotencyKey: `notif_${visit._id}_arrived_sms`,
+          metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
+        });
+      } else if (newStatus === 'in_progress') {
+        await sendPatientNotification({
+          recipientPhone: visit.patientDetails.phone,
+          recipientName: visit.patientDetails.fullName,
+          channel: 'sms',
+          templateId: 'VISIT_STARTED',
+          templateParams: {
+            patientName: visit.patientDetails.fullName,
+            providerName: visit.providerName,
+          },
+          idempotencyKey: `notif_${visit._id}_started_sms`,
+          metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
+        });
+      } else if (newStatus === 'completed') {
+        await sendPatientNotification({
+          recipientPhone: visit.patientDetails.phone,
+          recipientName: visit.patientDetails.fullName,
+          channel: 'sms',
+          templateId: 'VISIT_COMPLETED',
+          templateParams: {
+            patientName: visit.patientDetails.fullName,
+            providerName: visit.providerName,
+          },
+          idempotencyKey: `notif_${visit._id}_completed_sms`,
+          metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
+        });
+      } else if (newStatus === 'cancelled') {
+        await sendPatientNotification({
+          recipientPhone: visit.patientDetails.phone,
+          recipientName: visit.patientDetails.fullName,
+          channel: 'sms',
+          templateId: 'VISIT_CANCELLED',
+          templateParams: {
+            patientName: visit.patientDetails.fullName,
+            date: visit.scheduledDate,
+            reason: options?.notes || 'Operational reschedule or cancellation',
+          },
+          idempotencyKey: `notif_${visit._id}_cancelled_sms`,
+          metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
+        });
+
+        if (visit.providerPhone && isAdmin) {
+          await sendPatientNotification({
+            recipientPhone: visit.providerPhone,
+            recipientName: visit.providerName,
+            recipientRole: 'caregiver',
+            channel: 'sms',
+            templateId: 'VISIT_CANCELLED',
+            templateParams: {
+              patientName: visit.patientDetails.fullName,
+              date: visit.scheduledDate,
+              reason: options?.notes || 'Cancelled by administrative operations',
+            },
+            idempotencyKey: `notif_caregiver_${visit._id}_cancelled_sms`,
+            metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
+          });
+        }
+      }
+    } catch (notifErr: any) {
+      console.warn('[updateFieldVisitStatus] Notification dispatch warning:', notifErr.message);
     }
   }
 
@@ -924,7 +1016,7 @@ export const rejectFieldVisitAssignment = async (
 // -----------------------------------------------------------------------------
 export const recordFieldVisitClinicalDoc = async (
   visitId: string,
-  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string },
+  user: { _id: mongoose.Types.ObjectId; fullName: string; role: string; phone?: string },
   docData: {
     vitals?: IVisitVitals;
     clinicalNotes?: string;
@@ -935,10 +1027,31 @@ export const recordFieldVisitClinicalDoc = async (
     markAsCompleted?: boolean;
   }
 ): Promise<IFieldVisit> => {
+  if (user.role === 'patient') {
+    throw new AppError('Forbidden: Patients cannot record clinical documentation', 403);
+  }
+
   const visit = await getFieldVisitById(visitId, user);
+
+  // Ownership Check
+  const userDoc = await User.findById(user._id).lean();
+  const phoneVariants = getPhoneVariants(user.phone || (userDoc as any)?.phone);
+  const isAssignedProvider =
+    (visit.providerId && visit.providerId.toString() === user._id.toString()) ||
+    (visit.providerPhone && phoneVariants.includes(visit.providerPhone));
+  const isAdmin = ['admin', 'super_admin'].includes(user.role);
+
+  if (!isAssignedProvider && !isAdmin) {
+    throw new AppError('Forbidden: Only the assigned caregiver or an administrator can record clinical documentation', 403);
+  }
 
   if (!docData.clinicalNotes?.trim() && !docData.vitals) {
     throw new AppError('Clinical observations or vital signs must be provided', 400);
+  }
+
+  // Acceptance Check before completing
+  if (docData.markAsCompleted && visit.status !== 'completed' && visit.assignmentStatus !== 'accepted') {
+    throw new AppError('Cannot complete visit: Caregiver assignment must be accepted before completing care', 400);
   }
 
   if (!visit.clinicalDocumentation) {
@@ -969,17 +1082,54 @@ export const recordFieldVisitClinicalDoc = async (
   }
   doc.signedAt = new Date();
 
-  // If requested and valid, mark visit as completed (allow from any active operational state)
-  if (docData.markAsCompleted && ['assigned', 'accepted', 'en_route', 'arrived', 'in_progress'].includes(visit.status)) {
+  // If requested and valid, mark visit as completed (allow from active accepted operational states)
+  if (docData.markAsCompleted && visit.status !== 'completed' && ['assigned', 'accepted', 'en_route', 'arrived', 'in_progress'].includes(visit.status)) {
+    const prevStatus = visit.status;
+    const now = new Date();
     visit.status = 'completed';
-    visit.timestamps.completedAt = new Date();
+    visit.timestamps.completedAt = now;
     visit.statusHistory.push({
       status: 'completed',
       changedBy: user._id,
       changedByRole: user.role,
       changedByName: user.fullName,
-      timestamp: new Date(),
+      timestamp: now,
       notes: 'Clinical documentation signed and visit completed.',
+    });
+
+    // Patient Notification for Completion
+    if (visit.patientDetails?.phone) {
+      sendPatientNotification({
+        recipientPhone: visit.patientDetails.phone,
+        recipientName: visit.patientDetails.fullName,
+        channel: 'sms',
+        templateId: 'VISIT_COMPLETED',
+        templateParams: {
+          patientName: visit.patientDetails.fullName,
+          providerName: visit.providerName,
+        },
+        idempotencyKey: `notif_${visit._id}_completed_sms`,
+        metadata: { visitId: visit._id.toString(), visitNumber: visit.visitNumber },
+      }).catch((err) => console.warn('[Notification Error]', err.message));
+    }
+
+    // Audit Log
+    await AuditLog.create({
+      action: 'FIELD_VISIT_STATUS_COMPLETED',
+      category: 'field_operations',
+      actorId: user._id,
+      actorName: user.fullName,
+      actorRole: user.role,
+      targetType: 'FieldVisit',
+      targetId: visit._id.toString(),
+      details: {
+        visitNumber: visit.visitNumber,
+        previousStatus: prevStatus,
+        newStatus: 'completed',
+        notes: 'Clinical documentation submitted and completed',
+      },
+      severity: 'info',
+      timestamp: now,
     });
   }
 
@@ -1854,6 +2004,7 @@ export const acknowledgeHospitalCompletionSummary = async (
 export const listAdminFieldVisits = async (filters: {
   status?: string;
   date?: string;
+  dateScope?: 'today' | 'upcoming' | 'past' | 'all';
   providerId?: string;
   hospitalId?: string;
   visitType?: string;
@@ -1864,10 +2015,21 @@ export const listAdminFieldVisits = async (filters: {
 }) => {
   await seedDemoFieldVisitsIfEmpty();
 
-  const query: any = {};
+  const query: any = {
+    isDeleted: { $ne: true },
+  };
+
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   if (filters.status && filters.status !== 'all') {
-    query.status = filters.status;
+    if (filters.status === 'replacement_required') {
+      query.replacementRequired = true;
+    } else if (filters.status === 'overdue') {
+      query.scheduledDate = { $lt: todayStr };
+      query.status = { $nin: ['completed', 'cancelled', 'missed'] };
+    } else {
+      query.status = filters.status;
+    }
   }
   if (filters.visitType && filters.visitType !== 'all') {
     query.visitType = filters.visitType;
@@ -1880,6 +2042,12 @@ export const listAdminFieldVisits = async (filters: {
   }
   if (filters.date && /^\d{4}-\d{2}-\d{2}$/.test(filters.date)) {
     query.scheduledDate = filters.date;
+  } else if (filters.dateScope === 'today') {
+    query.scheduledDate = todayStr;
+  } else if (filters.dateScope === 'upcoming') {
+    query.scheduledDate = { $gt: todayStr };
+  } else if (filters.dateScope === 'past') {
+    query.scheduledDate = { $lt: todayStr };
   }
   if (filters.requiresClinicalDoc) {
     // Only visits that have active clinical documentation (not soft-deleted)
@@ -1917,6 +2085,54 @@ export const listAdminFieldVisits = async (filters: {
   };
 };
 
+export const deleteAdminFieldVisit = async (
+  visitId: string,
+  actor: { _id?: any; fullName?: string; role?: string },
+  reason?: string
+) => {
+  if (!mongoose.Types.ObjectId.isValid(visitId)) {
+    throw new AppError('Invalid field visit identifier', 400);
+  }
+
+  const visit = await FieldVisit.findById(visitId);
+  if (!visit) {
+    throw new AppError('Field visit not found', 404);
+  }
+
+  (visit as any).isDeleted = true;
+  (visit as any).deletedAt = new Date();
+  if (reason) {
+    (visit as any).deletionReason = reason;
+  }
+  visit.hiddenFromCaregiver = true;
+  await visit.save();
+
+  await AuditLog.create({
+    action: 'ADMIN_DELETE_FIELD_VISIT',
+    category: 'field_operations',
+    actorId: actor._id || new mongoose.Types.ObjectId(),
+    actorName: actor.fullName || 'Admin Operations',
+    actorRole: actor.role || 'admin',
+    targetType: 'FieldVisit',
+    targetId: visit.visitNumber,
+    severity: 'warning',
+    timestamp: new Date(),
+    details: {
+      visitId: visit._id.toString(),
+      visitNumber: visit.visitNumber,
+      status: visit.status,
+      scheduledDate: visit.scheduledDate,
+      reason: reason || 'Deleted/archived by admin from dispatch roster',
+    },
+  });
+
+  return {
+    success: true,
+    message: `Field visit ${visit.visitNumber} was archived and removed from active dispatch`,
+    visitId: visit._id.toString(),
+    visitNumber: visit.visitNumber,
+  };
+};
 
 export const getAdminFieldOperationsStats = async () => {
   await seedDemoFieldVisitsIfEmpty();
@@ -1928,23 +2144,29 @@ export const getAdminFieldOperationsStats = async () => {
     todayCount,
     inProgressCount,
     completedTodayCount,
+    completedCount,
     overdueCount,
     exceptionsCount,
     pendingInstallationsCount,
     pendingAcceptanceCount,
     acceptedCount,
     rejectedCount,
+    replacementRequiredCount,
+    missedCount,
   ] = await Promise.all([
     FieldVisit.countDocuments(),
     FieldVisit.countDocuments({ scheduledDate: todayStr }),
     FieldVisit.countDocuments({ status: { $in: ['en_route', 'arrived', 'in_progress'] } }),
     FieldVisit.countDocuments({ scheduledDate: todayStr, status: 'completed' }),
-    FieldVisit.countDocuments({ scheduledDate: { $lt: todayStr }, status: { $nin: ['completed', 'cancelled'] } }),
+    FieldVisit.countDocuments({ status: 'completed' }),
+    FieldVisit.countDocuments({ scheduledDate: { $lt: todayStr }, status: { $nin: ['completed', 'cancelled', 'missed'] } }),
     FieldVisit.countDocuments({ status: 'failed' }),
     FieldVisit.countDocuments({ visitType: 'equipment_installation', status: { $ne: 'completed' } }),
     FieldVisit.countDocuments({ status: 'assigned' }),
     FieldVisit.countDocuments({ status: 'accepted' }),
     FieldVisit.countDocuments({ status: 'rejected' }),
+    FieldVisit.countDocuments({ replacementRequired: true }),
+    FieldVisit.countDocuments({ status: 'missed' }),
   ]);
 
   return {
@@ -1952,12 +2174,177 @@ export const getAdminFieldOperationsStats = async () => {
     todayCount,
     inProgressCount,
     completedTodayCount,
+    completedCount,
     overdueCount,
     exceptionsCount,
     pendingInstallationsCount,
     pendingAcceptanceCount,
     acceptedCount,
     rejectedCount,
+    replacementRequiredCount,
+    missedCount,
+  };
+};
+
+/**
+ * Phase 5: Missed Visit and Operational Monitoring Sweep
+ * Safely identifies and transitions uncompleted visits whose scheduled date/time has passed.
+ * - Inspects active visits (assigned, accepted, en_route, arrived, in_progress).
+ * - Excludes terminal visits (completed, cancelled) and already missed visits.
+ * - Idempotent: repeated sweeps prevent duplicate status transitions and notifications.
+ * - Records audit log (FIELD_VISIT_MARKED_MISSED) and deterministic in-app operational notification.
+ */
+export const sweepAndDetectOverdueVisits = async (options?: {
+  actor?: { _id?: any; fullName?: string; role?: string };
+  referenceDate?: Date;
+  dryRun?: boolean;
+}): Promise<{
+  totalEvaluated: number;
+  missedCount: number;
+  missedVisits: Array<{
+    _id: string;
+    visitNumber: string;
+    scheduledDate: string;
+    timeSlot: string;
+    previousStatus: string;
+  }>;
+}> => {
+  const refDate = options?.referenceDate || new Date();
+  const todayStr = refDate.toISOString().slice(0, 10);
+  const actor = options?.actor || {
+    _id: new mongoose.Types.ObjectId(),
+    fullName: 'Operational Monitoring Service',
+    role: 'system',
+  };
+
+  // Find candidate active visits
+  const activeVisits = await FieldVisit.find({
+    status: { $in: ['assigned', 'accepted', 'en_route', 'arrived', 'in_progress'] },
+  });
+
+  const missedVisits: Array<{
+    _id: string;
+    visitNumber: string;
+    scheduledDate: string;
+    timeSlot: string;
+    previousStatus: string;
+  }> = [];
+
+  for (const visit of activeVisits) {
+    let isOverdue = false;
+
+    if (visit.scheduledDate < todayStr) {
+      isOverdue = true;
+    } else if (visit.scheduledDate === todayStr) {
+      // Evaluate timeSlot end time with 15-minute grace period
+      const slotParts = (visit.timeSlot || '').split('-');
+      const endTimeStr = slotParts.length > 1 ? slotParts[1].trim() : slotParts[0]?.trim();
+      const match = (endTimeStr || '').match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?/i);
+      if (match) {
+        let hour = parseInt(match[1], 10);
+        const min = parseInt(match[2], 10);
+        const meridiem = match[3]?.toUpperCase();
+        if (meridiem === 'PM' && hour < 12) hour += 12;
+        if (meridiem === 'AM' && hour === 12) hour = 0;
+
+        const currentHour = refDate.getHours();
+        const currentMin = refDate.getMinutes();
+        const slotEndMinutes = hour * 60 + min;
+        const currentMinutes = currentHour * 60 + currentMin;
+
+        if (currentMinutes > slotEndMinutes + 15) {
+          isOverdue = true;
+        }
+      }
+    }
+
+    if (isOverdue) {
+      missedVisits.push({
+        _id: visit._id.toString(),
+        visitNumber: visit.visitNumber,
+        scheduledDate: visit.scheduledDate,
+        timeSlot: visit.timeSlot,
+        previousStatus: visit.status,
+      });
+
+      if (!options?.dryRun) {
+        const prevStatus = visit.status;
+        const now = new Date();
+        visit.status = 'missed';
+        visit.timestamps.missedAt = now;
+        visit.statusHistory.push({
+          status: 'missed',
+          changedBy: actor._id,
+          changedByRole: actor.role || 'system',
+          changedByName: actor.fullName || 'Operational Monitoring Service',
+          timestamp: now,
+          reason: 'Scheduled visit date and window elapsed without completion',
+          notes: `Operational monitoring marked visit as missed (previously ${prevStatus})`,
+        });
+
+        await visit.save();
+
+        // Audit Log
+        await AuditLog.create({
+          action: 'FIELD_VISIT_MARKED_MISSED',
+          category: 'field_operations',
+          actorId: actor._id,
+          actorName: actor.fullName || 'Operational Monitoring Service',
+          actorRole: actor.role || 'system',
+          targetType: 'FieldVisit',
+          targetId: visit._id.toString(),
+          details: {
+            visitNumber: visit.visitNumber,
+            previousStatus: prevStatus,
+            newStatus: 'missed',
+            scheduledDate: visit.scheduledDate,
+            timeSlot: visit.timeSlot,
+            reason: 'Scheduled visit date and window elapsed without completion',
+          },
+          severity: 'warning',
+          timestamp: now,
+        });
+
+        // Deterministic Admin / Operational Alert Notification
+        const idempotencyKey = `notif_missed_${visit._id}_${visit.scheduledDate}`;
+        try {
+          const existingNotif = await NotificationLog.findOne({ idempotencyKey });
+          if (!existingNotif) {
+            await NotificationLog.create({
+              recipientPhone: 'ADMIN_DESK',
+              recipientName: 'Clinical Operations Admin',
+              recipientRole: 'admin',
+              channel: 'in_app',
+              templateId: 'OVERDUE_VISIT_MISSED',
+              type: 'OVERDUE_VISIT_MISSED',
+              relatedEntityType: 'FieldVisit',
+              messageBody: `Operational Alert: Visit #${visit.visitNumber} for patient ${visit.patientDetails?.fullName} scheduled on ${visit.scheduledDate} (${visit.timeSlot}) was not completed and has been marked as missed.`,
+              consentChecked: true,
+              status: 'delivered',
+              provider: 'in_app_system',
+              idempotencyKey,
+              isRead: false,
+              metadata: {
+                visitId: visit._id.toString(),
+                visitNumber: visit.visitNumber,
+                previousStatus: prevStatus,
+                scheduledDate: visit.scheduledDate,
+                timeSlot: visit.timeSlot,
+                missedAt: now,
+              },
+            });
+          }
+        } catch (notifErr: any) {
+          console.warn('[sweepAndDetectOverdueVisits] Notification notice:', notifErr.message);
+        }
+      }
+    }
+  }
+
+  return {
+    totalEvaluated: activeVisits.length,
+    missedCount: missedVisits.length,
+    missedVisits,
   };
 };
 
@@ -1967,7 +2354,8 @@ export const assignOrReassignFieldVisitProvider = async (
   operatorUser: { _id: mongoose.Types.ObjectId; fullName: string; role: string },
   notes?: string,
   scheduledDate?: string,
-  timeSlot?: string
+  timeSlot?: string,
+  options?: { allowRejectedCaregiver?: boolean; forceReassign?: boolean }
 ): Promise<IFieldVisit> => {
   let visit = null;
   if (mongoose.Types.ObjectId.isValid(visitId)) {
@@ -1980,8 +2368,23 @@ export const assignOrReassignFieldVisitProvider = async (
     throw new AppError(`Field visit '${visitId}' not found`, 404);
   }
 
+  // 1. Visit eligibility validation
   if (visit.status === 'cancelled') {
     throw new AppError('Cannot reassign a visit that has been cancelled', 400);
+  }
+  if (visit.status === 'completed' && !options?.forceReassign && !['admin', 'super_admin'].includes(operatorUser.role)) {
+    throw new AppError('Cannot reassign a visit that has already been completed', 400);
+  }
+
+  // 2. Mandatory Reassignment Reason Validation
+  if (!notes || typeof notes !== 'string' || notes.trim().length < 3) {
+    throw new AppError('Mandatory reassignment reason is required (at least 3 characters)', 400);
+  }
+  const cleanReason = notes.trim();
+
+  // 3. Provider validation
+  if (!newProviderId || typeof newProviderId !== 'string' || !newProviderId.trim()) {
+    throw new AppError("Valid 'providerId' of an authorized caregiver is required", 400);
   }
 
   let provider = null;
@@ -2006,10 +2409,49 @@ export const assignOrReassignFieldVisitProvider = async (
     throw new AppError(`User '${provider.fullName}' has role '${provider.role}' and cannot be assigned as a field caregiver`, 400);
   }
 
+  // Check HealthcareProfessionalProfile if present
+  const profProfile = await HealthcareProfessionalProfile.findOne({ userId: provider._id }).lean();
+  if (profProfile) {
+    if (profProfile.isActiveForDispatch === false) {
+      throw new AppError(`Caregiver ${provider.fullName} is currently marked as unavailable for dispatch. Please select an active caregiver.`, 400);
+    }
+    if (profProfile.verificationStatus === 'rejected') {
+      throw new AppError(`Caregiver ${provider.fullName} credentials verification was rejected. Cannot assign this provider.`, 400);
+    }
+  }
+
   const targetDate = (scheduledDate && scheduledDate.trim()) || visit.scheduledDate;
   const targetTimeSlot = (timeSlot && timeSlot.trim()) || visit.timeSlot;
 
-  // Conflict check for target caregiver (normalizing AM/PM variations)
+  // Check DoctorAvailability blackout dates if present
+  const docAvail = await DoctorAvailability.findOne({ doctorId: provider._id }).lean();
+  if (docAvail) {
+    if (docAvail.isActive === false) {
+      throw new AppError(`Caregiver ${provider.fullName} schedule is inactive. Please select another caregiver.`, 400);
+    }
+    if (docAvail.blackoutDates && docAvail.blackoutDates.includes(targetDate)) {
+      throw new AppError(`Caregiver ${provider.fullName} is unavailable on ${targetDate} (Blackout date). Please select another caregiver.`, 400);
+    }
+  }
+
+  // 4. Prevent assigning a caregiver who has already rejected the same assignment unless explicitly permitted
+  const allowRejected = options?.allowRejectedCaregiver || options?.forceReassign;
+  const alreadyRejected =
+    (visit.assignmentRejection?.rejectedBy && visit.assignmentRejection.rejectedBy.toString() === provider._id.toString()) ||
+    (visit.assignmentRejection?.rejectedByPhone && visit.assignmentRejection.rejectedByPhone === provider.phone) ||
+    (visit.statusHistory &&
+      visit.statusHistory.some(
+        (h: any) => h.status === 'rejected' && h.changedBy && h.changedBy.toString() === provider._id.toString()
+      ));
+
+  if (alreadyRejected && !allowRejected) {
+    throw new AppError(
+      `Cannot assign caregiver ${provider.fullName} because they have already rejected this visit assignment. Please choose an alternate eligible caregiver.`,
+      400
+    );
+  }
+
+  // 5. Conflict check for target caregiver (normalizing AM/PM variations)
   const normalizeSlot = (s: string) => (s || '').replace(/\s*(AM|PM)\b/gi, '').trim().toLowerCase();
   const existingVisits = await FieldVisit.find({
     providerId: provider._id,
@@ -2034,39 +2476,63 @@ export const assignOrReassignFieldVisitProvider = async (
   const prevProviderName = visit.providerName;
   const prevProviderPhone = visit.providerPhone;
 
-  visit.providerId = provider._id;
-  visit.providerName = provider.fullName;
-  visit.providerPhone = provider.phone;
-  visit.providerRole = provider.role === 'caregiver' ? 'Palliative Caregiver' : 'Registered Nurse';
-  if (scheduledDate && scheduledDate.trim()) visit.scheduledDate = scheduledDate.trim();
-  if (timeSlot && timeSlot.trim()) visit.timeSlot = timeSlot.trim();
-
-  // Reset status to 'assigned' and assignmentStatus to 'pending' on assignment / reassignment
-  visit.status = 'assigned';
-  visit.assignmentStatus = 'pending';
-  visit.replacementRequired = false;
-  visit.assignmentRejection = undefined;
+  // 6. Concurrency-safe atomic state transition
   const now = new Date();
-  visit.timestamps.assignedAt = now;
-  visit.timestamps.acceptedAt = undefined;
-  visit.timestamps.rejectedAt = undefined;
-
-  visit.statusHistory.push({
-    status: visit.status,
+  const newHistoryEntry = {
+    status: 'assigned',
     changedBy: operatorUser._id,
     changedByRole: operatorUser.role,
     changedByName: operatorUser.fullName,
     timestamp: now,
-    reason: notes || 'Staff re-allocation',
-    notes: `Reassigned from ${prevProviderName} to ${provider.fullName}. Reason: ${notes || 'Staff re-allocation'}`,
-  });
+    reason: cleanReason,
+    notes: `Reassigned from ${prevProviderName || 'Unassigned'} to ${provider.fullName}. Reason: ${cleanReason}`,
+  };
 
-  await visit.save();
+  const currentVersion = visit.__v;
+  const filter: any = { _id: visit._id };
+  if (typeof currentVersion === 'number') {
+    filter.__v = currentVersion;
+  }
+
+  const updatedVisit = await FieldVisit.findOneAndUpdate(
+    filter,
+    {
+      $set: {
+        providerId: provider._id,
+        providerName: provider.fullName,
+        providerPhone: provider.phone,
+        providerRole: provider.role === 'caregiver' ? 'Palliative Caregiver' : 'Registered Nurse',
+        scheduledDate: targetDate,
+        timeSlot: targetTimeSlot,
+        status: 'assigned',
+        assignmentStatus: 'pending',
+        replacementRequired: false,
+        'timestamps.assignedAt': now,
+      },
+      $unset: {
+        assignmentRejection: 1,
+        'timestamps.acceptedAt': 1,
+        'timestamps.rejectedAt': 1,
+      },
+      $push: {
+        statusHistory: newHistoryEntry,
+      },
+      $inc: { __v: 1 },
+    },
+    { new: true }
+  );
+
+  if (!updatedVisit) {
+    throw new AppError(
+      'Concurrent reassignment conflict: This visit was updated concurrently by another administrative action. Please refresh the queue and retry.',
+      409
+    );
+  }
 
   // Synchronize subscription primary caregiver if applicable
-  if (visit.subscriptionId) {
+  if (updatedVisit.subscriptionId) {
     await CaregiverSubscription.updateOne(
-      { _id: visit.subscriptionId },
+      { _id: updatedVisit.subscriptionId },
       {
         $set: {
           assignedCaregiverId: provider._id,
@@ -2077,7 +2543,7 @@ export const assignOrReassignFieldVisitProvider = async (
     ).catch(() => {});
   }
 
-  // Audit Log
+  // 7. Audit Log
   await AuditLog.create({
     action: 'FIELD_VISIT_PROVIDER_REASSIGNED',
     category: 'field_operations',
@@ -2085,25 +2551,29 @@ export const assignOrReassignFieldVisitProvider = async (
     actorName: operatorUser.fullName,
     actorRole: operatorUser.role,
     targetType: 'FieldVisit',
-    targetId: visit._id.toString(),
+    targetId: updatedVisit._id.toString(),
     details: {
-      visitId: visit._id.toString(),
-      visitNumber: visit.visitNumber,
+      visitId: updatedVisit._id.toString(),
+      visitNumber: updatedVisit.visitNumber,
       previousProvider: prevProviderName,
       previousProviderId: prevProviderId ? prevProviderId.toString() : undefined,
       newProvider: provider.fullName,
       newProviderId: provider._id.toString(),
-      reason: notes || 'Caregiver reassignment',
-      notes,
-      scheduledDate: visit.scheduledDate,
-      timeSlot: visit.timeSlot,
+      proposedProviderId: provider._id.toString(),
+      actingAdminId: operatorUser._id.toString(),
+      reason: cleanReason,
+      notes: cleanReason,
+      outcome: 'success',
+      scheduledDate: updatedVisit.scheduledDate,
+      timeSlot: updatedVisit.timeSlot,
     },
     severity: 'info',
     timestamp: now,
   });
 
-  // Notifications
+  // 8. Notifications
   try {
+    // A. Notify previous caregiver (idempotent key)
     if (prevProviderId && prevProviderId.toString() !== provider._id.toString() && prevProviderPhone) {
       await NotificationLog.create({
         recipientPhone: prevProviderPhone,
@@ -2113,19 +2583,20 @@ export const assignOrReassignFieldVisitProvider = async (
         templateId: 'CAREGIVER_REASSIGNED_REMOVED',
         type: 'CAREGIVER_REASSIGNED_REMOVED',
         relatedEntityType: 'FieldVisit',
-        messageBody: `Notice: Visit ${visit.visitNumber} scheduled for ${targetDate} (${targetTimeSlot}) has been reassigned to another clinician.`,
+        messageBody: `Notice: Visit ${updatedVisit.visitNumber} scheduled for ${targetDate} (${targetTimeSlot}) has been reassigned to another clinician.`,
         consentChecked: true,
         status: 'delivered',
         provider: 'in_app_system',
-        idempotencyKey: `notif_reassign_prev_${visit._id}_${Date.now()}`,
+        idempotencyKey: `notif_reassign_prev_${updatedVisit._id}_${prevProviderId}`,
         isRead: false,
         metadata: {
-          visitId: visit._id.toString(),
-          visitNumber: visit.visitNumber,
+          visitId: updatedVisit._id.toString(),
+          visitNumber: updatedVisit.visitNumber,
         },
-      });
+      }).catch(() => {});
     }
 
+    // B. Notify new caregiver
     if (provider.phone) {
       await NotificationLog.create({
         recipientPhone: provider.phone,
@@ -2135,47 +2606,176 @@ export const assignOrReassignFieldVisitProvider = async (
         templateId: 'CAREGIVER_ASSIGNED_NEW',
         type: 'CAREGIVER_ASSIGNED_NEW',
         relatedEntityType: 'FieldVisit',
-        messageBody: `New Visit Assigned: You have been assigned to visit ${visit.visitNumber} for patient ${visit.patientDetails?.fullName} on ${targetDate} (${targetTimeSlot}).`,
+        messageBody: `New Visit Assigned: You have been assigned to visit ${updatedVisit.visitNumber} for patient ${updatedVisit.patientDetails?.fullName} on ${targetDate} (${targetTimeSlot}). Action required: Please review and accept or decline.`,
         consentChecked: true,
         status: 'delivered',
         provider: 'in_app_system',
-        idempotencyKey: `notif_reassign_new_${visit._id}_${provider._id}`,
+        idempotencyKey: `notif_reassign_new_${updatedVisit._id}_${provider._id}`,
         isRead: false,
         metadata: {
-          visitId: visit._id.toString(),
-          visitNumber: visit.visitNumber,
+          visitId: updatedVisit._id.toString(),
+          visitNumber: updatedVisit.visitNumber,
           targetDate,
           targetTimeSlot,
         },
-      });
+      }).catch(() => {});
     }
 
-    if (visit.patientDetails?.phone) {
+    // C. Notify patient
+    if (updatedVisit.patientDetails?.phone) {
       await NotificationLog.create({
-        recipientPhone: visit.patientDetails.phone,
-        recipientName: visit.patientDetails.fullName,
+        recipientPhone: updatedVisit.patientDetails.phone,
+        recipientName: updatedVisit.patientDetails.fullName,
         recipientRole: 'patient',
         channel: 'in_app',
         templateId: 'CAREGIVER_REASSIGNED_PATIENT',
-        messageBody: `Caregiver Update: Your assigned caregiver for visit ${visit.visitNumber} on ${targetDate} is now ${provider.fullName} (${provider.phone ? `+91 ${provider.phone}` : ''}).`,
+        type: 'CAREGIVER_REASSIGNED_PATIENT',
+        relatedEntityType: 'FieldVisit',
+        messageBody: `Caregiver Update: Your assigned caregiver for visit ${updatedVisit.visitNumber} on ${targetDate} is now ${provider.fullName} (${provider.phone ? `+91 ${provider.phone}` : ''}). Confirmation is currently in progress.`,
         consentChecked: true,
         status: 'delivered',
         provider: 'in_app_system',
-        idempotencyKey: `notif_reassign_pat_${visit._id}_${provider._id}`,
+        idempotencyKey: `notif_reassign_pat_${updatedVisit._id}_${provider._id}`,
         isRead: false,
         metadata: {
-          visitId: visit._id.toString(),
-          visitNumber: visit.visitNumber,
+          visitId: updatedVisit._id.toString(),
+          visitNumber: updatedVisit.visitNumber,
           caregiverName: provider.fullName,
           caregiverPhone: provider.phone,
         },
-      });
+      }).catch(() => {});
     }
+
+    // D. Notify Admin
+    await NotificationLog.create({
+      recipientPhone: 'ADMIN_DESK',
+      recipientName: 'Clinical Operations Admin',
+      recipientRole: 'admin',
+      channel: 'in_app',
+      templateId: 'CAREGIVER_REASSIGNED',
+      type: 'CAREGIVER_REASSIGNED',
+      relatedEntityType: 'FieldVisit',
+      messageBody: `Reassignment Completed: Visit #${updatedVisit.visitNumber} for patient ${updatedVisit.patientDetails?.fullName} has been reassigned to ${provider.fullName} (Pending Caregiver Acceptance).`,
+      consentChecked: true,
+      status: 'delivered',
+      provider: 'in_app_system',
+      idempotencyKey: `notif_reassign_admin_${updatedVisit._id}_${provider._id}`,
+      isRead: false,
+      metadata: {
+        visitId: updatedVisit._id.toString(),
+        visitNumber: updatedVisit.visitNumber,
+        providerId: provider._id.toString(),
+        providerName: provider.fullName,
+        status: 'assigned',
+        assignmentStatus: 'pending',
+      },
+    }).catch(() => {});
   } catch (notifErr: any) {
     console.warn('[NotificationLog] Failed to record reassignment notifications:', notifErr.message);
   }
 
-  return visit;
+  return updatedVisit;
+};
+
+/**
+ * Phase 4: Retrieve eligible caregivers for a specific field visit
+ * Excludes caregivers who:
+ * - Are not active or do not have an authorized role ('caregiver', 'nurse', 'professional')
+ * - Have already rejected this specific visit
+ * - Have an active overlapping visit on the same date and time slot
+ * - Have dispatch disabled or unverified credentials
+ * - Have scheduling blackout dates
+ */
+export const getEligibleCaregiversForVisit = async (
+  visitId: string
+): Promise<{
+  visit: IFieldVisit;
+  eligibleCaregivers: any[];
+  count: number;
+  message?: string;
+}> => {
+  let visit = null;
+  if (mongoose.Types.ObjectId.isValid(visitId)) {
+    visit = await FieldVisit.findById(visitId);
+  }
+  if (!visit) {
+    visit = await FieldVisit.findOne({ visitNumber: visitId });
+  }
+  if (!visit) {
+    throw new AppError(`Field visit '${visitId}' not found`, 404);
+  }
+
+  const targetDate = visit.scheduledDate;
+  const targetTimeSlot = visit.timeSlot;
+  const normalizeSlot = (s: string) => (s || '').replace(/\s*(AM|PM)\b/gi, '').trim().toLowerCase();
+
+  // Find all active caregivers / nurses / professionals
+  const allProviders = await User.find({
+    role: { $in: ['caregiver', 'nurse', 'professional'] },
+    status: 'active',
+  }).select('_id fullName phone role status isPhoneVerified');
+
+  // Identify caregivers who previously rejected this visit
+  const rejectingUserIds = new Set<string>();
+  if (visit.assignmentRejection?.rejectedBy) {
+    rejectingUserIds.add(visit.assignmentRejection.rejectedBy.toString());
+  }
+  if (visit.statusHistory) {
+    for (const h of visit.statusHistory) {
+      if (h.status === 'rejected' && h.changedBy) {
+        rejectingUserIds.add(h.changedBy.toString());
+      }
+    }
+  }
+
+  // Find busy providers with conflicting active visits on targetDate
+  const busyVisits = await FieldVisit.find({
+    scheduledDate: targetDate,
+    _id: { $ne: visit._id },
+    status: { $in: ['assigned', 'accepted', 'en_route', 'arrived', 'in_progress'] },
+  }).select('providerId timeSlot visitNumber');
+
+  const busyProviderIds = new Set<string>();
+  for (const bv of busyVisits) {
+    if (bv.providerId) {
+      if (bv.timeSlot === targetTimeSlot || normalizeSlot(bv.timeSlot) === normalizeSlot(targetTimeSlot)) {
+        busyProviderIds.add(bv.providerId.toString());
+      }
+    }
+  }
+
+  // Check profiles with dispatch disabled or rejected verification
+  const disabledProfiles = await HealthcareProfessionalProfile.find({
+    userId: { $in: allProviders.map((p) => p._id) },
+    $or: [{ isActiveForDispatch: false }, { verificationStatus: 'rejected' }],
+  }).select('userId');
+  const disabledUserIds = new Set(disabledProfiles.map((p) => p.userId.toString()));
+
+  // Check blackout dates from DoctorAvailability
+  const doctorAvails = await DoctorAvailability.find({
+    doctorId: { $in: allProviders.map((p) => p._id) },
+    $or: [{ isActive: false }, { blackoutDates: targetDate }],
+  }).select('doctorId');
+  const blackoutDoctorIds = new Set(doctorAvails.map((d) => d.doctorId.toString()));
+
+  const eligibleCaregivers = allProviders.filter((p) => {
+    const pId = p._id.toString();
+    if (rejectingUserIds.has(pId)) return false;
+    if (busyProviderIds.has(pId)) return false;
+    if (disabledUserIds.has(pId)) return false;
+    if (blackoutDoctorIds.has(pId)) return false;
+    return true;
+  });
+
+  return {
+    visit,
+    eligibleCaregivers,
+    count: eligibleCaregivers.length,
+    message:
+      eligibleCaregivers.length === 0
+        ? 'No eligible caregivers are currently available for this scheduled window. Visit remains marked as requiring replacement.'
+        : undefined,
+  };
 };
 
 // -----------------------------------------------------------------------------

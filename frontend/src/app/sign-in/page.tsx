@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Activity,
   Shield,
@@ -13,7 +14,8 @@ import {
   Stethoscope,
   Building,
   Info,
-  AlertCircle
+  AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
@@ -21,7 +23,11 @@ import { FormField } from '@/components/FormField';
 import { Button } from '@/components/Button';
 import { authApi, ApiClientError } from '@/lib/api';
 
-export default function SignInPage() {
+function SignInContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectUrl = searchParams.get('redirect');
+
   const [role, setRole] = useState<'patient' | 'professional' | 'hospital'>('patient');
   const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
@@ -76,6 +82,13 @@ export default function SignInPage() {
 
       setAuthResponse(response);
       setStep('success');
+
+      // If redirect URL is provided and safe (relative path), navigate automatically
+      if (redirectUrl && redirectUrl.startsWith('/') && !redirectUrl.startsWith('//')) {
+        setTimeout(() => {
+          router.push(redirectUrl);
+        }, 1200);
+      }
     } catch (err: any) {
       if (err instanceof ApiClientError) {
         setApiError(err.message);
@@ -106,6 +119,19 @@ export default function SignInPage() {
               Secure, authenticated access for patients and clinicians
             </p>
           </div>
+
+          {/* Checkout Redirection Notice */}
+          {redirectUrl && (
+            <div className="mb-5 p-3.5 bg-blue-50/80 border border-blue-200 rounded-2xl flex items-start gap-2.5 text-xs text-blue-950">
+              <Shield size={16} className="text-primary shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Returning to Medical Checkout</p>
+                <p className="text-blue-900/80 mt-0.5">
+                  Sign in to link this order with your patient record. Your cart items and equipment preferences are safely preserved.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Role Selector Tabs */}
           <div className="grid grid-cols-3 gap-1.5 p-1 rounded-2xl bg-background border border-border mb-6">
@@ -299,7 +325,17 @@ export default function SignInPage() {
               </div>
 
               <div className="space-y-2">
-                {authResponse.user.role === 'professional' ? (
+                {redirectUrl && redirectUrl.startsWith('/') && !redirectUrl.startsWith('//') ? (
+                  <>
+                    <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center justify-center gap-2 mb-2">
+                      <Sparkles size={14} className="text-emerald-600 animate-spin" />
+                      <span>Returning you to {redirectUrl.includes('/subscriptions') ? 'subscriptions' : 'checkout'}...</span>
+                    </div>
+                    <Button href={redirectUrl} variant="primary" size="md" className="w-full justify-center shadow-md">
+                      Proceed to {redirectUrl.includes('/subscriptions') ? 'Caregiver Subscriptions' : 'Checkout'} Now &rarr;
+                    </Button>
+                  </>
+                ) : authResponse.user.role === 'professional' ? (
                   <Button href="/doctor/dashboard" variant="secondary" size="md" className="w-full justify-center">
                     Go to Doctor Schedule Portal
                   </Button>
@@ -343,7 +379,10 @@ export default function SignInPage() {
           <div className="mt-6 pt-5 border-t border-border text-center text-xs text-muted-foreground flex flex-col gap-2">
             <div>
               <span>New to VivoQuest? </span>
-              <Link href="/register" className="font-bold text-primary hover:underline">
+              <Link
+                href={redirectUrl ? `/register?redirect=${encodeURIComponent(redirectUrl)}` : '/register'}
+                className="font-bold text-primary hover:underline"
+              >
                 Create an Account
               </Link>
             </div>
@@ -360,5 +399,13 @@ export default function SignInPage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <SignInContent />
+    </Suspense>
   );
 }

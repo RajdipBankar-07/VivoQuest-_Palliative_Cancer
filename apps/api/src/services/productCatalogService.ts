@@ -1,7 +1,12 @@
 import { MedicalProduct, IMedicalProduct, ProductCategory } from '../models/MedicalProduct.js';
 import { ProductOrder, IProductOrder, OrderStatus } from '../models/ProductOrder.js';
 import { ShoppingCart, IShoppingCart } from '../models/ShoppingCart.js';
+import { ProductReview, IProductReview } from '../models/ProductReview.js';
+import { ProductComplaint, IProductComplaint } from '../models/ProductComplaint.js';
+import { Supplier } from '../models/Supplier.js';
 import { AuditLog } from '../models/AuditLog.js';
+import { NotificationLog } from '../models/NotificationLog.js';
+import { sendPatientNotification } from './notificationService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import mongoose from 'mongoose';
 
@@ -565,6 +570,10 @@ export const seedMedicalProductsIfEmpty = async (): Promise<void> => {
   ];
 
   for (const prod of defaultProducts) {
+    if (prod.images && prod.images.length === 1) {
+      const base = prod.images[0].replace('.jpg', '');
+      prod.images.push(`${base}-2.jpg`);
+    }
     await MedicalProduct.updateOne({ sku: prod.sku }, { $set: prod }, { upsert: true });
   }
   console.log('[Seed] Medical product catalog and DME inventory initialized/updated with 14 products.');
@@ -578,12 +587,24 @@ export const listMedicalProducts = async (filters: {
   search?: string;
   rentalOnly?: boolean;
   inStockOnly?: boolean;
+  sourcingType?: string;
+  installationOnly?: boolean;
+  status?: string;
+  supplierId?: string;
+  sort?: string;
   page?: number;
   limit?: number;
 }) => {
   await seedMedicalProductsIfEmpty();
 
-  const query: any = { isActive: true };
+  const query: any = {};
+
+  if (filters.status && filters.status !== 'all') {
+    query.status = filters.status;
+  } else {
+    // Default to active for public listing
+    query.isActive = true;
+  }
 
   if (filters.category && filters.category !== 'all') {
     query.category = filters.category;
@@ -597,6 +618,24 @@ export const listMedicalProducts = async (filters: {
     query.stockQuantity = { $gt: 0 };
   }
 
+  if (filters.installationOnly) {
+    query.installationEligible = true;
+  }
+
+  if (filters.sourcingType && filters.sourcingType !== 'all') {
+    if (filters.sourcingType === 'own' || filters.sourcingType === 'own_stock') {
+      query.sourcingType = { $in: ['own', 'own_stock'] };
+    } else if (filters.sourcingType === 'supplier' || filters.sourcingType === 'supplier_direct') {
+      query.sourcingType = { $in: ['supplier', 'supplier_direct'] };
+    } else {
+      query.sourcingType = filters.sourcingType;
+    }
+  }
+
+  if (filters.supplierId && mongoose.Types.ObjectId.isValid(filters.supplierId)) {
+    query.supplierId = new mongoose.Types.ObjectId(filters.supplierId);
+  }
+
   if (filters.search && filters.search.trim()) {
     const searchRegex = new RegExp(filters.search.trim(), 'i');
     query.$or = [{ title: searchRegex }, { description: searchRegex }, { sku: searchRegex }, { badge: searchRegex }];
@@ -606,8 +645,19 @@ export const listMedicalProducts = async (filters: {
   const limit = Math.min(50, Math.max(1, filters.limit || 20));
   const skip = (page - 1) * limit;
 
+  let sortOption: any = { stockQuantity: -1, price: 1 };
+  if (filters.sort === 'price_asc') {
+    sortOption = { sellingPrice: 1, price: 1 };
+  } else if (filters.sort === 'price_desc') {
+    sortOption = { sellingPrice: -1, price: -1 };
+  } else if (filters.sort === 'rating') {
+    sortOption = { averageRating: -1, reviewCount: -1 };
+  } else if (filters.sort === 'newest') {
+    sortOption = { createdAt: -1 };
+  }
+
   const [products, total] = await Promise.all([
-    MedicalProduct.find(query).sort({ stockQuantity: -1, price: 1 }).skip(skip).limit(limit).lean(),
+    MedicalProduct.find(query).sort(sortOption).skip(skip).limit(limit).lean(),
     MedicalProduct.countDocuments(query),
   ]);
 
@@ -654,6 +704,9 @@ export interface RevalidatedCartItem {
   category: string;
   images: string[];
   unitPrice: number;
+  regularPrice: number;
+  sellingPrice: number;
+  discountAmount: number;
   monthlyRentalPrice?: number;
   isRental: boolean;
   rentalDurationMonths: number;
@@ -662,6 +715,12 @@ export interface RevalidatedCartItem {
   inStock: boolean;
   stockAvailable: number;
   setupRequired: boolean;
+  installationEligible: boolean;
+  installationSelected: boolean;
+  installationServiceCharge: number;
+  sourcingType: string;
+  supplierId?: string;
+  supplierName?: string;
   isDemo: boolean;
 }
 
@@ -669,8 +728,10 @@ export interface RevalidatedCart {
   items: RevalidatedCartItem[];
   pricing: {
     subtotal: number;
+    discountTotal: number;
     deliveryFee: number;
     taxGst: number;
+    installationCharge: number;
     totalAmount: number;
   };
   warnings: string[];
@@ -688,6 +749,7 @@ export const validateCartItems = async (
     quantity: number;
     isRental?: boolean;
     rentalDurationMonths?: number;
+    installationSelected?: boolean;
   }>
 ): Promise<RevalidatedCart> => {
   await seedMedicalProductsIfEmpty();
@@ -695,6 +757,8 @@ export const validateCartItems = async (
   const validatedItems: RevalidatedCartItem[] = [];
   const warnings: string[] = [];
   let subtotal = 0;
+  let discountTotal = 0;
+  let installationCharge = 0;
   let totalItemCount = 0;
   let hasUnavailableItems = false;
 
@@ -709,7 +773,7 @@ export const validateCartItems = async (
       product = await MedicalProduct.findOne({ sku: item.productId.toUpperCase() });
     }
 
-    if (!product || !product.isActive) {
+    if (!product || !product.isActive || product.status === 'archived') {
       warnings.push(`One of the items in your cart is no longer available and was excluded.`);
       hasUnavailableItems = true;
       continue;
@@ -723,7 +787,7 @@ export const validateCartItems = async (
     let quantity = requestedQty;
     let inStock = true;
 
-    if (product.stockQuantity <= 0) {
+    if (product.stockQuantity <= 0 || product.status === 'out_of_stock') {
       inStock = false;
       hasUnavailableItems = true;
       warnings.push(`"${product.title}" is currently out of stock.`);
@@ -735,13 +799,27 @@ export const validateCartItems = async (
     }
 
     // Authoritative server-side price calculation
+    const regularUnitPrice = isRental
+      ? (product.rentalPriceMonthly || product.regularPrice || product.price) * rentalDurationMonths
+      : (product.regularPrice || product.price);
+
     const unitPrice = isRental
-      ? (product.rentalPriceMonthly || product.price) * rentalDurationMonths
-      : product.price;
+      ? (product.rentalPriceMonthly || product.sellingPrice || product.price) * rentalDurationMonths
+      : (product.sellingPrice || product.price);
 
     const itemSubtotal = inStock ? unitPrice * quantity : 0;
+    const itemDiscount = inStock ? Math.max(0, regularUnitPrice - unitPrice) * quantity : 0;
+
+    const installationEligible = Boolean(product.installationEligible);
+    const installationSelected = Boolean(item.installationSelected && installationEligible);
+    const itemInstallationCharge = installationSelected && inStock
+      ? (product.installationServiceCharge || 0) * quantity
+      : 0;
+
     if (inStock) {
       subtotal += itemSubtotal;
+      discountTotal += itemDiscount;
+      installationCharge += itemInstallationCharge;
       totalItemCount += quantity;
     }
 
@@ -752,6 +830,9 @@ export const validateCartItems = async (
       category: product.category,
       images: product.images,
       unitPrice,
+      regularPrice: regularUnitPrice,
+      sellingPrice: unitPrice,
+      discountAmount: itemDiscount,
       monthlyRentalPrice: product.rentalPriceMonthly,
       isRental,
       rentalDurationMonths,
@@ -760,6 +841,12 @@ export const validateCartItems = async (
       inStock,
       stockAvailable: product.stockQuantity,
       setupRequired: product.setupRequiredByClinician,
+      installationEligible,
+      installationSelected,
+      installationServiceCharge: product.installationServiceCharge || 0,
+      sourcingType: product.sourcingType,
+      supplierId: product.supplierId?.toString(),
+      supplierName: product.supplierName,
       isDemo: product.isDemo,
     });
   }
@@ -767,14 +854,16 @@ export const validateCartItems = async (
   // Delivery fee: Free for orders >= ₹2000, else ₹150
   const deliveryFee = subtotal === 0 || subtotal >= 2000 ? 0 : 150;
   const taxGst = Math.round(subtotal * 0.12);
-  const totalAmount = subtotal + deliveryFee + taxGst;
+  const totalAmount = subtotal + deliveryFee + taxGst + installationCharge;
 
   return {
     items: validatedItems,
     pricing: {
       subtotal,
+      discountTotal,
       deliveryFee,
       taxGst,
+      installationCharge,
       totalAmount,
     },
     warnings,
@@ -791,7 +880,7 @@ export const getPatientCart = async (userId: string): Promise<RevalidatedCart> =
   if (!cart || cart.items.length === 0) {
     return {
       items: [],
-      pricing: { subtotal: 0, deliveryFee: 0, taxGst: 0, totalAmount: 0 },
+      pricing: { subtotal: 0, discountTotal: 0, deliveryFee: 0, taxGst: 0, installationCharge: 0, totalAmount: 0 },
       warnings: [],
       totalItemCount: 0,
       hasUnavailableItems: false,
@@ -803,6 +892,7 @@ export const getPatientCart = async (userId: string): Promise<RevalidatedCart> =
     quantity: i.quantity,
     isRental: i.isRental,
     rentalDurationMonths: i.rentalDurationMonths,
+    installationSelected: i.installationSelected,
   }));
 
   return validateCartItems(rawItems);
@@ -818,6 +908,7 @@ export const savePatientCart = async (
     quantity: number;
     isRental?: boolean;
     rentalDurationMonths?: number;
+    installationSelected?: boolean;
   }>
 ): Promise<RevalidatedCart> => {
   const sanitizedItems = (items || []).filter((i) => i && i.productId).map((i) => ({
@@ -826,6 +917,7 @@ export const savePatientCart = async (
     quantity: Math.max(1, i.quantity || 1),
     isRental: Boolean(i.isRental),
     rentalDurationMonths: i.rentalDurationMonths || 1,
+    installationSelected: Boolean(i.installationSelected),
     addedAt: new Date(),
   }));
 
@@ -913,20 +1005,24 @@ export const createProductOrder = async (
   }
 
   // Debounce duplicate submission: check if identical order was placed within last 15 seconds
-  const fifteenSecondsAgo = new Date(Date.now() - 15000);
-  const recentDuplicate = await ProductOrder.findOne({
-    patientId: userId,
-    createdAt: { $gte: fifteenSecondsAgo },
-    'deliveryAddress.street': data.deliveryAddress.street.trim(),
-    'deliveryAddress.pincode': pincodeClean,
-  });
-  if (recentDuplicate) {
-    (recentDuplicate as any).isExisting = true;
-    return recentDuplicate;
+  if (!data.idempotencyKey) {
+    const fifteenSecondsAgo = new Date(Date.now() - 15000);
+    const recentDuplicate = await ProductOrder.findOne({
+      patientId: userId,
+      createdAt: { $gte: fifteenSecondsAgo },
+      'deliveryAddress.street': data.deliveryAddress.street.trim(),
+      'deliveryAddress.pincode': pincodeClean,
+    });
+    if (recentDuplicate) {
+      (recentDuplicate as any).isExisting = true;
+      return recentDuplicate;
+    }
   }
 
   // Authoritative revalidation of items and inventory deduction
   let subtotal = 0;
+  let discountTotal = 0;
+  let installationChargeTotal = 0;
   let procurementCostTotal = 0;
   let setupRequired = false;
   let recommendedRole: string | undefined;
@@ -945,17 +1041,29 @@ export const createProductOrder = async (
     const rentalDurationMonths = isRental ? Math.min(24, Math.max(1, item.rentalDurationMonths || 1)) : undefined;
 
     // Strict price derivation from database
-    const unitPrice = isRental
-      ? (prod.rentalPriceMonthly || prod.price) * (rentalDurationMonths || 1)
-      : prod.price;
+    const regularUnitPrice = isRental
+      ? (prod.rentalPriceMonthly || prod.regularPrice || prod.price) * (rentalDurationMonths || 1)
+      : (prod.regularPrice || prod.price);
 
-    subtotal += unitPrice * qty;
+    const unitPrice = isRental
+      ? (prod.rentalPriceMonthly || prod.sellingPrice || prod.price) * (rentalDurationMonths || 1)
+      : (prod.sellingPrice || prod.price);
+
+    const itemSubtotal = unitPrice * qty;
+    const itemDiscount = Math.max(0, regularUnitPrice - unitPrice) * qty;
+    subtotal += itemSubtotal;
+    discountTotal += itemDiscount;
+
+    const installationSelected = Boolean((item as any).installationSelected && prod.installationEligible);
+    const itemInstallationCharge = installationSelected ? (prod.installationServiceCharge || 0) * qty : 0;
+    installationChargeTotal += itemInstallationCharge;
+
     const itemProcurement = (prod.procurementCost || 0) * qty;
     procurementCostTotal += itemProcurement;
 
-    if (prod.setupRequiredByClinician) {
+    if (prod.setupRequiredByClinician || installationSelected) {
       setupRequired = true;
-      recommendedRole = prod.recommendedSpecialistRole || 'technician';
+      recommendedRole = prod.recommendedSpecialistRole || 'specialist technician';
     }
 
     populatedItems.push({
@@ -965,11 +1073,17 @@ export const createProductOrder = async (
       category: prod.category,
       quantity: qty,
       unitPrice,
+      regularPrice: regularUnitPrice,
+      discountAmount: itemDiscount,
       isRental,
       rentalDurationMonths,
-      setupRequired: prod.setupRequiredByClinician,
+      setupRequired: prod.setupRequiredByClinician || installationSelected,
+      installationSelected,
+      installationCharge: itemInstallationCharge,
       sourcingType: prod.sourcingType || 'own_stock',
       supplierId: prod.supplierId,
+      supplierName: prod.supplierName,
+      supplierStatus: (prod.sourcingType === 'supplier_direct' || (prod.sourcingType as any) === 'supplier') ? 'pending' : undefined,
       procurementCost: prod.procurementCost || 0,
     });
 
@@ -1045,10 +1159,33 @@ export const createProductOrder = async (
 
   const deliveryFee = subtotal >= 2000 ? 0 : 150; // Free delivery over ₹2000
   const taxGst = Math.round(subtotal * 0.12);
-  const totalAmount = subtotal + deliveryFee + taxGst;
+  const totalAmount = subtotal + deliveryFee + taxGst + installationChargeTotal;
 
-  const randomDigits = Math.floor(1000 + Math.random() * 9000);
-  const orderNumber = `VQ-ORD-2026-${randomDigits}`;
+  // Build supplier fulfillment groups for multi-supplier split routing
+  const supplierMap = new Map<string, { supplierId: mongoose.Types.ObjectId; supplierName?: string }>();
+  for (const it of populatedItems) {
+    if ((it.sourcingType === 'supplier_direct' || (it.sourcingType as any) === 'supplier') && it.supplierId) {
+      supplierMap.set(it.supplierId.toString(), {
+        supplierId: it.supplierId,
+        supplierName: it.supplierName,
+      });
+    }
+  }
+  const supplierFulfillments = Array.from(supplierMap.values()).map((s) => ({
+    supplierId: s.supplierId,
+    supplierName: s.supplierName,
+    status: 'pending' as const,
+  }));
+
+  let randomDigits = Math.floor(1000 + Math.random() * 9000);
+  let orderNumber = `VQ-ORD-2026-${randomDigits}`;
+  let invoiceNumber = `INV-PRD-2026-${randomDigits}`;
+  while (await ProductOrder.exists({ $or: [{ orderNumber }, { invoiceNumber }] })) {
+    randomDigits = Math.floor(1000 + Math.random() * 9000);
+    orderNumber = `VQ-ORD-2026-${randomDigits}`;
+    invoiceNumber = `INV-PRD-2026-${randomDigits}`;
+  }
+  const invoiceGeneratedAt = new Date();
 
   // Initial payment status
   const paymentMethod = data.paymentMethod || 'cod';
@@ -1056,6 +1193,8 @@ export const createProductOrder = async (
 
   const order = await ProductOrder.create({
     orderNumber,
+    invoiceNumber,
+    invoiceGeneratedAt,
     patientId: userId,
     patientName: data.patientName || 'Verified Patient',
     patientPhone: data.patientPhone || data.deliveryAddress.contactPhone || '9810011111',
@@ -1063,10 +1202,13 @@ export const createProductOrder = async (
     hospitalReferralId: data.hospitalReferralId,
     idempotencyKey: data.idempotencyKey,
     items: populatedItems,
+    supplierFulfillments,
     pricing: {
       subtotal,
+      discountTotal,
       deliveryFee,
       taxGst,
+      installationCharge: installationChargeTotal,
       totalAmount,
       procurementCostTotal,
       refundAmount: 0,
@@ -1098,11 +1240,13 @@ export const createProductOrder = async (
     orderStatus: 'placed',
     paymentStatus: initialPaymentStatus,
     paymentMethod,
+    estimatedDeliveryDays: '2-4 business days',
+    estimatedDeliveryDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
     trackingUpdates: [
       {
         timestamp: new Date(),
         status: 'placed',
-        message: 'Order received and logged in VivoQuest central dispatch system.',
+        message: `Order received and logged in central dispatch system. Estimated delivery: ${new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
         location: `${data.deliveryAddress.city} Central Hub`,
       },
     ],
@@ -1111,6 +1255,38 @@ export const createProductOrder = async (
 
   // Clear patient cart upon successful order placement
   await clearPatientCart(userId);
+
+  // Dispatch in-app operational alert to Admin Desk
+  try {
+    const adminOrderKey = `notif_admin_order_${order._id}`;
+    await NotificationLog.create({
+      recipientPhone: 'ADMIN_DESK',
+      recipientName: 'VivoQuest Operations Desk',
+      recipientRole: 'admin',
+      channel: 'in_app',
+      templateId: 'PRODUCT_ORDER_PLACED',
+      type: 'PRODUCT_ORDER_PLACED',
+      relatedEntityType: 'ProductOrder',
+      title: 'New Medical Equipment Order',
+      messageBody: `New Order Placed: Order #${order.orderNumber} for patient ${order.patientName} (+91 ${order.patientPhone}). Total: ₹${order.pricing.totalAmount}. Delivery: ${order.deliveryAddress.city}.`,
+      consentChecked: true,
+      status: 'delivered',
+      provider: 'in_app_system',
+      idempotencyKey: adminOrderKey,
+      isRead: false,
+      isCleared: false,
+      metadata: {
+        orderId: order._id.toString(),
+        orderNumber: order.orderNumber,
+        patientName: order.patientName,
+        patientPhone: order.patientPhone,
+        city: order.deliveryAddress.city,
+        totalAmount: order.pricing.totalAmount,
+      },
+    });
+  } catch (notifErr: any) {
+    console.warn('[NotificationLog] Failed to record order notification:', notifErr.message);
+  }
 
   return order;
 };
@@ -1233,6 +1409,36 @@ export const cancelPatientOrder = async (
     severity: 'info',
   });
 
+  // Dispatch in-app alert to Admin Desk
+  try {
+    const adminCancelKey = `notif_admin_order_cancel_${updatedOrder._id}`;
+    await NotificationLog.create({
+      recipientPhone: 'ADMIN_DESK',
+      recipientName: 'VivoQuest Operations Desk',
+      recipientRole: 'admin',
+      channel: 'in_app',
+      templateId: 'PRODUCT_ORDER_CANCELLED',
+      type: 'PRODUCT_ORDER_CANCELLED',
+      relatedEntityType: 'ProductOrder',
+      title: 'Product Order Cancelled',
+      messageBody: `Order Cancelled: Patient ${updatedOrder.patientName} cancelled Order #${updatedOrder.orderNumber}. Reason: "${reason || 'Patient request'}". Reserved stock restored.`,
+      consentChecked: true,
+      status: 'delivered',
+      provider: 'in_app_system',
+      idempotencyKey: adminCancelKey,
+      isRead: false,
+      isCleared: false,
+      metadata: {
+        orderId: updatedOrder._id.toString(),
+        orderNumber: updatedOrder.orderNumber,
+        patientName: updatedOrder.patientName,
+        reason,
+      },
+    });
+  } catch (notifErr: any) {
+    console.warn('[NotificationLog] Failed to record order cancellation notification:', notifErr.message);
+  }
+
   return updatedOrder;
 };
 
@@ -1334,3 +1540,386 @@ export const scheduleOrderSetup = async (
   await order.save();
   return order;
 };
+
+// =============================================================================
+// REVIEWS & COMPLAINTS (Customer-facing with verified purchase enforcement)
+// =============================================================================
+
+/**
+ * Submit verified product review
+ */
+export const submitProductReview = async (
+  userId: string,
+  userName: string,
+  productId: string,
+  data: {
+    orderId: string;
+    rating: number;
+    title: string;
+    comment: string;
+  }
+): Promise<IProductReview> => {
+  if (!data.rating || data.rating < 1 || data.rating > 5) {
+    throw new AppError('Rating must be an integer between 1 and 5 stars', 400);
+  }
+
+  if (!data.title?.trim() || !data.comment?.trim()) {
+    throw new AppError('Review title and comment are required', 400);
+  }
+
+  const product = await MedicalProduct.findById(productId);
+  if (!product) {
+    throw new AppError('Product not found', 404);
+  }
+
+  let orderQuery: any = { _id: data.orderId, patientId: userId };
+  if (!mongoose.Types.ObjectId.isValid(data.orderId)) {
+    orderQuery = { orderNumber: data.orderId, patientId: userId };
+  }
+
+  const order = await ProductOrder.findOne(orderQuery);
+  if (!order) {
+    throw new AppError('Order not found or access denied', 404);
+  }
+
+  // Verify item was in this order
+  const orderItem = order.items.find(
+    (i) => i.productId.toString() === product._id.toString() || i.sku === product.sku
+  );
+  if (!orderItem) {
+    throw new AppError('This product was not part of the specified order', 400);
+  }
+
+  // Policy check: Only delivered orders can be reviewed
+  if (!['delivered', 'completed'].includes(order.orderStatus)) {
+    throw new AppError('Reviews can only be submitted for delivered medical equipment', 400);
+  }
+
+  // Prevent duplicate review per order-item
+  const existingReview = await ProductReview.findOne({
+    userId,
+    orderId: order._id,
+    productId: product._id,
+  });
+  if (existingReview) {
+    throw new AppError('You have already submitted a review for this purchase', 409);
+  }
+
+  const review = await ProductReview.create({
+    productId: product._id,
+    productSku: product.sku,
+    productTitle: product.title,
+    userId,
+    userName: userName || order.patientName,
+    orderId: order._id,
+    orderNumber: order.orderNumber,
+    rating: Math.round(data.rating),
+    title: data.title.trim(),
+    comment: data.comment.trim(),
+    isVerifiedPurchase: true,
+    status: 'published',
+  });
+
+  // Recalculate average rating for product
+  const allReviews = await ProductReview.find({ productId: product._id, status: 'published' });
+  if (allReviews.length > 0) {
+    const totalRating = allReviews.reduce((sum, r) => sum + r.rating, 0);
+    const avg = Math.round((totalRating / allReviews.length) * 10) / 10;
+    product.averageRating = avg;
+    product.reviewCount = allReviews.length;
+    await product.save();
+  }
+
+  return review;
+};
+
+/**
+ * List published reviews for a product
+ */
+export const listProductReviews = async (
+  productId: string,
+  page: number = 1,
+  limit: number = 20
+) => {
+  const query = { productId: new mongoose.Types.ObjectId(productId), status: 'published' };
+  const safePage = Math.max(1, page);
+  const safeLimit = Math.min(50, Math.max(1, limit));
+  const skip = (safePage - 1) * safeLimit;
+
+  const [reviews, total] = await Promise.all([
+    ProductReview.find(query).sort({ createdAt: -1 }).skip(skip).limit(safeLimit).lean(),
+    ProductReview.countDocuments(query),
+  ]);
+
+  return {
+    reviews,
+    pagination: {
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
+    },
+  };
+};
+
+/**
+ * Submit customer complaint for an order item
+ */
+export const submitProductComplaint = async (
+  userId: string,
+  userProfile: { name: string; phone: string; email?: string },
+  data: {
+    orderId: string;
+    productId: string;
+    category: any;
+    description: string;
+    refundRequested?: boolean;
+  }
+): Promise<IProductComplaint> => {
+  if (!data.category || !data.description?.trim()) {
+    throw new AppError('Complaint category and description are required', 400);
+  }
+
+  let orderQuery: any = { _id: data.orderId, patientId: userId };
+  if (!mongoose.Types.ObjectId.isValid(data.orderId)) {
+    orderQuery = { orderNumber: data.orderId, patientId: userId };
+  }
+
+  const order = await ProductOrder.findOne(orderQuery);
+  if (!order) {
+    throw new AppError('Order not found or access denied', 404);
+  }
+
+  const product = await MedicalProduct.findById(data.productId);
+  if (!product) {
+    throw new AppError('Product not found', 404);
+  }
+
+  const orderItem = order.items.find(
+    (i) => i.productId.toString() === product._id.toString() || i.sku === product.sku
+  );
+  if (!orderItem) {
+    throw new AppError('The specified product is not part of this order', 400);
+  }
+
+  const randomDigits = Math.floor(1000 + Math.random() * 9000);
+  const complaintNumber = `CMP-2026-${randomDigits}`;
+
+  const complaint = await ProductComplaint.create({
+    complaintNumber,
+    orderId: order._id,
+    orderNumber: order.orderNumber,
+    productId: product._id,
+    productSku: product.sku,
+    productTitle: product.title,
+    userId,
+    userName: userProfile.name || order.patientName,
+    userPhone: userProfile.phone || order.patientPhone,
+    userEmail: userProfile.email || order.patientEmail,
+    supplierId: orderItem.supplierId,
+    supplierName: orderItem.supplierName || product.supplierName,
+    category: data.category,
+    description: data.description.trim(),
+    status: 'open',
+    refundRequested: Boolean(data.refundRequested),
+  });
+
+  // Track event on order
+  order.trackingUpdates.push({
+    timestamp: new Date(),
+    status: order.orderStatus,
+    message: `Complaint filed (${complaint.complaintNumber}): ${data.category}. Operations & Quality Assurance reviewing.`,
+    location: 'Customer Support Desk',
+  });
+  await order.save();
+
+  return complaint;
+};
+
+/**
+ * List customer complaints for authenticated patient
+ */
+export const listPatientComplaints = async (userId: string): Promise<IProductComplaint[]> => {
+  return ProductComplaint.find({ userId }).sort({ createdAt: -1 }).lean() as unknown as IProductComplaint[];
+};
+
+/**
+ * Authorized update of estimated delivery date for an order
+ * Supported for Admin/Super-Admin or assigned Supplier
+ * Enforces date & status validation, records audit log, appends tracking event,
+ * and notifies patient idempotently.
+ */
+export const updateOrderDeliveryEstimate = async (
+  orderIdOrNumber: string,
+  data: {
+    estimatedDeliveryDate: string | Date;
+    reason: string;
+  },
+  actor: { _id?: any; id?: string; fullName?: string; name?: string; role?: string }
+): Promise<IProductOrder> => {
+  let query: any = { _id: orderIdOrNumber };
+  if (!mongoose.Types.ObjectId.isValid(orderIdOrNumber)) {
+    query = { orderNumber: orderIdOrNumber };
+  }
+
+  const order = await ProductOrder.findOne(query);
+  if (!order) {
+    throw new AppError('Product order not found', 404);
+  }
+
+  const actorRole = actor.role || 'unknown';
+  const actorId = actor._id || actor.id;
+  const actorName = actor.fullName || actor.name || 'Operations Staff';
+
+  // Role authorization checks
+  if (actorRole === 'admin' || actorRole === 'super_admin') {
+    // Authorized
+  } else if (actorRole === 'supplier') {
+    const supplier = await Supplier.findOne({ userId: actorId });
+    if (!supplier) {
+      throw new AppError('Supplier profile not found for authenticated user', 403);
+    }
+    const hasSupplierItem = order.items.some(
+      (item) => item.supplierId && item.supplierId.toString() === supplier._id.toString()
+    );
+    if (!hasSupplierItem) {
+      throw new AppError('Forbidden: Suppliers may only update delivery estimates for orders containing their assigned items', 403);
+    }
+  } else {
+    throw new AppError('Forbidden: Only authorized administrators or assigned suppliers can update delivery estimates', 403);
+  }
+
+  // Order state validation
+  if (order.orderStatus === 'cancelled') {
+    throw new AppError('Cannot update delivery estimate for a cancelled order', 400);
+  }
+  if (order.orderStatus === 'delivered' || order.orderStatus === 'completed') {
+    throw new AppError('Cannot update delivery estimate for an already delivered order', 400);
+  }
+
+  // Date validation
+  if (!data.estimatedDeliveryDate) {
+    throw new AppError('Estimated delivery date is required', 400);
+  }
+  const parsedDate = new Date(data.estimatedDeliveryDate);
+  if (isNaN(parsedDate.getTime())) {
+    throw new AppError('Invalid date format for estimated delivery date', 400);
+  }
+
+  // Reason validation
+  if (!data.reason || typeof data.reason !== 'string' || data.reason.trim().length < 3) {
+    throw new AppError('A valid reason for changing the delivery estimate is mandatory (minimum 3 characters)', 400);
+  }
+
+  const previousEstimate = order.estimatedDeliveryDate;
+  order.estimatedDeliveryDate = parsedDate;
+
+  // Record deliveryEstimateHistory
+  if (!order.deliveryEstimateHistory) {
+    order.deliveryEstimateHistory = [];
+  }
+  order.deliveryEstimateHistory.push({
+    previousEstimate,
+    newEstimate: parsedDate,
+    updatedBy: new mongoose.Types.ObjectId(actorId),
+    updatedByName: actorName,
+    updatedByRole: actorRole,
+    reason: data.reason.trim(),
+    updatedAt: new Date(),
+  });
+
+  const formattedDate = parsedDate.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+
+  // Record tracking update
+  order.trackingUpdates.push({
+    timestamp: new Date(),
+    status: order.orderStatus,
+    message: `Estimated delivery date updated to ${formattedDate}. Reason: ${data.reason.trim()}`,
+    location: 'Central Fulfillment & Logistics Desk',
+  });
+
+  await order.save();
+
+  // Audit Log
+  await AuditLog.create({
+    action: 'DELIVERY_ESTIMATE_UPDATED',
+    category: 'order_fulfillment',
+    actorId,
+    actorName,
+    actorRole,
+    targetType: 'PRODUCT_ORDER',
+    targetId: order.orderNumber,
+    details: {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      previousEstimate,
+      newEstimate: parsedDate,
+      reason: data.reason.trim(),
+    },
+    severity: 'info',
+  });
+
+  // Notify Patient
+  try {
+    const formattedPrev = previousEstimate
+      ? new Date(previousEstimate).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        })
+      : 'Original estimate';
+
+    await sendPatientNotification({
+      recipientPhone: order.patientPhone,
+      recipientName: order.patientName,
+      recipientRole: 'patient',
+      channel: 'sms',
+      templateId: 'PRODUCT_ORDER_DELIVERY_UPDATED',
+      templateParams: {
+        patientName: order.patientName,
+        orderNumber: order.orderNumber,
+        previousEstimate: formattedPrev,
+        newEstimate: formattedDate,
+        reason: data.reason.trim(),
+        orderUrl: `/orders/${order.orderNumber || order._id}`,
+      },
+      idempotencyKey: `NOTIF-EST-UPDATE-${order.orderNumber}-${parsedDate.getTime()}`,
+      metadata: {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        newEstimate: parsedDate,
+      },
+    });
+
+    await NotificationLog.create({
+      recipientPhone: order.patientPhone,
+      recipientName: order.patientName,
+      recipientRole: 'patient',
+      recipientUserId: order.patientId.toString(),
+      channel: 'in_app',
+      templateId: 'PRODUCT_ORDER_DELIVERY_UPDATED',
+      title: `Delivery Date Updated for Order #${order.orderNumber}`,
+      messageBody: `Namaste ${order.patientName}, your estimated delivery date for Order #${order.orderNumber} has been updated to ${formattedDate}. Reason: ${data.reason.trim()}. Track your order at /orders/${order.orderNumber || order._id}`,
+      consentChecked: true,
+      status: 'delivered',
+      provider: 'in_app_system',
+      idempotencyKey: `INAPP-EST-UPDATE-${order.orderNumber}-${parsedDate.getTime()}`,
+      metadata: {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        newEstimate: parsedDate,
+      },
+      sentAt: new Date(),
+    });
+  } catch (notifErr: any) {
+    console.warn('[Notification] Failed to send delivery update notification:', notifErr.message);
+  }
+
+  return order;
+};
+
+

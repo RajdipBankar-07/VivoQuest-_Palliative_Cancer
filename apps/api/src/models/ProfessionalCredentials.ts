@@ -5,16 +5,23 @@ export type CredentialDocumentType =
   | 'degree_certificate'
   | 'identity_proof_aadhaar_pan'
   | 'experience_letter'
-  | 'clinical_reference';
+  | 'clinical_reference'
+  | 'training_certificate'
+  | 'anm_diploma'
+  | 'nursing_council_registration'
+  | 'other_certification';
 
 export interface IProfessionalCredentials extends Document {
   professionalId: mongoose.Types.ObjectId;
   documentType: CredentialDocumentType;
-  documentNumber: string;
+  certificateTitle?: string;
   issuingAuthority: string;
+  issuingOrganization?: string;
+  credentialCategory?: string;
+  documentNumber?: string;
   issueDate?: Date;
   expiryDate?: Date;
-  uploadedFileId: mongoose.Types.ObjectId;
+  uploadedFileId?: mongoose.Types.ObjectId;
   verificationStatus: 'pending' | 'approved' | 'rejected' | 'expired' | 'verified';
   verifiedAt?: Date;
   verifiedBy?: mongoose.Types.ObjectId;
@@ -41,17 +48,35 @@ const ProfessionalCredentialsSchema = new Schema<IProfessionalCredentials>(
         'identity_proof_aadhaar_pan',
         'experience_letter',
         'clinical_reference',
+        'training_certificate',
+        'anm_diploma',
+        'nursing_council_registration',
+        'other_certification',
       ],
+      default: 'other_certification',
       index: true,
+    },
+    certificateTitle: {
+      type: String,
+      trim: true,
     },
     documentNumber: {
       type: String,
-      required: true,
       trim: true,
+      default: 'N/A',
     },
     issuingAuthority: {
       type: String,
       required: true,
+      trim: true,
+      default: 'Authorized Institution',
+    },
+    issuingOrganization: {
+      type: String,
+      trim: true,
+    },
+    credentialCategory: {
+      type: String,
       trim: true,
     },
     issueDate: { type: Date },
@@ -59,7 +84,7 @@ const ProfessionalCredentialsSchema = new Schema<IProfessionalCredentials>(
     uploadedFileId: {
       type: Schema.Types.ObjectId,
       ref: 'UploadedFile',
-      required: true,
+      required: false,
     },
     verificationStatus: {
       type: String,

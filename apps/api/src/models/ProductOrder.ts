@@ -18,12 +18,32 @@ export interface IOrderItem {
   category: string;
   quantity: number;
   unitPrice: number;
+  regularPrice?: number;
+  discountAmount?: number;
   isRental: boolean;
   rentalDurationMonths?: number;
   setupRequired: boolean;
+  installationSelected?: boolean;
+  installationCharge?: number;
   sourcingType?: 'own_stock' | 'supplier_direct';
   supplierId?: mongoose.Types.ObjectId;
+  supplierName?: string;
+  supplierStatus?: 'pending' | 'accepted' | 'rejected' | 'dispatched' | 'cancelled';
+  carrierName?: string;
+  trackingNumber?: string;
+  supplierRejectionReason?: string;
   procurementCost?: number;
+}
+
+export interface ISupplierFulfillmentGroup {
+  supplierId: mongoose.Types.ObjectId;
+  supplierName?: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'packed' | 'dispatched' | 'delivered';
+  carrierName?: string;
+  trackingNumber?: string;
+  dispatchedAt?: Date;
+  deliveredAt?: Date;
+  rejectionReason?: string;
 }
 
 export interface ITrackingEvent {
@@ -33,18 +53,33 @@ export interface ITrackingEvent {
   location?: string;
 }
 
+export interface IDeliveryEstimateUpdate {
+  previousEstimate?: Date;
+  newEstimate: Date;
+  updatedBy: mongoose.Types.ObjectId;
+  updatedByName: string;
+  updatedByRole: string;
+  reason: string;
+  updatedAt: Date;
+}
+
 export interface IProductOrder extends Document {
   orderNumber: string;
+  invoiceNumber?: string;
+  invoiceGeneratedAt?: Date;
   patientId: mongoose.Types.ObjectId;
   patientName: string;
   patientPhone: string;
   patientEmail?: string;
   hospitalReferralId?: mongoose.Types.ObjectId;
   items: IOrderItem[];
+  supplierFulfillments?: ISupplierFulfillmentGroup[];
   pricing: {
     subtotal: number;
+    discountTotal?: number;
     deliveryFee: number;
     taxGst: number;
+    installationCharge?: number;
     totalAmount: number;
     procurementCostTotal?: number;
     refundAmount?: number;
@@ -96,7 +131,13 @@ export interface IProductOrder extends Document {
   };
   idempotencyKey?: string;
   trackingUpdates: ITrackingEvent[];
+  estimatedDeliveryDate?: Date;
+  estimatedDeliveryDays?: string;
+  deliveryEstimateHistory?: IDeliveryEstimateUpdate[];
   isDemo: boolean;
+  isArchived?: boolean;
+  archivedAt?: Date;
+  archivedBy?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -109,12 +150,43 @@ const OrderItemSchema = new Schema<IOrderItem>(
     category: { type: String, required: true },
     quantity: { type: Number, required: true, min: 1, default: 1 },
     unitPrice: { type: Number, required: true, min: 0 },
+    regularPrice: { type: Number, min: 0 },
+    discountAmount: { type: Number, default: 0, min: 0 },
     isRental: { type: Boolean, default: false },
     rentalDurationMonths: { type: Number, min: 1 },
     setupRequired: { type: Boolean, default: false },
-    sourcingType: { type: String, enum: ['own_stock', 'supplier_direct'], default: 'own_stock' },
+    installationSelected: { type: Boolean, default: false },
+    installationCharge: { type: Number, default: 0, min: 0 },
+    sourcingType: { type: String, enum: ['own_stock', 'supplier_direct', 'own', 'supplier'], default: 'own_stock' },
     supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier' },
+    supplierName: { type: String },
+    supplierStatus: {
+      type: String,
+      enum: ['pending', 'accepted', 'rejected', 'dispatched', 'cancelled'],
+      default: 'pending',
+    },
+    carrierName: { type: String },
+    trackingNumber: { type: String },
+    supplierRejectionReason: { type: String },
     procurementCost: { type: Number, default: 0, min: 0 },
+  },
+  { _id: false }
+);
+
+const SupplierFulfillmentGroupSchema = new Schema<ISupplierFulfillmentGroup>(
+  {
+    supplierId: { type: Schema.Types.ObjectId, ref: 'Supplier', required: true },
+    supplierName: { type: String },
+    status: {
+      type: String,
+      enum: ['pending', 'accepted', 'rejected', 'packed', 'dispatched', 'delivered'],
+      default: 'pending',
+    },
+    carrierName: { type: String },
+    trackingNumber: { type: String },
+    dispatchedAt: { type: Date },
+    deliveredAt: { type: Date },
+    rejectionReason: { type: String },
   },
   { _id: false }
 );
@@ -136,6 +208,14 @@ const ProductOrderSchema = new Schema<IProductOrder>(
       required: true,
       unique: true,
       index: true,
+    },
+    invoiceNumber: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    invoiceGeneratedAt: {
+      type: Date,
     },
     patientId: {
       type: Schema.Types.ObjectId,
@@ -164,10 +244,13 @@ const ProductOrderSchema = new Schema<IProductOrder>(
       index: true,
     },
     items: [OrderItemSchema],
+    supplierFulfillments: [SupplierFulfillmentGroupSchema],
     pricing: {
       subtotal: { type: Number, required: true, min: 0 },
+      discountTotal: { type: Number, default: 0, min: 0 },
       deliveryFee: { type: Number, required: true, default: 0 },
       taxGst: { type: Number, required: true, default: 0 },
+      installationCharge: { type: Number, default: 0, min: 0 },
       totalAmount: { type: Number, required: true, min: 0 },
       procurementCostTotal: { type: Number, default: 0, min: 0 },
       refundAmount: { type: Number, default: 0, min: 0 },
@@ -240,10 +323,36 @@ const ProductOrderSchema = new Schema<IProductOrder>(
       sparse: true,
     },
     trackingUpdates: [TrackingEventSchema],
+    estimatedDeliveryDate: {
+      type: Date,
+      index: true,
+    },
+    estimatedDeliveryDays: {
+      type: String,
+      default: '2-4 business days',
+    },
+    deliveryEstimateHistory: [
+      {
+        previousEstimate: { type: Date },
+        newEstimate: { type: Date, required: true },
+        updatedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+        updatedByName: { type: String, required: true },
+        updatedByRole: { type: String, required: true },
+        reason: { type: String, required: true, trim: true },
+        updatedAt: { type: Date, default: Date.now },
+      },
+    ],
     isDemo: {
       type: Boolean,
       default: false,
     },
+    isArchived: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    archivedAt: { type: Date },
+    archivedBy: { type: String },
   },
   {
     timestamps: true,

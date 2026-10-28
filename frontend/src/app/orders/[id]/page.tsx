@@ -24,10 +24,13 @@ import {
   Sparkles,
   Info,
   ShoppingBag,
+  Star,
+  Send,
 } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
 import { Button } from '@/components/Button';
+import { ProductImage } from '@/components/ProductImage';
 import { productsApi } from '@/lib/api';
 
 export default function OrderTrackingDetailPage() {
@@ -63,6 +66,26 @@ export default function OrderTrackingDetailPage() {
   // Payment Modal State
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isVerifyingPayment, setIsVerifyingPayment] = useState(false);
+
+  // Review Modal State
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [reviewProductId, setReviewProductId] = useState('');
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewTitle, setReviewTitle] = useState('');
+  const [reviewComment, setReviewComment] = useState('');
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [reviewSuccessMsg, setReviewSuccessMsg] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+
+  // Complaint Modal State
+  const [isComplaintModalOpen, setIsComplaintModalOpen] = useState(false);
+  const [complaintProductId, setComplaintProductId] = useState('');
+  const [complaintCategory, setComplaintCategory] = useState('defective_device');
+  const [complaintDescription, setComplaintDescription] = useState('');
+  const [complaintRefundRequested, setComplaintRefundRequested] = useState(false);
+  const [isSubmittingComplaint, setIsSubmittingComplaint] = useState(false);
+  const [complaintSuccessMsg, setComplaintSuccessMsg] = useState<string | null>(null);
+  const [complaintError, setComplaintError] = useState<string | null>(null);
 
   const fetchOrder = async () => {
     try {
@@ -174,6 +197,59 @@ export default function OrderTrackingDetailPage() {
       alert(err.message || 'Payment verification failed');
     } finally {
       setIsVerifyingPayment(false);
+    }
+  };
+
+  // Submit Product Review
+  const handleSubmitReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewProductId || !reviewComment.trim()) return;
+    try {
+      setIsSubmittingReview(true);
+      setReviewError(null);
+      await productsApi.submitProductReview(reviewProductId, {
+        orderId: order._id || order.orderNumber,
+        rating: reviewRating,
+        title: reviewTitle.trim() || 'Verified Purchase Review',
+        comment: reviewComment.trim(),
+      });
+      setReviewSuccessMsg('Thank you! Your verified purchase review has been submitted for moderation.');
+      setTimeout(() => {
+        setIsReviewModalOpen(false);
+        setReviewTitle('');
+        setReviewComment('');
+        setReviewSuccessMsg(null);
+      }, 2000);
+    } catch (err: any) {
+      setReviewError(err.message || 'Failed to submit review. Reviews can only be submitted for delivered purchases.');
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
+
+  // Submit Order Complaint / Return
+  const handleSubmitComplaint = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!complaintProductId || !complaintDescription.trim()) return;
+    try {
+      setIsSubmittingComplaint(true);
+      setComplaintError(null);
+      await productsApi.submitOrderComplaint(order._id || order.orderNumber, {
+        productId: complaintProductId,
+        category: complaintCategory,
+        description: complaintDescription.trim(),
+        refundRequested: complaintRefundRequested,
+      });
+      setComplaintSuccessMsg('Your complaint has been submitted. Our healthcare operations and supplier have been notified.');
+      setTimeout(() => {
+        setIsComplaintModalOpen(false);
+        setComplaintDescription('');
+        setComplaintSuccessMsg(null);
+      }, 2000);
+    } catch (err: any) {
+      setComplaintError(err.message || 'Failed to submit complaint.');
+    } finally {
+      setIsSubmittingComplaint(false);
     }
   };
 
@@ -307,6 +383,35 @@ export default function OrderTrackingDetailPage() {
                   Request Return
                 </Button>
               )}
+
+              {(order.orderStatus === 'delivered' || order.orderStatus === 'completed') && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-amber-700 border-amber-200 hover:bg-amber-50 font-bold"
+                    onClick={() => {
+                      if (order.items?.[0]) setReviewProductId(order.items[0].productId || order.items[0]._id);
+                      setIsReviewModalOpen(true);
+                    }}
+                    leftIcon={<Star size={14} className="fill-amber-400 text-amber-500" />}
+                  >
+                    Write a Review
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-rose-700 border-rose-200 hover:bg-rose-50 font-bold"
+                    onClick={() => {
+                      if (order.items?.[0]) setComplaintProductId(order.items[0].productId || order.items[0]._id);
+                      setIsComplaintModalOpen(true);
+                    }}
+                    leftIcon={<AlertTriangle size={14} />}
+                  >
+                    Report Defect / Issue
+                  </Button>
+                </>
+              )}
             </div>
           </div>
 
@@ -342,6 +447,76 @@ export default function OrderTrackingDetailPage() {
                   (Processed back to original payment method within 3 business days)
                 </p>
               )}
+            </div>
+          )}
+
+          {/* Estimated Delivery Information Card */}
+          {order.orderStatus !== 'cancelled' && (
+            <div className="bg-gradient-to-r from-emerald-50 to-teal-50/70 rounded-2xl border border-emerald-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Calendar size={20} />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">
+                    Estimated Delivery Arrival
+                  </span>
+                  <h3 className="text-xl font-extrabold text-navy">
+                    {order.estimatedDeliveryDate
+                      ? new Date(order.estimatedDeliveryDate).toLocaleDateString('en-IN', {
+                          weekday: 'short',
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric',
+                        })
+                      : '2–4 Business Days'}
+                  </h3>
+                  <p className="text-xs text-emerald-950/80 mt-0.5">
+                    Target fulfillment schedule calculated by central DME depot. Dates are estimated rather than carrier-guaranteed.
+                  </p>
+                </div>
+              </div>
+
+              {order.deliveryEstimateHistory && order.deliveryEstimateHistory.length > 0 && (
+                <div className="px-3.5 py-2 rounded-xl bg-white/90 border border-emerald-300 text-xs text-emerald-950 shrink-0">
+                  <span className="font-bold flex items-center gap-1 text-[11px] text-emerald-900">
+                    <Clock size={12} className="text-emerald-700" />
+                    Delivery Estimate Updated ({order.deliveryEstimateHistory.length}x)
+                  </span>
+                  <span className="text-[11px] text-muted-foreground block mt-0.5 max-w-xs truncate">
+                    Reason: {order.deliveryEstimateHistory[order.deliveryEstimateHistory.length - 1].reason}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Delivery Estimate Revision History Log */}
+          {order.deliveryEstimateHistory && order.deliveryEstimateHistory.length > 0 && (
+            <div className="bg-white rounded-2xl border border-border p-5 space-y-3 shadow-xs">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-navy flex items-center gap-1.5">
+                <Clock size={14} className="text-primary" />
+                Delivery Estimate Revision History
+              </h4>
+              <div className="divide-y divide-slate-100 text-xs">
+                {order.deliveryEstimateHistory.map((rev: any, idx: number) => (
+                  <div key={idx} className="py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-slate-700">
+                    <div>
+                      <span className="font-semibold text-navy">
+                        {rev.previousEstimate ? new Date(rev.previousEstimate).toLocaleDateString('en-IN') : 'Initial Target'}
+                        {' → '}
+                        <strong className="text-emerald-700">{new Date(rev.newEstimate).toLocaleDateString('en-IN')}</strong>
+                      </span>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Reason: <em>&ldquo;{rev.reason}&rdquo;</em> &bull; Updated by {rev.updatedByName || 'Operations Staff'} ({rev.updatedByRole})
+                      </p>
+                    </div>
+                    <span className="text-[11px] text-slate-400 whitespace-nowrap">
+                      {new Date(rev.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -512,8 +687,13 @@ export default function OrderTrackingDetailPage() {
               <div className="divide-y divide-slate-100">
                 {order.items?.map((item: any, idx: number) => (
                   <div key={idx} className="py-3 flex gap-3 text-xs">
-                    <div className="w-14 h-14 rounded-xl bg-slate-100 overflow-hidden border border-slate-200 shrink-0 flex items-center justify-center">
-                      <ShoppingBag size={20} className="text-slate-400" />
+                    <div className="w-14 h-14 rounded-xl bg-slate-100 overflow-hidden border border-slate-200 shrink-0">
+                      <ProductImage
+                        src={item.image || item.images?.[0]}
+                        alt={item.title}
+                        className="w-full h-full object-cover"
+                        category={item.category}
+                      />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-bold text-navy text-sm line-clamp-1">{item.title}</p>
@@ -564,6 +744,24 @@ export default function OrderTrackingDetailPage() {
                       ₹{order.pricing?.subtotal?.toLocaleString('en-IN')}
                     </span>
                   </div>
+
+                  {Boolean(order.pricing?.discountTotal && order.pricing.discountTotal > 0) && (
+                    <div className="flex justify-between text-emerald-700 font-medium">
+                      <span>Marketplace Discount</span>
+                      <span className="font-bold">-₹{order.pricing.discountTotal.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+
+                  {Boolean(order.pricing?.installationCharge && order.pricing.installationCharge > 0) && (
+                    <div className="flex justify-between text-blue-700 font-medium">
+                      <span className="flex items-center gap-1">
+                        <Wrench size={12} />
+                        Home Specialist Installation
+                      </span>
+                      <span className="font-bold">₹{order.pricing.installationCharge.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between text-muted-foreground">
                     <span>Doorstep Delivery</span>
                     <span className="font-bold text-navy">
@@ -603,6 +801,30 @@ export default function OrderTrackingDetailPage() {
                   >
                     {order.paymentStatus?.toUpperCase()}
                   </span>
+                </div>
+
+                {/* Tax Invoice Details & Download */}
+                <div className="pt-3 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-navy flex items-center gap-1.5 text-[11px]">
+                      <FileText size={13} className="text-primary" />
+                      Tax Invoice
+                    </span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      GST Active
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    HSN: 9021/9018 &bull; Applicable 12% GST breakdown itemized for insurance claims.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="w-full mt-1 py-1.5 px-3 rounded-lg bg-slate-50 border border-slate-200 text-navy font-bold text-xs hover:bg-slate-100 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <FileText size={13} />
+                    Print / Download Invoice
+                  </button>
                 </div>
               </div>
 
@@ -897,6 +1119,239 @@ export default function OrderTrackingDetailPage() {
             >
               {isVerifyingPayment ? 'Verifying...' : 'Simulate Successful Test Payment'}
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Write Product Review Modal */}
+      {isReviewModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-navy flex items-center gap-2">
+                <Star size={18} className="fill-amber-400 text-amber-500" />
+                Write Product Review
+              </h3>
+              <button onClick={() => setIsReviewModalOpen(false)} className="text-slate-400 hover:text-navy">
+                <X size={18} />
+              </button>
+            </div>
+
+            {reviewSuccessMsg && (
+              <div className="p-3 bg-emerald-50 text-emerald-800 text-xs rounded-xl border border-emerald-200">
+                {reviewSuccessMsg}
+              </div>
+            )}
+
+            {reviewError && (
+              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl border border-red-200">
+                {reviewError}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitReview} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-navy mb-1">Select Item to Review</label>
+                <select
+                  value={reviewProductId}
+                  onChange={(e) => setReviewProductId(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-primary text-xs"
+                >
+                  {order.items?.map((item: any, idx: number) => (
+                    <option key={idx} value={item.productId || item._id}>
+                      {item.title} ({item.sku})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Your Rating</label>
+                <div className="flex items-center gap-1.5 pt-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setReviewRating(star)}
+                      className="p-1 hover:scale-110 transition-transform"
+                    >
+                      <Star
+                        size={24}
+                        className={
+                          star <= reviewRating
+                            ? 'fill-amber-400 text-amber-500'
+                            : 'text-slate-300'
+                        }
+                      />
+                    </button>
+                  ))}
+                  <span className="ml-2 font-bold text-sm text-slate-700">{reviewRating} / 5</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Headline / Title</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Excellent build quality and smooth setup"
+                  value={reviewTitle}
+                  onChange={(e) => setReviewTitle(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Review Details</label>
+                <textarea
+                  rows={4}
+                  required
+                  placeholder="Share details about durability, comfort, caregiver handling, or packaging..."
+                  value={reviewComment}
+                  onChange={(e) => setReviewComment(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-primary"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="md"
+                  className="flex-1 justify-center"
+                  onClick={() => setIsReviewModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="flex-1 justify-center bg-amber-600 hover:bg-amber-700 text-white font-bold"
+                  disabled={isSubmittingReview}
+                >
+                  {isSubmittingReview ? 'Submitting...' : 'Post Review'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* File Product Complaint / Return Modal */}
+      {isComplaintModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-navy flex items-center gap-2">
+                <AlertTriangle size={18} className="text-rose-600" />
+                Report Defect or Quality Complaint
+              </h3>
+              <button onClick={() => setIsComplaintModalOpen(false)} className="text-slate-400 hover:text-navy">
+                <X size={18} />
+              </button>
+            </div>
+
+            {complaintSuccessMsg && (
+              <div className="p-3 bg-emerald-50 text-emerald-800 text-xs rounded-xl border border-emerald-200">
+                {complaintSuccessMsg}
+              </div>
+            )}
+
+            {complaintError && (
+              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl border border-red-200">
+                {complaintError}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitComplaint} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-navy mb-1">Affected Item</label>
+                <select
+                  value={complaintProductId}
+                  onChange={(e) => setComplaintProductId(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-primary text-xs"
+                >
+                  {order.items?.map((item: any, idx: number) => (
+                    <option key={idx} value={item.productId || item._id}>
+                      {item.title} ({item.sku})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Complaint Category</label>
+                <select
+                  value={complaintCategory}
+                  onChange={(e) => setComplaintCategory(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-primary text-xs"
+                >
+                  <option value="defective_device">Defective or Malfunctioning Device</option>
+                  <option value="wrong_item">Received Wrong Item or Specification</option>
+                  <option value="missing_accessories">Missing Components / Manual / Power Cable</option>
+                  <option value="shipping_damage">Damaged in Transit / Crushed Packaging</option>
+                  <option value="installation_issue">Installation or Demonstration Deficiency</option>
+                  <option value="other">Other Healthcare Service Concern</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Issue Description</label>
+                <textarea
+                  rows={4}
+                  required
+                  placeholder="Please describe what happened, any error codes, or physical defects..."
+                  value={complaintDescription}
+                  onChange={(e) => setComplaintDescription(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-primary"
+                />
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={complaintRefundRequested}
+                    onChange={(e) => setComplaintRefundRequested(e.target.checked)}
+                    className="rounded text-rose-600 focus:ring-rose-500 w-4 h-4"
+                  />
+                  <span>Request Return &amp; Refund Approval</span>
+                </label>
+                <p className="text-[11px] text-slate-500 mt-1 pl-6">
+                  If approved by platform operations, the refund will be remitted to your original payment method.
+                </p>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="md"
+                  className="flex-1 justify-center"
+                  onClick={() => setIsComplaintModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="flex-1 justify-center bg-rose-600 hover:bg-rose-700 text-white font-bold"
+                  disabled={isSubmittingComplaint}
+                >
+                  {isSubmittingComplaint ? 'Submitting...' : 'File Official Complaint'}
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

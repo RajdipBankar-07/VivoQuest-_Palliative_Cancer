@@ -564,6 +564,105 @@ export const caregiverApi = {
   },
 
   /**
+   * Register a new healthcare professional or caregiver
+   */
+  async register(data: {
+    fullName: string;
+    phone: string;
+    email?: string;
+    password?: string;
+    role: string;
+    professionType?: string;
+    highestQualification?: string;
+    institution?: string;
+    specialization?: string;
+    yearsOfExperience?: number;
+    experienceSummary?: string;
+    skills?: string[];
+    credentials?: Array<{
+      documentType?: string;
+      certificateTitle?: string;
+      issuingAuthority?: string;
+      issuingOrganization?: string;
+      credentialCategory?: string;
+    }>;
+  }): Promise<{ token: string; user: CaregiverSession }> {
+    const payload = {
+      ...data,
+      consentAccepted: true,
+    };
+    const res = await apiRequest<any>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    const token = res.data?.token;
+    const user: CaregiverSession = res.data?.user;
+
+    if (!token || !user) {
+      throw new Error('Malformed registration response from server');
+    }
+
+    await authStorage.setToken(token);
+    await authStorage.setUser(user);
+
+    return { token, user };
+  },
+
+  /**
+   * Retrieve current professional profile, credentials, and completion metric
+   */
+  async getProfessionalProfile(baseUrl?: string): Promise<any> {
+    const res = await apiRequest<any>('/professionals/me', {
+      method: 'GET',
+    }, baseUrl);
+    return res.data;
+  },
+
+  /**
+   * Update permitted professional profile fields
+   */
+  async updateProfessionalProfile(data: any, baseUrl?: string): Promise<any> {
+    const res = await apiRequest<any>('/professionals/me', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }, baseUrl);
+    return res.data;
+  },
+
+  /**
+   * Add a new certification / credential entry
+   */
+  async addCredential(data: any, baseUrl?: string): Promise<any> {
+    const res = await apiRequest<any>('/professionals/me/credentials', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, baseUrl);
+    return res.data;
+  },
+
+  /**
+   * Update an existing credential
+   */
+  async updateCredential(credentialId: string, data: any, baseUrl?: string): Promise<any> {
+    const res = await apiRequest<any>(`/professionals/me/credentials/${encodeURIComponent(credentialId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }, baseUrl);
+    return res.data;
+  },
+
+  /**
+   * Delete a credential
+   */
+  async deleteCredential(credentialId: string, baseUrl?: string): Promise<{ success: boolean; message: string }> {
+    const res = await apiRequest<any>(`/professionals/me/credentials/${encodeURIComponent(credentialId)}`, {
+      method: 'DELETE',
+    }, baseUrl);
+    return res;
+  },
+
+  /**
    * Log out and wipe secure token storage
    */
   async logout(): Promise<void> {

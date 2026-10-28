@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 500" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d9488"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity="0.1" flood-color="#0f172a"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="600" height="500" fill="url(#bgGrad)"/>
+  
+  <!-- Subtle Medical Grid Pattern -->
+  <g opacity="0.04" stroke="#0f172a" stroke-width="1">
+    <line x1="0" y1="50" x2="600" y2="50"/>
+    <line x1="0" y1="100" x2="600" y2="100"/>
+    <line x1="0" y1="150" x2="600" y2="150"/>
+    <line x1="0" y1="200" x2="600" y2="200"/>
+    <line x1="0" y1="250" x2="600" y2="250"/>
+    <line x1="0" y1="300" x2="600" y2="300"/>
+    <line x1="0" y1="350" x2="600" y2="350"/>
+    <line x1="0" y1="400" x2="600" y2="400"/>
+    <line x1="0" y1="450" x2="600" y2="450"/>
+    <line x1="50" y1="0" x2="50" y2="500"/>
+    <line x1="100" y1="0" x2="100" y2="500"/>
+    <line x1="150" y1="0" x2="150" y2="500"/>
+    <line x1="200" y1="0" x2="200" y2="500"/>
+    <line x1="250" y1="0" x2="250" y2="500"/>
+    <line x1="300" y1="0" x2="300" y2="500"/>
+    <line x1="350" y1="0" x2="350" y2="500"/>
+    <line x1="400" y1="0" x2="400" y2="500"/>
+    <line x1="450" y1="0" x2="450" y2="500"/>
+    <line x1="50" y1="0" x2="550" y2="500"/>
+  </g>
+
+  <!-- Central Card Surface -->
+  <rect x="50" y="40" width="500" height="420" rx="24" fill="#ffffff" filter="url(#shadow)" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- Top VivoQuest Header Ribbon -->
+  <rect x="50" y="40" width="500" height="50" rx="24" fill="#0f172a"/>
+  <rect x="50" y="65" width="500" height="25" fill="#0f172a"/>
+  <text x="75" y="72" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="800" fill="#ffffff" letter-spacing="1">VIVOQUEST</text>
+  <text x="165" y="72" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#38bdf8">MEDICAL EQUIPMENT</text>
+  <rect x="420" y="55" width="110" height="22" rx="11" fill="#0d9488" fill-opacity="0.25"/>
+  <text x="475" y="70" font-family="system-ui, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">MOBILITY AID</text>
+
+  <!-- Illustration Viewport -->
+  <g transform="translate(100, 110)">
+    
+      <!-- Big Rear Spoke Wheel -->
+      <circle cx="220" cy="150" r="75" fill="none" stroke="#0f172a" stroke-width="8"/>
+      <circle cx="220" cy="150" r="68" fill="none" stroke="#cbd5e1" stroke-width="3"/>
+      <circle cx="220" cy="150" r="16" fill="#0d9488"/>
+      <!-- Spokes -->
+      <line x1="220" y1="75" x2="220" y2="225" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="145" y1="150" x2="295" y2="150" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="167" y1="97" x2="273" y2="203" stroke="#94a3b8" stroke-width="2"/>
+      <line x1="167" y1="203" x2="273" y2="97" stroke="#94a3b8" stroke-width="2"/>
+      <!-- Tubular Frame -->
+      <path d="M 230 40 L 210 130 L 110 130 L 100 210" fill="none" stroke="#475569" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="210" y1="130" x2="220" y2="150" stroke="#475569" stroke-width="10"/>
+      <!-- Padded Seat & Backrest -->
+      <rect x="120" y="115" width="90" height="16" rx="5" fill="#1e293b"/>
+      <rect x="200" y="50" width="16" height="70" rx="5" fill="#1e293b"/>
+      <!-- Push Handle -->
+      <path d="M 225 50 L 255 45" stroke="#0f172a" stroke-width="8" stroke-linecap="round"/>
+      <!-- Armrest -->
+      <rect x="135" y="85" width="70" height="10" rx="4" fill="#334155"/>
+      <!-- Front Caster Wheel -->
+      <circle cx="100" cy="225" r="16" fill="#0f172a"/>
+      <circle cx="100" cy="225" r="8" fill="#e2e8f0"/>
+      <!-- Footrest -->
+      <rect x="80" y="195" width="30" height="8" rx="2" fill="#0f172a"/>
+    
+  </g>
+
+  <!-- Product Title & Certification Footer -->
+  <line x1="75" y1="400" x2="525" y2="400" stroke="#f1f5f9" stroke-width="2"/>
+  <text x="75" y="425" font-family="system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#0f172a">Standard Transport Wheelchair</text>
+  <g transform="translate(75, 435)">
+    <circle cx="5" cy="5" r="4" fill="#10b981"/>
+    <text x="16" y="9" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#64748b">Verified Clinical Standard &bull; Biomedical Depot Tested</text>
+  </g>
+</svg>

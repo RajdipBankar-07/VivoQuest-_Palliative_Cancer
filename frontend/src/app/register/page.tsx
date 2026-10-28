@@ -1,14 +1,16 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Activity,
   CheckCircle2,
   Shield,
   ArrowRight,
   Info,
-  AlertCircle
+  AlertCircle,
+  Sparkles,
 } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { Footer } from '@/components/Footer';
@@ -16,7 +18,11 @@ import { FormField } from '@/components/FormField';
 import { Button } from '@/components/Button';
 import { authApi, ApiClientError } from '@/lib/api';
 
-export default function RegisterPage() {
+function RegisterContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectUrl = searchParams.get('redirect');
+
   const [formData, setFormData] = useState({
     fullName: '',
     phone: '',
@@ -75,6 +81,12 @@ export default function RegisterPage() {
       });
 
       setRegisteredData(response);
+
+      if (redirectUrl && redirectUrl.startsWith('/') && !redirectUrl.startsWith('//')) {
+        setTimeout(() => {
+          router.push(redirectUrl);
+        }, 1200);
+      }
     } catch (err: any) {
       if (err instanceof ApiClientError) {
         setApiError(err.message);
@@ -104,6 +116,19 @@ export default function RegisterPage() {
               Join India&apos;s coordinated preventive healthcare network
             </p>
           </div>
+
+          {/* Checkout Redirection Notice */}
+          {redirectUrl && (
+            <div className="mb-5 p-3.5 bg-blue-50/80 border border-blue-200 rounded-2xl flex items-start gap-2.5 text-xs text-blue-950">
+              <Shield size={16} className="text-primary shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Registering for Medical Checkout</p>
+                <p className="text-blue-900/80 mt-0.5">
+                  Complete this 1-step registration to proceed with your equipment order. Your selected items in cart are saved.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Compliance & API Connected Banner */}
           <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-100 flex items-start gap-2.5 text-xs text-navy/80 mb-6">
@@ -141,13 +166,27 @@ export default function RegisterPage() {
                 <p><strong>Security Status:</strong> Active &bull; DPDP Consent Logged</p>
               </div>
 
-              <div className="flex gap-3">
-                <Button href="/services" variant="primary" size="md" className="flex-1 justify-center">
-                  Explore Services
-                </Button>
-                <Button href="/sign-in" variant="outline" size="md" className="flex-1 justify-center">
-                  Sign In Portal
-                </Button>
+              <div className="space-y-2">
+                {redirectUrl && redirectUrl.startsWith('/') && !redirectUrl.startsWith('//') ? (
+                  <>
+                    <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center justify-center gap-2 mb-2">
+                      <Sparkles size={14} className="text-emerald-600 animate-spin" />
+                      <span>Taking you to {redirectUrl.includes('/subscriptions') ? 'caregiver subscriptions' : 'checkout'}...</span>
+                    </div>
+                    <Button href={redirectUrl} variant="primary" size="md" className="w-full justify-center shadow-md">
+                      Proceed to {redirectUrl.includes('/subscriptions') ? 'Caregiver Subscriptions' : 'Checkout'} Now &rarr;
+                    </Button>
+                  </>
+                ) : (
+                  <div className="flex gap-3">
+                    <Button href="/services" variant="primary" size="md" className="flex-1 justify-center">
+                      Explore Services
+                    </Button>
+                    <Button href="/sign-in" variant="outline" size="md" className="flex-1 justify-center">
+                      Sign In Portal
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -259,7 +298,10 @@ export default function RegisterPage() {
 
           <div className="mt-6 pt-5 border-t border-border text-center text-xs text-muted-foreground">
             <span>Already registered? </span>
-            <Link href="/sign-in" className="font-bold text-primary hover:underline">
+            <Link
+              href={redirectUrl ? `/sign-in?redirect=${encodeURIComponent(redirectUrl)}` : '/sign-in'}
+              className="font-bold text-primary hover:underline"
+            >
               Sign In
             </Link>
           </div>
@@ -269,5 +311,13 @@ export default function RegisterPage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <RegisterContent />
+    </Suspense>
   );
 }

@@ -29,6 +29,9 @@ export interface ISupplier extends Document {
   verifiedBy?: mongoose.Types.ObjectId;
   verificationNotes?: string;
   rating: number;
+  userId?: mongoose.Types.ObjectId; // User account credential binding for Supplier Portal
+  commissionRatePercentage: number;
+  settlementCycleDays: number;
   isActive: boolean;
   isDemo: boolean;
   createdAt: Date;
@@ -134,6 +137,9 @@ const SupplierSchema = new Schema<ISupplier>(
     verifiedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     verificationNotes: { type: String, trim: true },
     rating: { type: Number, default: 5.0, min: 1.0, max: 5.0 },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', index: true, sparse: true },
+    commissionRatePercentage: { type: Number, default: 10, min: 0, max: 100 },
+    settlementCycleDays: { type: Number, default: 15, min: 1 },
     isActive: { type: Boolean, default: true, index: true },
     isDemo: { type: Boolean, default: false },
   },

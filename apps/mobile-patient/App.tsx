@@ -14,6 +14,7 @@ import {
   Platform,
   Image,
   TextInput,
+  StatusBar as RNStatusBar,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { patientApi, setOnUnauthorizedListener, SessionExpiredError, getMobileApiBaseUrl } from './src/services/apiClient';
@@ -28,7 +29,15 @@ import {
   PatientVisit,
   PatientVisitsSchedule,
   VisitRescheduleRequest,
+  MedicalProductMobile,
+  CartItemMobile,
+  ProductOrderMobile,
 } from './src/types';
+import { EquipmentStoreView } from './src/components/EquipmentStoreView';
+import { ProductDetailModal } from './src/components/ProductDetailModal';
+import { CartCheckoutModal } from './src/components/CartCheckoutModal';
+import { OrderConfirmationModal } from './src/components/OrderConfirmationModal';
+import { MyOrdersModal } from './src/components/MyOrdersModal';
 
 const STANDARD_TIME_SLOTS = [
   '08:00 AM - 10:00 AM',
@@ -39,7 +48,7 @@ const STANDARD_TIME_SLOTS = [
 ];
 
 export default function PatientApp() {
-  const [activeTab, setActiveTab] = useState<'home' | 'caregiver' | 'visits' | 'reports' | 'plans' | 'profile'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'caregiver' | 'visits' | 'reports' | 'plans' | 'profile' | 'equipment'>('home');
   const [userSession, setUserSession] = useState<UserSession | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
 
@@ -49,6 +58,24 @@ export default function PatientApp() {
   const [availablePlans, setAvailablePlans] = useState<SubscriptionPlan[]>([]);
   const [assignedCaregiver, setAssignedCaregiver] = useState<AssignedCaregiverDetails | null>(null);
   const [visitsSchedule, setVisitsSchedule] = useState<PatientVisitsSchedule | null>(null);
+
+  // Phase 15 & Master Command: Medical Equipment Store, Cart, Orders & Tracking States
+  const [equipmentProducts, setEquipmentProducts] = useState<MedicalProductMobile[]>([]);
+  const [isLoadingEquipment, setIsLoadingEquipment] = useState<boolean>(false);
+  const [equipmentSearch, setEquipmentSearch] = useState<string>('');
+  const [equipmentCategory, setEquipmentCategory] = useState<string>('all');
+  const [equipmentSourcing, setEquipmentSourcing] = useState<string>('all');
+  const [equipmentSort, setEquipmentSort] = useState<string>('featured');
+  const [selectedEquipmentProduct, setSelectedEquipmentProduct] = useState<MedicalProductMobile | null>(null);
+
+  const [cartItems, setCartItems] = useState<CartItemMobile[]>([]);
+  const [isCartModalVisible, setIsCartModalVisible] = useState<boolean>(false);
+
+  const [patientOrders, setPatientOrders] = useState<ProductOrderMobile[]>([]);
+  const [isLoadingOrders, setIsLoadingOrders] = useState<boolean>(false);
+  const [isOrdersModalVisible, setIsOrdersModalVisible] = useState<boolean>(false);
+  const [confirmedOrder, setConfirmedOrder] = useState<ProductOrderMobile | null>(null);
+  const [trackingOrderId, setTrackingOrderId] = useState<string | undefined>(undefined);
 
   // UI Flow States
   const [isLoadingData, setIsLoadingData] = useState(false);
@@ -77,6 +104,15 @@ export default function PatientApp() {
   const [rescheduleError, setRescheduleError] = useState<string | null>(null);
   const [rescheduleSuccessMsg, setRescheduleSuccessMsg] = useState<string | null>(null);
 
+  // Deep Link & Patient App Handoff State
+  const [pendingDeepLink, setPendingDeepLink] = useState<{
+    path: string;
+    productId?: string;
+    fromCart?: boolean;
+    orderId?: string;
+    planId?: string;
+  } | null>(null);
+
   // ---------------------------------------------------------------------------
   // 1. Session Bootstrap & 401 Listener Setup
   // ---------------------------------------------------------------------------
@@ -89,6 +125,8 @@ export default function PatientApp() {
       setAvailablePlans([]);
       setAssignedCaregiver(null);
       setVisitsSchedule(null);
+      setCartItems([]);
+      setPatientOrders([]);
       Alert.alert('Session Expired', 'Your secure session has expired. Please sign in again.');
     });
 
@@ -100,6 +138,9 @@ export default function PatientApp() {
         if (token && savedUser) {
           setUserSession(savedUser);
           await loadPatientDashboardData();
+          loadEquipmentProducts();
+          loadPatientOrders();
+          loadUserCart();
         }
       } catch (err) {
         console.warn('[PatientApp] Session bootstrap failed:', err);
@@ -208,11 +249,340 @@ export default function PatientApp() {
   }, []);
 
   // ---------------------------------------------------------------------------
+  // Medical Equipment, Cart, Orders & Tracking Handlers
+  // ---------------------------------------------------------------------------
+  const loadEquipmentProducts = useCallback(async () => {
+    setIsLoadingEquipment(true);
+    try {
+      const data = await patientApi.getMedicalProducts({
+        search: equipmentSearch.trim() || undefined,
+        category: equipmentCategory !== 'all' ? equipmentCategory : undefined,
+        sourcingType: equipmentSourcing !== 'all' ? equipmentSourcing : undefined,
+        sort: equipmentSort !== 'featured' ? equipmentSort : undefined,
+      });
+      setEquipmentProducts(data.products || []);
+    } catch (err: any) {
+      console.warn('[PatientApp] Error loading medical products:', err);
+    } finally {
+      setIsLoadingEquipment(false);
+    }
+  }, [equipmentSearch, equipmentCategory, equipmentSourcing, equipmentSort]);
+
+  const loadPatientOrders = useCallback(async () => {
+    setIsLoadingOrders(true);
+    try {
+      const orders = await patientApi.getOrders();
+      setPatientOrders(orders);
+    } catch (err: any) {
+      console.warn('[PatientApp] Error loading patient orders:', err);
+    } finally {
+      setIsLoadingOrders(false);
+    }
+  }, []);
+
+  const loadUserCart = useCallback(async () => {
+    try {
+      const remoteCart = await patientApi.getCart();
+      if (remoteCart && Array.isArray(remoteCart)) {
+        setCartItems(remoteCart);
+      }
+    } catch (err) {
+      console.warn('[PatientApp] Failed to load remote cart:', err);
+    }
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Deep Link Handling for Mobile-First Equipment Store & Orders
+  // ---------------------------------------------------------------------------
+  const handleDeepLinkUrl = useCallback(
+    async (urlStr: string) => {
+      if (!urlStr) return;
+      try {
+        console.log('[PatientApp] Received deep link:', urlStr);
+        const normalized = urlStr.replace(/^[a-zA-Z0-9]+:\/\//, '');
+        const [path, queryString] = normalized.split('?');
+        const params: Record<string, string> = {};
+        if (queryString) {
+          queryString.split('&').forEach((pair) => {
+            const [k, v] = pair.split('=');
+            if (k) params[decodeURIComponent(k)] = decodeURIComponent(v || '');
+          });
+        }
+
+        const cleanPath = path ? path.replace(/^\//, '').toLowerCase() : '';
+        const planId =
+          params.planId ||
+          params.id ||
+          (cleanPath.startsWith('subscriptions/') ? cleanPath.split('/')[1] : undefined) ||
+          (cleanPath.startsWith('plans/') ? cleanPath.split('/')[1] : undefined);
+
+        const target = {
+          path: cleanPath,
+          productId: params.productId || (cleanPath.startsWith('equipment/') ? cleanPath.split('/')[1] : undefined),
+          fromCart: params.fromCart === 'true' || params.cart === 'true',
+          orderId: params.orderId || (cleanPath.startsWith('orders/') ? cleanPath.split('/')[1] : undefined),
+          planId: planId || undefined,
+        };
+
+        if (!userSession) {
+          // If unauthenticated, queue the deep link target to open automatically after login/register
+          setPendingDeepLink(target);
+          return;
+        }
+
+        // Execute deep link when authenticated
+        if (cleanPath === 'equipment' || cleanPath.startsWith('equipment/')) {
+          setActiveTab('equipment');
+          if (target.productId) {
+            let product = equipmentProducts.find((p) => p.id === target.productId || p.sku === target.productId);
+            if (!product) {
+              try {
+                product = await patientApi.getMedicalProductById(target.productId);
+              } catch (e) {
+                console.warn('[PatientApp] Deep link product lookup failed:', e);
+              }
+            }
+            if (product) {
+              setSelectedEquipmentProduct(product);
+            }
+          } else if (target.fromCart) {
+            setIsCartModalVisible(true);
+          }
+        } else if (cleanPath === 'orders' || cleanPath.startsWith('orders/')) {
+          if (target.orderId) {
+            setTrackingOrderId(target.orderId);
+          }
+          setIsOrdersModalVisible(true);
+        } else if (
+          cleanPath === 'subscriptions' ||
+          cleanPath.startsWith('subscriptions/') ||
+          cleanPath === 'plans' ||
+          cleanPath.startsWith('plans/') ||
+          target.planId
+        ) {
+          setActiveTab('plans');
+          if (target.planId) {
+            let matchedPlan = availablePlans.find(
+              (p) => p.id === target.planId || p.planCode === target.planId || (p as any)._id === target.planId
+            );
+            if (!matchedPlan) {
+              try {
+                const fetchedPlans = await patientApi.getCaregiverPlans();
+                setAvailablePlans(fetchedPlans);
+                matchedPlan = fetchedPlans.find(
+                  (p) => p.id === target.planId || p.planCode === target.planId || (p as any)._id === target.planId
+                );
+              } catch (e) {
+                console.warn('[PatientApp] Deep link plan lookup failed:', e);
+              }
+            }
+            if (matchedPlan) {
+              setSubscribingPlan(matchedPlan);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[PatientApp] Error processing deep link URL:', err);
+      }
+    },
+    [equipmentProducts, userSession, availablePlans]
+  );
+
+  useEffect(() => {
+    Linking.getInitialURL().then((url) => {
+      if (url) handleDeepLinkUrl(url);
+    });
+
+    const sub = Linking.addEventListener('url', (event) => {
+      handleDeepLinkUrl(event.url);
+    });
+
+    return () => {
+      sub.remove();
+    };
+  }, [handleDeepLinkUrl]);
+
+  // Fetch equipment products when search, category, sourcing or sort changes
+  useEffect(() => {
+    if (userSession) {
+      loadEquipmentProducts();
+    }
+  }, [loadEquipmentProducts, userSession]);
+
+  const handleAddToCart = async (product: MedicalProductMobile, requireInstallation: boolean = false) => {
+    if (product.stockQuantity <= 0) {
+      Alert.alert('Out of Stock', 'This item is currently out of stock.');
+      return;
+    }
+
+    const existingIndex = cartItems.findIndex((item) => item.productId === product.id);
+    let updatedCart: CartItemMobile[];
+    if (existingIndex > -1) {
+      updatedCart = cartItems.map((item, idx) =>
+        idx === existingIndex
+          ? {
+              ...item,
+              quantity: item.quantity + 1,
+              installationSelected: requireInstallation || item.installationSelected,
+            }
+          : item
+      );
+    } else {
+      const newItem: CartItemMobile = {
+        productId: product.id,
+        product: product,
+        quantity: 1,
+        installationSelected: requireInstallation,
+      };
+      updatedCart = [...cartItems, newItem];
+    }
+    setCartItems(updatedCart);
+    try {
+      await patientApi.saveCart(updatedCart);
+    } catch (e) {
+      console.warn('saveCart error:', e);
+    }
+    Alert.alert('Added to Cart', `"${product.title}" has been added to your cart.`);
+  };
+
+  const handleBuyNow = async (product: MedicalProductMobile, requireInstallation: boolean = false) => {
+    if (product.stockQuantity <= 0) {
+      Alert.alert('Out of Stock', 'This item is currently out of stock.');
+      return;
+    }
+    const existingIndex = cartItems.findIndex((item) => item.productId === product.id);
+    let updatedCart: CartItemMobile[];
+    if (existingIndex > -1) {
+      updatedCart = cartItems.map((item, idx) =>
+        idx === existingIndex
+          ? { ...item, installationSelected: requireInstallation || item.installationSelected }
+          : item
+      );
+    } else {
+      const newItem: CartItemMobile = {
+        productId: product.id,
+        product: product,
+        quantity: 1,
+        installationSelected: requireInstallation,
+      };
+      updatedCart = [...cartItems, newItem];
+    }
+    setCartItems(updatedCart);
+    try {
+      await patientApi.saveCart(updatedCart);
+    } catch (e) {
+      console.warn('saveCart error:', e);
+    }
+    setSelectedEquipmentProduct(null);
+    setIsCartModalVisible(true);
+  };
+
+  const handleUpdateCartQuantity = async (productId: string, newQty: number) => {
+    let updated: CartItemMobile[];
+    if (newQty <= 0) {
+      updated = cartItems.filter((i) => i.productId !== productId);
+    } else {
+      updated = cartItems.map((i) => (i.productId === productId ? { ...i, quantity: newQty } : i));
+    }
+    setCartItems(updated);
+    try {
+      await patientApi.saveCart(updated);
+    } catch (e) {
+      console.warn('saveCart error:', e);
+    }
+  };
+
+  const handleToggleCartInstallation = async (productId: string) => {
+    const updated = cartItems.map((i) =>
+      i.productId === productId ? { ...i, installationSelected: !i.installationSelected } : i
+    );
+    setCartItems(updated);
+    try {
+      await patientApi.saveCart(updated);
+    } catch (e) {
+      console.warn('saveCart error:', e);
+    }
+  };
+
+  const handleRemoveCartItem = async (productId: string) => {
+    const updated = cartItems.filter((i) => i.productId !== productId);
+    setCartItems(updated);
+    try {
+      await patientApi.saveCart(updated);
+    } catch (e) {
+      console.warn('saveCart error:', e);
+    }
+  };
+
+  const handleOrderPlaced = async (order: ProductOrderMobile) => {
+    setCartItems([]);
+    try {
+      await patientApi.clearCart();
+    } catch (e) {
+      console.warn('clearCart error:', e);
+    }
+    setIsCartModalVisible(false);
+    setConfirmedOrder(order);
+    loadPatientOrders();
+  };
+
+  // ---------------------------------------------------------------------------
   // 4. Action Handlers
   // ---------------------------------------------------------------------------
   const handleLoginSuccess = async (user: UserSession) => {
     setUserSession(user);
     await loadPatientDashboardData();
+    loadEquipmentProducts();
+    loadPatientOrders();
+    loadUserCart();
+
+    // Resume pending deep link if visitor arrived via website handoff
+    if (pendingDeepLink) {
+      setTimeout(async () => {
+        if (pendingDeepLink.path === 'equipment' || pendingDeepLink.path.startsWith('equipment/')) {
+          setActiveTab('equipment');
+          if (pendingDeepLink.productId) {
+            patientApi.getMedicalProductById(pendingDeepLink.productId).then((prod) => {
+              if (prod) setSelectedEquipmentProduct(prod);
+            }).catch(() => {});
+          } else if (pendingDeepLink.fromCart) {
+            setIsCartModalVisible(true);
+          }
+        } else if (pendingDeepLink.path === 'orders' || pendingDeepLink.path.startsWith('orders/')) {
+          if (pendingDeepLink.orderId) setTrackingOrderId(pendingDeepLink.orderId);
+          setIsOrdersModalVisible(true);
+        } else if (
+          pendingDeepLink.path === 'subscriptions' ||
+          pendingDeepLink.path.startsWith('subscriptions/') ||
+          pendingDeepLink.path === 'plans' ||
+          pendingDeepLink.path.startsWith('plans/') ||
+          pendingDeepLink.planId
+        ) {
+          setActiveTab('plans');
+          if (pendingDeepLink.planId) {
+            try {
+              let plans = availablePlans;
+              if (!plans || plans.length === 0) {
+                plans = await patientApi.getCaregiverPlans();
+                setAvailablePlans(plans);
+              }
+              const target = plans.find(
+                (p) =>
+                  p.id === pendingDeepLink.planId ||
+                  p.planCode === pendingDeepLink.planId ||
+                  (p as any)._id === pendingDeepLink.planId
+              );
+              if (target) {
+                setSubscribingPlan(target);
+              }
+            } catch (err) {
+              console.warn('[PatientApp] Error resuming pending plan subscription:', err);
+            }
+          }
+        }
+        setPendingDeepLink(null);
+      }, 350);
+    }
   };
 
   const handleLogout = async () => {
@@ -232,6 +602,8 @@ export default function PatientApp() {
             setAvailablePlans([]);
             setAssignedCaregiver(null);
             setVisitsSchedule(null);
+            setCartItems([]);
+            setPatientOrders([]);
             setActiveTab('home');
           },
         },
@@ -595,19 +967,46 @@ export default function PatientApp() {
         </View>
       )}
 
-      {/* Main Content Scroll Area */}
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={styles.contentContainer}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={onRefresh}
-            tintColor="#1976D2"
-            colors={['#1976D2', '#2E9E6F']}
+      {/* Main Content Area */}
+      {activeTab === 'equipment' ? (
+        <View style={styles.content}>
+          <EquipmentStoreView
+            products={equipmentProducts}
+            isLoading={isLoadingEquipment}
+            cartCount={cartItems.reduce((acc, item) => acc + item.quantity, 0)}
+            ordersCount={patientOrders.length}
+            onOpenCart={() => setIsCartModalVisible(true)}
+            onOpenOrders={() => {
+              loadPatientOrders();
+              setIsOrdersModalVisible(true);
+            }}
+            onSelectProduct={(p) => setSelectedEquipmentProduct(p)}
+            onAddToCart={(p) => handleAddToCart(p, false)}
+            onBuyNow={(p) => handleBuyNow(p, false)}
+            onRefresh={loadEquipmentProducts}
+            selectedCategory={equipmentCategory}
+            onSelectCategory={setEquipmentCategory}
+            searchQuery={equipmentSearch}
+            onSearchChange={setEquipmentSearch}
+            selectedSourcing={equipmentSourcing}
+            onSelectSourcing={setEquipmentSourcing}
+            selectedSort={equipmentSort}
+            onSelectSort={setEquipmentSort}
           />
-        }
-      >
+        </View>
+      ) : (
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={styles.contentContainer}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={onRefresh}
+              tintColor="#1976D2"
+              colors={['#1976D2', '#2E9E6F']}
+            />
+          }
+        >
         {/* Loading Indicator for Data Fetching */}
         {isLoadingData && !isRefreshing && (
           <View style={styles.loadingBanner}>
@@ -741,16 +1140,16 @@ export default function PatientApp() {
                 <View style={styles.cardRowBetween}>
                   <View style={{ flex: 1, marginRight: 8 }}>
                     <Text style={styles.visitCaregiverLabel}>
-                      {nextVisit.status === 'rejected' ? 'Caregiver Status:' : 'Assigned Caregiver:'}
+                      {nextVisit.status === 'rejected' || (nextVisit as any).replacementRequired ? 'Caregiver Status:' : 'Assigned Caregiver:'}
                     </Text>
-                    <Text style={[styles.visitCaregiverName, nextVisit.status === 'rejected' && { color: '#be123c', fontWeight: '700' }]}>
-                      {nextVisit.status === 'rejected'
+                    <Text style={[styles.visitCaregiverName, (nextVisit.status === 'rejected' || (nextVisit as any).replacementRequired) && { color: '#be123c', fontWeight: '700' }]}>
+                      {nextVisit.status === 'rejected' || (nextVisit as any).replacementRequired
                         ? 'Reassignment in Progress (Desk allocating replacement)'
                         : nextVisit.assignedCaregiver?.name || 'Awaiting Caregiver Assignment'}
                     </Text>
                   </View>
-                  <View style={[styles.visitStatusPill, nextVisit.status === 'rejected' && { backgroundColor: '#ffe4e6' }]}>
-                    <Text style={[styles.visitStatusPillText, nextVisit.status === 'rejected' && { color: '#be123c' }]}>
+                  <View style={[styles.visitStatusPill, (nextVisit.status === 'rejected' || (nextVisit as any).replacementRequired) && { backgroundColor: '#ffe4e6' }]}>
+                    <Text style={[styles.visitStatusPillText, (nextVisit.status === 'rejected' || (nextVisit as any).replacementRequired) && { color: '#be123c' }]}>
                       {nextVisit.statusLabel}
                     </Text>
                   </View>
@@ -823,6 +1222,36 @@ export default function PatientApp() {
                 </Text>
               </View>
             )}
+
+            {/* Quick Action: Medical Equipment Storefront & Orders */}
+            <View style={[styles.card, { backgroundColor: '#F0F9FF', borderColor: '#BAE6FD', borderWidth: 1, marginTop: 16 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                <Text style={{ fontSize: 24, marginRight: 8 }}>🛒</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#0369A1' }}>Medical Equipment & Supplies</Text>
+                  <Text style={{ fontSize: 12, color: '#0284C7' }}>Hospital-grade devices, doorstep delivery & clinician setup</Text>
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                <TouchableOpacity
+                  style={[styles.primaryActionButton, { flex: 1, paddingVertical: 10, marginTop: 0, backgroundColor: '#0284C7', alignItems: 'center' }]}
+                  onPress={() => setActiveTab('equipment')}
+                >
+                  <Text style={styles.primaryActionButtonText}>Browse Equipment</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.secondaryButton, { flex: 1, paddingVertical: 10, borderColor: '#0284C7' }]}
+                  onPress={() => {
+                    loadPatientOrders();
+                    setIsOrdersModalVisible(true);
+                  }}
+                >
+                  <Text style={[styles.secondaryButtonText, { color: '#0284C7' }]}>
+                    My Orders {patientOrders.length > 0 ? `(${patientOrders.length})` : ''}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         )}
 
@@ -957,6 +1386,65 @@ export default function PatientApp() {
                       </View>
                     </View>
                   )}
+
+                  {/* Phase 13: Qualifications & Clinical Experience */}
+                  {(assignedCaregiver.highestQualification || assignedCaregiver.yearsOfExperience !== undefined) && (
+                    <View style={{ marginTop: 14 }}>
+                      <Text style={styles.infoSectionHeading}>Qualifications & Professional Background</Text>
+                      <View style={styles.serviceDetailCard}>
+                        {assignedCaregiver.highestQualification ? (
+                          <View style={styles.serviceDetailRow}>
+                            <Text style={styles.serviceDetailLabel}>Degree / Qualification:</Text>
+                            <Text style={[styles.serviceDetailValue, { color: '#0284c7', fontWeight: '700' }]}>
+                              {assignedCaregiver.highestQualification}
+                            </Text>
+                          </View>
+                        ) : null}
+
+                        {assignedCaregiver.institution ? (
+                          <View style={styles.serviceDetailRow}>
+                            <Text style={styles.serviceDetailLabel}>Awarding Institution:</Text>
+                            <Text style={styles.serviceDetailValue}>{assignedCaregiver.institution}</Text>
+                          </View>
+                        ) : null}
+
+                        {assignedCaregiver.yearsOfExperience !== undefined ? (
+                          <View style={styles.serviceDetailRow}>
+                            <Text style={styles.serviceDetailLabel}>Clinical Experience:</Text>
+                            <Text style={styles.serviceDetailValue}>
+                              {assignedCaregiver.yearsOfExperience} Years
+                            </Text>
+                          </View>
+                        ) : null}
+
+                        <View style={styles.serviceDetailRow}>
+                          <Text style={styles.serviceDetailLabel}>Verification Status:</Text>
+                          <Text style={[styles.serviceDetailValue, { color: '#059669', fontWeight: '700' }]}>
+                            {assignedCaregiver.verificationStatus === 'verified' ? '● Verified by Clinical Desk' : '● Verified Specialist'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Phase 13: Verified Certifications & Credentials Summary */}
+                  {assignedCaregiver.verifiedCredentials && assignedCaregiver.verifiedCredentials.length > 0 ? (
+                    <View style={{ marginTop: 14 }}>
+                      <Text style={styles.infoSectionHeading}>Verified Certifications & Accreditations</Text>
+                      <View style={{ gap: 8 }}>
+                        {assignedCaregiver.verifiedCredentials.map((cred, idx) => (
+                          <View key={idx} style={{ backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 8, padding: 10 }}>
+                            <Text style={{ fontSize: 13, fontWeight: '700', color: '#166534' }}>
+                              ✓ {cred.title}
+                            </Text>
+                            <Text style={{ fontSize: 11, color: '#15803d', marginTop: 2 }}>
+                              Issued by: {cred.issuingAuthority} {cred.category ? `(${cred.category})` : ''}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
 
                   {/* Specializations & Qualifications (if available) */}
                   {assignedCaregiver.specializations && assignedCaregiver.specializations.length > 0 ? (
@@ -1093,7 +1581,7 @@ export default function PatientApp() {
                       <View style={styles.divider} />
 
                       {/* Assigned Caregiver Section */}
-                      {visit.status === 'rejected' ? (
+                      {visit.status === 'rejected' || (visit as any).replacementRequired ? (
                         <View style={{ backgroundColor: '#fff1f2', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#fecdd3', marginVertical: 6 }}>
                           <Text style={{ fontSize: 12, fontWeight: '700', color: '#9f1239' }}>⚠️ Caregiver Reassignment in Progress</Text>
                           <Text style={{ fontSize: 11, color: '#4c0519', marginTop: 3, lineHeight: 16 }}>
@@ -1647,12 +2135,31 @@ export default function PatientApp() {
               </Text>
             </View>
 
+            {/* Medical Equipment Orders Shortcut */}
+            <TouchableOpacity
+              style={[styles.card, { marginTop: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 }]}
+              onPress={() => {
+                loadPatientOrders();
+                setIsOrdersModalVisible(true);
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={{ fontSize: 22, marginRight: 12 }}>📦</Text>
+                <View>
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: '#1E293B' }}>Medical Equipment Orders</Text>
+                  <Text style={{ fontSize: 12, color: '#64748B' }}>Track order status, delivery dates & clinician setup</Text>
+                </View>
+              </View>
+              <Text style={{ fontSize: 16, color: '#1976D2', fontWeight: 'bold' }}>→</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
               <Text style={styles.logoutButtonText}>Sign Out of Patient Account</Text>
             </TouchableOpacity>
           </View>
         )}
       </ScrollView>
+      )}
 
       {/* Bottom Navigation Bar */}
       <View style={styles.bottomNav}>
@@ -1694,6 +2201,14 @@ export default function PatientApp() {
         >
           <Text style={[styles.navIcon, activeTab === 'plans' && styles.navIconActive]}>🛡️</Text>
           <Text style={[styles.navLabel, activeTab === 'plans' && styles.navLabelActive]}>Plans</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => setActiveTab('equipment')}
+        >
+          <Text style={[styles.navIcon, activeTab === 'equipment' && styles.navIconActive]}>🛒</Text>
+          <Text style={[styles.navLabel, activeTab === 'equipment' && styles.navLabelActive]}>Equipment</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -2075,6 +2590,53 @@ export default function PatientApp() {
           </View>
         </View>
       </Modal>
+
+      {/* Equipment Product Detail Modal */}
+      <ProductDetailModal
+        product={selectedEquipmentProduct}
+        visible={!!selectedEquipmentProduct}
+        onClose={() => setSelectedEquipmentProduct(null)}
+        onAddToCart={(product, installation) => handleAddToCart(product, installation)}
+        onBuyNow={(product, installation) => handleBuyNow(product, installation)}
+      />
+
+      {/* Equipment Cart & Secure Checkout Modal */}
+      <CartCheckoutModal
+        visible={isCartModalVisible}
+        onClose={() => setIsCartModalVisible(false)}
+        cartItems={cartItems}
+        onUpdateQuantity={handleUpdateCartQuantity}
+        onToggleInstallation={handleToggleCartInstallation}
+        onRemoveItem={handleRemoveCartItem}
+        onOrderPlaced={handleOrderPlaced}
+        userSession={userSession}
+      />
+
+      {/* Order Placed Confirmation Modal */}
+      <OrderConfirmationModal
+        order={confirmedOrder}
+        visible={!!confirmedOrder}
+        onClose={() => setConfirmedOrder(null)}
+        onTrackOrder={(order) => {
+          setConfirmedOrder(null);
+          setTrackingOrderId(order.id || order._id);
+          loadPatientOrders();
+          setIsOrdersModalVisible(true);
+        }}
+      />
+
+      {/* My Orders, Tracking Timeline & In-Home Clinician Setup Modal */}
+      <MyOrdersModal
+        visible={isOrdersModalVisible}
+        onClose={() => {
+          setIsOrdersModalVisible(false);
+          setTrackingOrderId(undefined);
+        }}
+        orders={patientOrders}
+        isLoading={isLoadingOrders}
+        onRefresh={loadPatientOrders}
+        initialSelectedOrderId={trackingOrderId}
+      />
     </SafeAreaView>
   );
 }
@@ -2082,7 +2644,8 @@ export default function PatientApp() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F4F9FC', // VivoQuest Brand light background
+    backgroundColor: '#17324D', // Match header navy background for seamless Android status bar
+    paddingTop: Platform.OS === 'android' ? (RNStatusBar.currentHeight || 28) : 0,
   },
   splashContainer: {
     flex: 1,
@@ -2100,7 +2663,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingTop: 8,
+    paddingBottom: 12,
     backgroundColor: '#17324D', // VivoQuest Navy
     borderBottomWidth: 1,
     borderBottomColor: '#24476B',
@@ -2170,6 +2734,7 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+    backgroundColor: '#F4F9FC',
   },
   contentContainer: {
     padding: 16,

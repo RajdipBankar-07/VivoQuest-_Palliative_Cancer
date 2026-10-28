@@ -95,7 +95,7 @@ export default function CaregiverPlansPage() {
 
       const subData = res.data;
       setSubscriptionSuccess(
-        `Subscription confirmed & persisted for ${selectedPlan.name} (ID: ${subData?.subscriptionNumber || 'Active'})! Plan details and daily reports are now live in your Patient App and Admin Portal.`
+        `Subscription confirmed & persisted for ${selectedPlan.title || selectedPlan.name} (ID: ${subData?.subscriptionNumber || 'Active'})! Plan details and daily reports are now live in your Patient App and Admin Portal.`
       );
       setSelectedPlan(null);
     } catch (err: any) {
@@ -199,10 +199,13 @@ export default function CaregiverPlansPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
               {filteredPlans.map((plan) => {
                 const isMonthly = plan.planType === 'monthly_subscription';
+                const planPrice = Number(plan.customerPrice ?? plan.price ?? 0);
+                const planTitle = plan.title || plan.name || 'Palliative Care Plan';
+                const planVisits = plan.totalVisitsIncluded || plan.totalVisits || plan.visitsPerMonth || (isMonthly ? 20 : 10);
 
                 return (
                   <div
-                    key={plan._id}
+                    key={plan._id || plan.id || plan.planCode}
                     className="bg-white rounded-3xl p-7 border border-border shadow-sm hover:shadow-xl transition-all duration-300 flex flex-col justify-between group hover:-translate-y-1"
                   >
                     <div>
@@ -219,13 +222,13 @@ export default function CaregiverPlansPage() {
                         </span>
 
                         <span className="text-[11px] font-bold text-slate-400">
-                          {plan.visitsPerMonth ? `${plan.visitsPerMonth} Visits/Mo` : `${plan.totalVisits} Total Visits`}
+                          {isMonthly ? `${planVisits} Visits/Mo` : `${planVisits} Total Visits`}
                         </span>
                       </div>
 
                       {/* Title & Description */}
                       <h3 className="text-xl font-bold text-navy group-hover:text-primary transition-colors">
-                        {plan.name}
+                        {planTitle}
                       </h3>
                       <p className="text-xs text-slate-500 mt-2 leading-relaxed">
                         {plan.description}
@@ -235,7 +238,7 @@ export default function CaregiverPlansPage() {
                       <div className="mt-5 pb-5 border-b border-border">
                         <div className="flex items-baseline gap-1">
                           <span className="text-3xl font-black text-navy">
-                            ₹{plan.price.toLocaleString('en-IN')}
+                            ₹{Number.isFinite(planPrice) ? planPrice.toLocaleString('en-IN') : '0'}
                           </span>
                           <span className="text-xs text-slate-500 font-medium">
                             {isMonthly ? '/ month' : ' / complete package'}
@@ -269,18 +272,13 @@ export default function CaregiverPlansPage() {
 
                     {/* Action Button */}
                     <div className="mt-8 pt-4 border-t border-border">
-                      <button
-                        onClick={() => {
-                          setSelectedPlan(plan);
-                          setPatientName('');
-                          setPatientPhone('');
-                          setAddress('');
-                        }}
+                      <Link
+                        href={`/subscriptions/checkout?planId=${encodeURIComponent(plan.id || plan._id || '')}`}
                         className="w-full py-3 rounded-2xl text-xs font-bold bg-navy hover:bg-navy-light text-white transition flex items-center justify-center gap-2 shadow-sm"
                       >
                         <HeartPulse size={16} />
-                        <span>Select Plan &amp; Assign Caregiver</span>
-                      </button>
+                        <span>Choose Plan &amp; Finalize in App &rarr;</span>
+                      </Link>
                     </div>
                   </div>
                 );
@@ -342,7 +340,7 @@ export default function CaregiverPlansPage() {
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-navy">Subscribe to Caregiver Plan</h3>
-                  <p className="text-xs text-slate-500">{selectedPlan.name}</p>
+                  <p className="text-xs text-slate-500">{selectedPlan.title || selectedPlan.name}</p>
                 </div>
               </div>
               <button
@@ -356,12 +354,18 @@ export default function CaregiverPlansPage() {
             <div className="bg-slate-50 rounded-2xl p-4 my-5 border border-border text-xs space-y-1.5">
               <div className="flex justify-between">
                 <span className="text-slate-500">Subscription Amount:</span>
-                <span className="font-black text-navy text-sm">₹{selectedPlan.price.toLocaleString('en-IN')}</span>
+                <span className="font-black text-navy text-sm">
+                  ₹{(selectedPlan.customerPrice ?? selectedPlan.price ?? 0).toLocaleString('en-IN')}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Plan Allocation:</span>
                 <span className="font-semibold text-slate-800">
-                  {selectedPlan.visitsPerMonth ? `${selectedPlan.visitsPerMonth} Home Visits / Month` : `${selectedPlan.totalVisits} Home Visits`}
+                  {selectedPlan.totalVisitsIncluded
+                    ? `${selectedPlan.totalVisitsIncluded} Home Visits Included`
+                    : selectedPlan.visitsPerMonth
+                    ? `${selectedPlan.visitsPerMonth} Home Visits / Month`
+                    : `${selectedPlan.totalVisits || 15} Home Visits`}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -446,7 +450,9 @@ export default function CaregiverPlansPage() {
                   ) : (
                     <>
                       <CreditCard size={14} />
-                      <span>Confirm &amp; Subscribe (₹{selectedPlan.price.toLocaleString('en-IN')})</span>
+                      <span>
+                        Confirm &amp; Subscribe (₹{(selectedPlan.customerPrice ?? selectedPlan.price ?? 0).toLocaleString('en-IN')})
+                      </span>
                     </>
                   )}
                 </button>

@@ -207,3 +207,57 @@ export interface VisitRescheduleRequest {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface ProfessionalCredential {
+  id: string;
+  documentType: string;
+  certificateTitle?: string;
+  issuingAuthority: string;
+  issuingOrganization?: string;
+  credentialCategory?: string;
+  documentNumber?: string;
+  issueDate?: string;
+  expiryDate?: string;
+  uploadedFileId?: any;
+  verificationStatus: 'pending' | 'verified' | 'approved' | 'rejected' | 'expired';
+  rejectionReason?: string;
+  reviewNotes?: string;
+  verifiedAt?: string;
+  createdAt: string;
+}
+
+export interface ProfileCompletionReport {
+  percentage: number;
+  isComplete: boolean;
+  completedFields: string[];
+  missingFields: string[];
+}
+
+export interface HealthcareProfileData {
+  id: string;
+  userId: string;
+  title: string;
+  professionType: string;
+  highestQualification?: string;
+  institution?: string;
+  specializations: string[];
+  registrationNumber?: string;
+  registrationCouncil?: string;
+  yearsOfExperience: number;
+  experienceSummary?: string;
+  skills: string[];
+  serviceClusters: string[];
+  verificationStatus: 'unverified' | 'pending_review' | 'verified' | 'rejected';
+  bio?: string;
+  rating?: number;
+  totalVisitsCompleted?: number;
+  isActiveForDispatch?: boolean;
+}
+
+export interface FullProfessionalProfileResponse {
+  user: CaregiverSession;
+  profile: HealthcareProfileData;
+  credentials: ProfessionalCredential[];
+  completion: ProfileCompletionReport;
+}
+

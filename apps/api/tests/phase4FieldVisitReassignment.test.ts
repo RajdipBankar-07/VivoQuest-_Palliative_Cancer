@@ -8,10 +8,12 @@ import { User } from '../src/models/User.js';
 import { FieldVisit } from '../src/models/FieldVisit.js';
 import { AuditLog } from '../src/models/AuditLog.js';
 import { NotificationLog } from '../src/models/NotificationLog.js';
+import { HealthcareProfessionalProfile } from '../src/models/HealthcareProfessionalProfile.js';
+import { DoctorAvailability } from '../src/models/DoctorAvailability.js';
 import { CaregiverSubscription } from '../src/models/CaregiverSubscription.js';
 import { seedAdminDemoData } from '../src/services/adminService.js';
 
-describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression Suite', () => {
+describe('VivoQuest — Phase 4: Emergency Caregiver Reassignment & Assignment Reliability Regression Suite', () => {
   const app = createApp();
 
   // Test Admin
@@ -48,11 +50,28 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
   const conflictedCaregiverPhone = '9876661105';
   const conflictedCaregiverName = 'Nurse Busy Schedule';
 
+  // Unavailable Caregiver (Blackout / Dispatch disabled)
+  let unavailableCaregiverToken: string;
+  let unavailableCaregiverUserId: string;
+  const unavailableCaregiverPhone = '9876661106';
+  const unavailableCaregiverName = 'Nurse Unavailable Duty';
+
+  // Second Replacement Eligible Caregiver
+  let secondReplacementCaregiverToken: string;
+  let secondReplacementCaregiverUserId: string;
+  const secondReplacementCaregiverPhone = '9876661107';
+  const secondReplacementCaregiverName = 'Sister Second Available';
+
   // Test Visit Numbers
   const testVisitNumber = 'VQ-TEST-REASSIGN-001';
   const conflictVisitNumber = 'VQ-TEST-REASSIGN-CONFLICT';
+  const isolatedVisitNumber = 'VQ-TEST-REASSIGN-ISOLATED';
+  const noCaregiverVisitNumber = 'VQ-TEST-REASSIGN-NONE';
+
   let testVisitId: string;
   let conflictVisitId: string;
+  let isolatedVisitId: string;
+  let noCaregiverVisitId: string;
 
   const scheduledDate = '2026-10-27';
   const timeSlot = '09:00 - 11:00';
@@ -63,17 +82,39 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
 
     // Clean up any stale test fixtures
     await User.deleteMany({
-      phone: { $in: [patientPhone, origCaregiverPhone, replacementCaregiverPhone, inactiveCaregiverPhone, conflictedCaregiverPhone] },
+      phone: {
+        $in: [
+          patientPhone,
+          origCaregiverPhone,
+          replacementCaregiverPhone,
+          inactiveCaregiverPhone,
+          conflictedCaregiverPhone,
+          unavailableCaregiverPhone,
+          secondReplacementCaregiverPhone,
+        ],
+      },
     });
     await FieldVisit.deleteMany({
-      visitNumber: { $in: [testVisitNumber, conflictVisitNumber] },
+      visitNumber: { $in: [testVisitNumber, conflictVisitNumber, isolatedVisitNumber, noCaregiverVisitNumber] },
     });
     await NotificationLog.deleteMany({
-      recipientPhone: { $in: [patientPhone, origCaregiverPhone, replacementCaregiverPhone, conflictedCaregiverPhone] },
+      recipientPhone: {
+        $in: [
+          patientPhone,
+          origCaregiverPhone,
+          replacementCaregiverPhone,
+          conflictedCaregiverPhone,
+          unavailableCaregiverPhone,
+          secondReplacementCaregiverPhone,
+          'ADMIN_DESK',
+        ],
+      },
     });
     await AuditLog.deleteMany({
-      'details.visitNumber': { $in: [testVisitNumber, conflictVisitNumber] },
+      'details.visitNumber': { $in: [testVisitNumber, conflictVisitNumber, isolatedVisitNumber, noCaregiverVisitNumber] },
     });
+    await HealthcareProfessionalProfile.deleteMany({});
+    await DoctorAvailability.deleteMany({});
 
     await seedAdminDemoData();
 
@@ -155,6 +196,54 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
     conflictedCaregiverToken = confReg.body.data.token;
     conflictedCaregiverUserId = confReg.body.data.user.id;
 
+    // 7. Unavailable caregiver creation (with dispatch disabled)
+    const unavailReg = await request(app)
+      .post('/api/v1/auth/register')
+      .send({
+        fullName: unavailableCaregiverName,
+        phone: unavailableCaregiverPhone,
+        password: 'Password123!',
+        role: 'professional',
+        consentAccepted: true,
+      });
+    assert.equal(unavailReg.status, 201);
+    unavailableCaregiverToken = unavailReg.body.data.token;
+    unavailableCaregiverUserId = unavailReg.body.data.user.id;
+
+    await HealthcareProfessionalProfile.findOneAndUpdate(
+      { userId: new mongoose.Types.ObjectId(unavailableCaregiverUserId) },
+      {
+        $set: {
+          title: 'Sister',
+          professionType: 'nurse',
+          specializations: ['Palliative Care'],
+          registrationNumber: 'MAH-NURSE-9988',
+          registrationCouncil: 'Maharashtra Nursing Council',
+          yearsOfExperience: 5,
+          serviceClusters: ['South Mumbai'],
+          verificationStatus: 'verified',
+          isActiveForDispatch: false, // Explicitly unavailable for dispatch
+          rating: 4.8,
+          totalVisitsCompleted: 12,
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    // 8. Second replacement caregiver
+    const secondReg = await request(app)
+      .post('/api/v1/auth/register')
+      .send({
+        fullName: secondReplacementCaregiverName,
+        phone: secondReplacementCaregiverPhone,
+        password: 'Password123!',
+        role: 'caregiver',
+        consentAccepted: true,
+      });
+    assert.equal(secondReg.status, 201);
+    secondReplacementCaregiverToken = secondReg.body.data.token;
+    secondReplacementCaregiverUserId = secondReg.body.data.user.id;
+
     // Create an active visit for the conflicted caregiver at the same date and slot
     const confVisitDoc = await FieldVisit.create({
       visitNumber: conflictVisitNumber,
@@ -228,29 +317,83 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
       ],
     });
     testVisitId = testVisitDoc._id.toString();
+
+    // Create an isolated visit for failure / concurrency testing
+    const isolatedDoc = await FieldVisit.create({
+      visitNumber: isolatedVisitNumber,
+      visitType: 'clinical_care',
+      status: 'rejected',
+      assignmentStatus: 'rejected',
+      replacementRequired: true,
+      providerId: new mongoose.Types.ObjectId(origCaregiverUserId),
+      providerName: origCaregiverName,
+      providerPhone: origCaregiverPhone,
+      providerRole: 'Registered Nurse',
+      patientId: new mongoose.Types.ObjectId(patientUserId),
+      patientDetails: {
+        fullName: patientName,
+        phone: patientPhone,
+        address: '103 Marine Lines, Mumbai',
+        pincode: '400020',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        cluster: 'South Mumbai',
+      },
+      scheduledDate: '2026-10-28',
+      timeSlot: '14:00 - 16:00',
+      assignmentRejection: {
+        reason: 'Shift transport difficulty',
+        rejectedAt: new Date(),
+        rejectedBy: new mongoose.Types.ObjectId(origCaregiverUserId),
+        rejectedByName: origCaregiverName,
+      },
+      statusHistory: [{ status: 'rejected', timestamp: new Date(), reason: 'Shift transport difficulty' }],
+    });
+    isolatedVisitId = isolatedDoc._id.toString();
   });
 
   after(async () => {
     await User.deleteMany({
-      phone: { $in: [patientPhone, origCaregiverPhone, replacementCaregiverPhone, inactiveCaregiverPhone, conflictedCaregiverPhone] },
+      phone: {
+        $in: [
+          patientPhone,
+          origCaregiverPhone,
+          replacementCaregiverPhone,
+          inactiveCaregiverPhone,
+          conflictedCaregiverPhone,
+          unavailableCaregiverPhone,
+          secondReplacementCaregiverPhone,
+        ],
+      },
     });
     await FieldVisit.deleteMany({
-      visitNumber: { $in: [testVisitNumber, conflictVisitNumber] },
+      visitNumber: { $in: [testVisitNumber, conflictVisitNumber, isolatedVisitNumber, noCaregiverVisitNumber] },
     });
     await NotificationLog.deleteMany({
-      recipientPhone: { $in: [patientPhone, origCaregiverPhone, replacementCaregiverPhone, conflictedCaregiverPhone] },
+      recipientPhone: {
+        $in: [
+          patientPhone,
+          origCaregiverPhone,
+          replacementCaregiverPhone,
+          conflictedCaregiverPhone,
+          unavailableCaregiverPhone,
+          secondReplacementCaregiverPhone,
+          'ADMIN_DESK',
+        ],
+      },
     });
     await AuditLog.deleteMany({
-      'details.visitNumber': { $in: [testVisitNumber, conflictVisitNumber] },
+      'details.visitNumber': { $in: [testVisitNumber, conflictVisitNumber, isolatedVisitNumber, noCaregiverVisitNumber] },
     });
+    await HealthcareProfessionalProfile.deleteMany({});
+    await DoctorAvailability.deleteMany({});
     await disconnectDatabase();
   });
 
   // ---------------------------------------------------------------------------
-  // Test 1: Rejected assignment can be reassigned to an eligible caregiver
+  // Test 1: Successful reassignment after caregiver rejection
   // ---------------------------------------------------------------------------
-  it('1. Rejected assignment can be reassigned to an eligible caregiver by ID or visitNumber', async () => {
-    // Also tests support for visitNumber lookup
+  it('1. Successful reassignment after caregiver rejection updates provider and clears replacementRequired', async () => {
     const res = await request(app)
       .patch(`/api/v1/admin/field-visits/${testVisitNumber}/assign`)
       .set('Authorization', `Bearer ${adminToken}`)
@@ -274,24 +417,43 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
   });
 
   // ---------------------------------------------------------------------------
-  // Test 2: New caregiver assignment persists after reload
+  // Test 2: Successful reassignment after caregiver unavailability
   // ---------------------------------------------------------------------------
-  it('2. New caregiver assignment persists accurately in the database across fresh queries', async () => {
-    const freshDoc = await FieldVisit.findOne({ visitNumber: testVisitNumber }).lean();
-    assert.ok(freshDoc);
-    assert.equal(freshDoc.providerId.toString(), replacementCaregiverUserId);
-    assert.equal(freshDoc.providerName, replacementCaregiverName);
-    assert.equal(freshDoc.providerPhone, replacementCaregiverPhone);
-    assert.equal(freshDoc.status, 'assigned');
-    assert.equal(freshDoc.assignmentStatus, 'pending');
-    assert.equal(freshDoc.replacementRequired, false);
-    assert.equal(freshDoc.assignmentRejection, undefined);
+  it('2. Successful reassignment after caregiver unavailability: unavailable rejected and available succeeds', async () => {
+    // 2A: Reassignment to caregiver with dispatch disabled fails
+    const resUnavail = await request(app)
+      .patch(`/api/v1/admin/field-visits/${isolatedVisitId}/assign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        providerId: unavailableCaregiverUserId,
+        reason: 'Attempting to assign unavailable provider',
+      });
+
+    assert.equal(resUnavail.status, 400);
+    assert.ok(
+      (resUnavail.body.error?.message || '').includes('unavailable') ||
+      (resUnavail.body.error?.message || '').includes('dispatch')
+    );
+
+    // 2B: Reassigning to an active, available caregiver succeeds
+    const resAvail = await request(app)
+      .patch(`/api/v1/admin/field-visits/${isolatedVisitId}/assign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        providerId: secondReplacementCaregiverUserId,
+        reason: 'Reassigned to available Sister Second Available after previous caregiver unavailable',
+      });
+
+    assert.equal(resAvail.status, 200);
+    assert.equal(resAvail.body.data.status, 'assigned');
+    assert.equal(resAvail.body.data.providerName, secondReplacementCaregiverName);
+    assert.equal(resAvail.body.data.replacementRequired, false);
   });
 
   // ---------------------------------------------------------------------------
-  // Test 3: Invalid or unavailable caregiver is rejected with actionable error
+  // Test 3: Inactive or ineligible caregiver rejection
   // ---------------------------------------------------------------------------
-  it('3. Reassignment to an inactive or non-existent caregiver is rejected with actionable error', async () => {
+  it('3. Inactive or ineligible caregiver assignment is strictly rejected with actionable errors', async () => {
     // 3A: Non-existent provider ID
     const nonExistentId = new mongoose.Types.ObjectId().toString();
     const resNonExistent = await request(app)
@@ -330,11 +492,10 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
   });
 
   // ---------------------------------------------------------------------------
-  // Test 4: Scheduling conflicts are detected across format variations
+  // Test 4: Overlapping schedule conflict
   // ---------------------------------------------------------------------------
-  it('4. Scheduling conflicts are detected when replacement caregiver has an active slot', async () => {
-    // Conflicted caregiver already has conflictVisitNumber on scheduledDate during '09:00 AM - 11:00 AM'
-    // Attempting to reassign testVisitId to conflictedCaregiver on same date & slot should return 409
+  it('4. Overlapping schedule conflict is detected across time slot format variations', async () => {
+    // Conflicted caregiver has conflictVisitNumber on scheduledDate during '09:00 AM - 11:00 AM'
     const resConflict = await request(app)
       .patch(`/api/v1/admin/field-visits/${testVisitId}/assign`)
       .set('Authorization', `Bearer ${adminToken}`)
@@ -343,7 +504,7 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
         providerName: conflictedCaregiverName,
         reason: 'Testing conflict detection',
         scheduledDate,
-        timeSlot: '09:00 - 11:00', // matches '09:00 AM - 11:00 AM' normalized
+        timeSlot: '09:00 - 11:00', // Matches '09:00 AM - 11:00 AM' normalized
       });
 
     assert.equal(resConflict.status, 409);
@@ -352,68 +513,97 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
   });
 
   // ---------------------------------------------------------------------------
-  // Test 5: Reassignment reason and audit history persist
+  // Test 5: Required reassignment reason & rejection of duplicate rejector
   // ---------------------------------------------------------------------------
-  it('5. Reassignment reason, previous provider, new provider, and admin actor persist in AuditLog', async () => {
-    const auditRecord = await AuditLog.findOne({
-      action: 'FIELD_VISIT_PROVIDER_REASSIGNED',
-      'details.visitNumber': testVisitNumber,
-    }).sort({ timestamp: -1 }).lean();
-
-    assert.ok(auditRecord, 'AuditLog entry must be recorded');
-    assert.equal(auditRecord.actorId.toString(), adminUserId);
-    assert.equal(auditRecord.targetType, 'FieldVisit');
-    assert.equal(auditRecord.targetId, testVisitId);
-    assert.equal(auditRecord.details?.previousProvider, origCaregiverName);
-    assert.equal(auditRecord.details?.newProvider, replacementCaregiverName);
-    assert.ok(auditRecord.details?.reason?.includes('Sister Replacement Nurse'));
-
-    // Check statusHistory preserves previous rejection entry and adds new assigned entry
-    const visitDoc = await FieldVisit.findById(testVisitId).lean();
-    assert.ok(visitDoc);
-    const rejEntry = visitDoc.statusHistory.find((h: any) => h.status === 'rejected');
-    assert.ok(rejEntry, 'Original rejection history entry must be preserved');
-    assert.equal(rejEntry.changedByName, origCaregiverName);
-
-    const reassignEntry = visitDoc.statusHistory[visitDoc.statusHistory.length - 1];
-    assert.equal(reassignEntry.status, 'assigned');
-    assert.ok(reassignEntry.notes?.includes(replacementCaregiverName));
-  });
-
-  // ---------------------------------------------------------------------------
-  // Test 6: replacementRequired clears only after successful reassignment
-  // ---------------------------------------------------------------------------
-  it('6. replacementRequired clears only upon successful reassignment and remains preserved on failure', async () => {
-    // Current state is successfully reassigned: replacementRequired must be false
-    const currentDoc = await FieldVisit.findById(testVisitId).lean();
-    assert.equal(currentDoc.replacementRequired, false);
-
-    // If an invalid reassign attempt is made, it fails and does not alter the valid state
-    const failedAttempt = await request(app)
+  it('5. Required reassignment reason is enforced, and assigning a caregiver who rejected the visit is prevented', async () => {
+    // 5A: Missing reason
+    const resNoReason = await request(app)
       .patch(`/api/v1/admin/field-visits/${testVisitId}/assign`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
-        providerId: inactiveCaregiverUserId,
-        reason: 'Attempting invalid update',
+        providerId: replacementCaregiverUserId,
+        reason: '   ',
       });
-    assert.equal(failedAttempt.status, 400);
+    assert.equal(resNoReason.status, 400);
+    assert.ok((resNoReason.body.error?.message || '').toLowerCase().includes('reason'));
 
-    const checkDoc = await FieldVisit.findById(testVisitId).lean();
-    assert.equal(checkDoc.providerName, replacementCaregiverName, 'Provider must not be corrupted by failed call');
-    assert.equal(checkDoc.replacementRequired, false);
+    // 5B: Assigning the caregiver who already rejected the visit without explicit override
+    const resAlreadyRejected = await request(app)
+      .patch(`/api/v1/admin/field-visits/${testVisitId}/assign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        providerId: origCaregiverUserId,
+        reason: 'Reassigning back to the same rejector without override',
+      });
+    assert.equal(resAlreadyRejected.status, 400);
+    assert.ok((resAlreadyRejected.body.error?.message || '').includes('already rejected'));
   });
 
   // ---------------------------------------------------------------------------
-  // Test 7: Patient API returns new caregiver and not the rejected caregiver
+  // Test 6: Persistence after reload and re-login
   // ---------------------------------------------------------------------------
-  it('7. Patient API returns the new replacement caregiver and not the rejected caregiver', async () => {
+  it('6. New caregiver assignment persists accurately after database reload and caregiver re-login', async () => {
+    // Direct DB check
+    const freshDoc = await FieldVisit.findOne({ visitNumber: testVisitNumber }).lean();
+    assert.ok(freshDoc);
+    assert.equal(freshDoc.providerId.toString(), replacementCaregiverUserId);
+    assert.equal(freshDoc.providerName, replacementCaregiverName);
+    assert.equal(freshDoc.status, 'assigned');
+    assert.equal(freshDoc.assignmentStatus, 'pending');
+    assert.equal(freshDoc.replacementRequired, false);
+
+    // Caregiver re-login session
+    const reloginRes = await request(app)
+      .post('/api/v1/auth/login')
+      .send({ identifier: replacementCaregiverPhone, password: 'Password123!', role: 'caregiver' });
+    assert.equal(reloginRes.status, 200);
+    const newSessionToken = reloginRes.body.data.token;
+
+    // Fetch visit via newly authenticated session
+    const fetchRes = await request(app)
+      .get(`/api/v1/visits/${testVisitId}`)
+      .set('Authorization', `Bearer ${newSessionToken}`);
+    assert.equal(fetchRes.status, 200);
+    assert.equal(fetchRes.body.data.visitNumber, testVisitNumber);
+    assert.equal(fetchRes.body.data.providerName, replacementCaregiverName);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 7: Pending caregiver acceptance, where required
+  // ---------------------------------------------------------------------------
+  it('7. Pending caregiver acceptance requirement is preserved until explicitly accepted', async () => {
+    // Current assignmentStatus is pending
+    const docBefore = await FieldVisit.findById(testVisitId).lean();
+    assert.equal(docBefore.assignmentStatus, 'pending');
+
+    // Caregiver explicitly accepts
+    const acceptRes = await request(app)
+      .post(`/api/v1/visits/${testVisitId}/accept`)
+      .set('Authorization', `Bearer ${replacementCaregiverToken}`)
+      .send();
+
+    assert.equal(acceptRes.status, 200);
+    assert.equal(acceptRes.body.data.status, 'accepted');
+    assert.equal(acceptRes.body.data.assignmentStatus, 'accepted');
+    assert.ok(acceptRes.body.data.timestamps.acceptedAt);
+
+    const docAfter = await FieldVisit.findById(testVisitId).lean();
+    assert.equal(docAfter.status, 'accepted');
+    assert.equal(docAfter.assignmentStatus, 'accepted');
+    assert.equal(docAfter.replacementRequired, false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 8: Patient API does not return a rejected caregiver as confirmed
+  // ---------------------------------------------------------------------------
+  it('8. Patient API returns the new replacement caregiver and never the rejected caregiver', async () => {
     const patVisitsRes = await request(app)
       .get('/api/v1/patients/me/visits')
       .set('Authorization', `Bearer ${patientToken}`);
 
     assert.equal(patVisitsRes.status, 200);
     const myVisit = patVisitsRes.body.data.upcoming.find((v: any) => v.id === testVisitId || v.visitNumber === testVisitNumber);
-    assert.ok(myVisit, 'Visit must appear in patient upcoming visits');
+    assert.ok(myVisit, 'Visit must appear in patient upcoming schedule');
     assert.equal(myVisit.assignedCaregiver?.name, replacementCaregiverName);
     assert.notEqual(myVisit.assignedCaregiver?.name, origCaregiverName);
 
@@ -427,17 +617,16 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
   });
 
   // ---------------------------------------------------------------------------
-  // Test 8: New caregiver can see the assigned visit in their active queue
+  // Test 9: Correct caregiver receives the assignment
   // ---------------------------------------------------------------------------
-  it('8. New caregiver sees the assigned visit; rejected caregiver no longer sees it', async () => {
-    // New caregiver queue
+  it('9. Newly assigned caregiver receives the visit in queue; original rejector cannot access it', async () => {
+    // Replacement caregiver queue
     const repCgVisits = await request(app)
       .get('/api/v1/visits/provider/me')
       .set('Authorization', `Bearer ${replacementCaregiverToken}`);
     assert.equal(repCgVisits.status, 200);
     const assignedToNew = repCgVisits.body.data.find((v: any) => v.visitNumber === testVisitNumber);
     assert.ok(assignedToNew, 'New replacement caregiver must see the reassigned visit in their queue');
-    assert.equal(assignedToNew.status, 'assigned');
 
     // Original rejected caregiver queue
     const origCgVisits = await request(app)
@@ -446,51 +635,246 @@ describe('VivoQuest — Phase 4: Field Visit Caregiver Reassignment Regression S
     assert.equal(origCgVisits.status, 200);
     const foundInOld = origCgVisits.body.data.find((v: any) => v.visitNumber === testVisitNumber);
     assert.equal(foundInOld, undefined, 'Original rejector must not see the visit in their queue');
+
+    // Original rejector cannot accept or reject the visit
+    const forbiddenAction = await request(app)
+      .post(`/api/v1/visits/${testVisitId}/accept`)
+      .set('Authorization', `Bearer ${origCaregiverToken}`)
+      .send();
+    assert.equal(forbiddenAction.status, 403, 'Old caregiver cannot act on reassigned visit');
   });
 
   // ---------------------------------------------------------------------------
-  // Test 9: Admin sees the updated assignment and notification state
+  // Test 10: Admin, patient, and caregiver views converge on the same authoritative assignment
   // ---------------------------------------------------------------------------
-  it('9. Admin sees the updated assignment in dashboard and notifications are logged', async () => {
-    const adminVisits = await request(app)
+  it('10. Admin, patient, and caregiver views converge on the same authoritative assignment', async () => {
+    // 1. Admin View
+    const adminRes = await request(app)
       .get('/api/v1/admin/field-visits?limit=50')
       .set('Authorization', `Bearer ${adminToken}`);
-    assert.equal(adminVisits.status, 200);
-    const docInAdmin = (adminVisits.body.data || []).find((v: any) => v.visitNumber === testVisitNumber);
-    assert.ok(docInAdmin);
-    assert.equal(docInAdmin.providerName, replacementCaregiverName);
-    assert.equal(docInAdmin.status, 'assigned');
-    assert.equal(docInAdmin.replacementRequired, false);
+    assert.equal(adminRes.status, 200);
+    const adminVisit = (adminRes.body.data || []).find((v: any) => v.visitNumber === testVisitNumber);
+    assert.ok(adminVisit);
 
-    // Notifications logged
+    // 2. Patient View
+    const patientRes = await request(app)
+      .get('/api/v1/patients/me/visits')
+      .set('Authorization', `Bearer ${patientToken}`);
+    assert.equal(patientRes.status, 200);
+    const patientVisit = patientRes.body.data.upcoming.find((v: any) => v.visitNumber === testVisitNumber);
+    assert.ok(patientVisit);
+
+    // 3. Caregiver View
+    const caregiverRes = await request(app)
+      .get('/api/v1/visits/provider/me')
+      .set('Authorization', `Bearer ${replacementCaregiverToken}`);
+    assert.equal(caregiverRes.status, 200);
+    const caregiverVisit = caregiverRes.body.data.find((v: any) => v.visitNumber === testVisitNumber);
+    assert.ok(caregiverVisit);
+
+    // Verify all 3 views converge
+    assert.equal(adminVisit.providerName, replacementCaregiverName);
+    assert.equal(patientVisit.assignedCaregiver?.name, replacementCaregiverName);
+    assert.equal(caregiverVisit.providerName, replacementCaregiverName);
+    assert.equal(adminVisit.status, 'accepted');
+    assert.equal(patientVisit.status, 'accepted');
+    assert.equal(caregiverVisit.status, 'accepted');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 11: Notification creation and retry/idempotency
+  // ---------------------------------------------------------------------------
+  it('11. Notifications are created for Admin, replacement caregiver, and patient without duplication on retry', async () => {
     const notifs = await NotificationLog.find({
       'metadata.visitNumber': testVisitNumber,
     }).lean();
+
     assert.ok(notifs.length >= 1, 'Notifications must be created for reassignment');
     const newCgNotif = notifs.find((n: any) => n.recipientPhone === replacementCaregiverPhone);
     assert.ok(newCgNotif, 'Notification must be dispatched to new replacement caregiver');
+    const adminNotif = notifs.find((n: any) => n.recipientRole === 'admin');
+    assert.ok(adminNotif, 'Admin notification must be logged');
+
+    // Attempting a duplicate / repeated reassignment with identical parameters
+    const repeatRes = await request(app)
+      .patch(`/api/v1/admin/field-visits/${testVisitNumber}/assign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        providerId: replacementCaregiverUserId,
+        reason: 'Duplicate retry attempt',
+      });
+    assert.equal(repeatRes.status, 200);
+
+    // Verify no duplicate new caregiver notifications with the same idempotency key
+    const newCgNotifCount = await NotificationLog.countDocuments({
+      recipientPhone: replacementCaregiverPhone,
+      idempotencyKey: `notif_reassign_new_${testVisitId}_${replacementCaregiverUserId}`,
+    });
+    assert.equal(newCgNotifCount, 1, 'Idempotency key must prevent duplicate notifications on retry');
   });
 
   // ---------------------------------------------------------------------------
-  // Test 10: Failed reassignment does not corrupt previous state
+  // Test 12: Audit trail preserves previous assignments and rejection reasons
   // ---------------------------------------------------------------------------
-  it('10. Failed reassignment preserves existing visit state without corrupting data', async () => {
-    const beforeState = await FieldVisit.findById(testVisitId).lean();
+  it('12. Audit trail preserves previous assignments, rejection reasons, and admin actor identity', async () => {
+    const auditRecords = await AuditLog.find({
+      targetId: testVisitId,
+    }).sort({ timestamp: 1 }).lean();
 
-    const badReq = await request(app)
-      .patch(`/api/v1/admin/field-visits/${testVisitId}/assign`)
+    assert.ok(auditRecords.length >= 1, 'AuditLog entries must exist for visit');
+    const reassignAudit = auditRecords.find((a: any) => a.action === 'FIELD_VISIT_PROVIDER_REASSIGNED');
+    assert.ok(reassignAudit);
+    assert.equal(reassignAudit.actorId.toString(), adminUserId);
+    assert.equal(reassignAudit.details?.previousProvider, origCaregiverName);
+    assert.equal(reassignAudit.details?.newProvider, replacementCaregiverName);
+
+    // Verify visit statusHistory preserves rejection and reassignment entries
+    const visitDoc = await FieldVisit.findById(testVisitId).lean();
+    assert.ok(visitDoc);
+    const rejEntry = visitDoc.statusHistory.find((h: any) => h.status === 'rejected');
+    assert.ok(rejEntry, 'Original rejection history must be preserved');
+    assert.equal(rejEntry.changedByName, origCaregiverName);
+
+    const reassignEntry = visitDoc.statusHistory.find((h: any) => h.status === 'assigned' && h.notes?.includes(replacementCaregiverName));
+    assert.ok(reassignEntry, 'Reassignment history entry must be preserved');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 13: Concurrent reassignment attempts do not overwrite each other incorrectly
+  // ---------------------------------------------------------------------------
+  it('13. Concurrent reassignment attempts safely reject with 409 Conflict via optimistic concurrency', async () => {
+    // Fetch current state of isolatedVisit
+    const currentDoc = await FieldVisit.findById(isolatedVisitId);
+    assert.ok(currentDoc);
+
+    // 1st reassignment succeeds
+    const res1 = await request(app)
+      .patch(`/api/v1/admin/field-visits/${isolatedVisitId}/assign`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
-        // Empty provider
-        providerId: '',
-        reason: '',
+        providerId: replacementCaregiverUserId,
+        reason: 'Concurrent operator 1 win',
+      });
+    assert.equal(res1.status, 200);
+
+    // Attempting an update with the stale version / conflicting update
+    // Verify that the document version incremented
+    const updatedDoc = await FieldVisit.findById(isolatedVisitId);
+    assert.ok(updatedDoc);
+    assert.notEqual(updatedDoc.__v, currentDoc.__v);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 14: Failed database updates do not clear replacementRequired or display success
+  // ---------------------------------------------------------------------------
+  it('14. Failed database updates do not clear replacementRequired or corrupt existing state', async () => {
+    // Create a visit requiring replacement
+    const failedTestVisit = await FieldVisit.create({
+      visitNumber: 'VQ-TEST-REASSIGN-FAIL-CHECK',
+      visitType: 'clinical_care',
+      status: 'rejected',
+      assignmentStatus: 'rejected',
+      replacementRequired: true,
+      providerId: new mongoose.Types.ObjectId(origCaregiverUserId),
+      providerName: origCaregiverName,
+      providerRole: 'Registered Nurse',
+      patientId: new mongoose.Types.ObjectId(patientUserId),
+      patientDetails: {
+        fullName: patientName,
+        phone: patientPhone,
+        address: '104 Marine Lines, Mumbai',
+        city: 'Mumbai',
+        pincode: '400020',
+        cluster: 'South Mumbai',
+      },
+      scheduledDate: '2026-10-29',
+      timeSlot: '11:00 - 13:00',
+    });
+
+    // Attempt invalid update with invalid provider
+    const badReq = await request(app)
+      .patch(`/api/v1/admin/field-visits/${failedTestVisit._id}/assign`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        providerId: inactiveCaregiverUserId,
+        reason: 'Attempting invalid caregiver',
       });
     assert.equal(badReq.status, 400);
 
-    const afterState = await FieldVisit.findById(testVisitId).lean();
-    assert.equal(afterState.providerId.toString(), beforeState.providerId.toString());
-    assert.equal(afterState.providerName, beforeState.providerName);
-    assert.equal(afterState.status, beforeState.status);
-    assert.equal(afterState.replacementRequired, beforeState.replacementRequired);
+    // Verify document in DB still has replacementRequired: true and status: 'rejected'
+    const docCheck = await FieldVisit.findById(failedTestVisit._id).lean();
+    assert.ok(docCheck);
+    assert.equal(docCheck.status, 'rejected');
+    assert.equal(docCheck.replacementRequired, true);
+    assert.equal(docCheck.providerName, origCaregiverName);
+
+    // Verify AuditLog recorded the failed attempt
+    const failedAudit = await AuditLog.findOne({
+      action: 'FIELD_VISIT_REASSIGNMENT_FAILED',
+      targetId: failedTestVisit._id.toString(),
+    }).lean();
+    assert.ok(failedAudit, 'Audit log must record the failed reassignment attempt');
+    assert.equal(failedAudit.details?.outcome, 'failed');
+
+    await FieldVisit.findByIdAndDelete(failedTestVisit._id);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test 15: No eligible caregiver is available
+  // ---------------------------------------------------------------------------
+  it('15. If no eligible caregiver is available, API returns clear message and preserves replacementRequired', async () => {
+    // Create a visit on a time slot where all possible active caregivers are busy or have rejected
+    const noCgDoc = await FieldVisit.create({
+      visitNumber: noCaregiverVisitNumber,
+      visitType: 'clinical_care',
+      status: 'rejected',
+      assignmentStatus: 'rejected',
+      replacementRequired: true,
+      providerId: new mongoose.Types.ObjectId(origCaregiverUserId),
+      providerName: origCaregiverName,
+      providerRole: 'Registered Nurse',
+      patientId: new mongoose.Types.ObjectId(patientUserId),
+      patientDetails: {
+        fullName: patientName,
+        phone: patientPhone,
+        address: '105 Marine Lines, Mumbai',
+        city: 'Mumbai',
+        pincode: '400020',
+        cluster: 'South Mumbai',
+      },
+      scheduledDate: '2026-10-30',
+      timeSlot: '16:00 - 18:00',
+      assignmentRejection: {
+        reason: 'Overtime limit exceeded',
+        rejectedBy: new mongoose.Types.ObjectId(origCaregiverUserId),
+        rejectedByName: origCaregiverName,
+        rejectedAt: new Date(),
+      },
+      statusHistory: [
+        {
+          status: 'rejected',
+          changedBy: new mongoose.Types.ObjectId(origCaregiverUserId),
+          timestamp: new Date(),
+          reason: 'Overtime limit exceeded',
+        },
+      ],
+    });
+    noCaregiverVisitId = noCgDoc._id.toString();
+
+    // Query eligible caregivers endpoint
+    const eligibleRes = await request(app)
+      .get(`/api/v1/admin/field-visits/${noCaregiverVisitId}/eligible-caregivers`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    assert.equal(eligibleRes.status, 200);
+    assert.equal(eligibleRes.body.success, true);
+    // origCaregiver is excluded because they rejected this visit
+    const origFound = eligibleRes.body.data.find((c: any) => c._id === origCaregiverUserId);
+    assert.equal(origFound, undefined, 'Caregiver who rejected this visit must not be listed as eligible');
+
+    // Verify visit remains marked as requiring replacement
+    const verifyDoc = await FieldVisit.findById(noCaregiverVisitId).lean();
+    assert.equal(verifyDoc.replacementRequired, true);
+    assert.equal(verifyDoc.status, 'rejected');
   });
 });

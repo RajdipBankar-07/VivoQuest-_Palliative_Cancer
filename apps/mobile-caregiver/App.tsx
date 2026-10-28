@@ -29,6 +29,9 @@ import {
   AssignedPatient,
   FieldVisitStatus,
   VisitRescheduleRequest,
+  FullProfessionalProfileResponse,
+  ProfessionalCredential,
+  HealthcareProfileData,
 } from './src/types';
 
 export default function CaregiverApp() {
@@ -78,6 +81,34 @@ export default function CaregiverApp() {
   ]);
   const [submittingReport, setSubmittingReport] = useState(false);
   const [reportSuccessMsg, setReportSuccessMsg] = useState<string | null>(null);
+
+  // Phase 13: Healthcare Professional Profile & Credentials State
+  const [profileData, setProfileData] = useState<FullProfessionalProfileResponse | null>(null);
+  const [isLoadingProfile, setIsLoadingProfile] = useState<boolean>(false);
+  const [profileActionLoading, setProfileActionLoading] = useState<boolean>(false);
+  const [profileBannerError, setProfileBannerError] = useState<string | null>(null);
+  const [profileBannerSuccess, setProfileBannerSuccess] = useState<string | null>(null);
+
+  // Edit Profile Modal State
+  const [isEditProfileModalOpen, setIsEditProfileModalOpen] = useState<boolean>(false);
+  const [editFullName, setEditFullName] = useState<string>('');
+  const [editEmail, setEditEmail] = useState<string>('');
+  const [editTitle, setEditTitle] = useState<string>('');
+  const [editHighestQual, setEditHighestQual] = useState<string>('');
+  const [editInstitution, setEditInstitution] = useState<string>('');
+  const [editSpecialization, setEditSpecialization] = useState<string>('');
+  const [editYearsExp, setEditYearsExp] = useState<string>('3');
+  const [editExpSummary, setEditExpSummary] = useState<string>('');
+  const [editSkills, setEditSkills] = useState<string>('');
+  const [editBio, setEditBio] = useState<string>('');
+
+  // Add Credential Modal State
+  const [isAddCredModalOpen, setIsAddCredModalOpen] = useState<boolean>(false);
+  const [newCertTitle, setNewCertTitle] = useState<string>('');
+  const [newIssuingOrg, setNewIssuingOrg] = useState<string>('');
+  const [newCredCategory, setNewCredCategory] = useState<string>('');
+  const [newDocNumber, setNewDocNumber] = useState<string>('');
+  const [newDocType, setNewDocType] = useState<string>('other_certification');
 
   // ---------------------------------------------------------------------------
   // 1. Session Bootstrap & 401 Listener Setup
@@ -175,17 +206,159 @@ export default function CaregiverApp() {
     }
   }, [userSession]);
 
+  const loadProfile = useCallback(async () => {
+    if (!userSession) return;
+    setIsLoadingProfile(true);
+    try {
+      const data = await caregiverApi.getProfessionalProfile();
+      if (data) {
+        setProfileData(data);
+        setEditFullName(data.user?.fullName || '');
+        setEditEmail(data.user?.email || '');
+        setEditTitle(data.profile?.title || '');
+        setEditHighestQual(data.profile?.highestQualification || '');
+        setEditInstitution(data.profile?.institution || '');
+        setEditSpecialization(data.profile?.specializations?.join(', ') || '');
+        setEditYearsExp(String(data.profile?.yearsOfExperience ?? 3));
+        setEditExpSummary(data.profile?.experienceSummary || '');
+        setEditSkills(data.profile?.skills?.join(', ') || '');
+        setEditBio(data.profile?.bio || '');
+      }
+    } catch (err: any) {
+      if (!(err instanceof SessionExpiredError)) {
+        console.warn('[CaregiverApp] Error fetching professional profile:', err.message);
+      }
+    } finally {
+      setIsLoadingProfile(false);
+    }
+  }, [userSession]);
+
+  const handleOpenEditProfile = () => {
+    if (profileData) {
+      setEditFullName(profileData.user?.fullName || '');
+      setEditEmail(profileData.user?.email || '');
+      setEditTitle(profileData.profile?.title || '');
+      setEditHighestQual(profileData.profile?.highestQualification || '');
+      setEditInstitution(profileData.profile?.institution || '');
+      setEditSpecialization(profileData.profile?.specializations?.join(', ') || '');
+      setEditYearsExp(String(profileData.profile?.yearsOfExperience ?? 3));
+      setEditExpSummary(profileData.profile?.experienceSummary || '');
+      setEditSkills(profileData.profile?.skills?.join(', ') || '');
+      setEditBio(profileData.profile?.bio || '');
+    }
+    setProfileBannerError(null);
+    setProfileBannerSuccess(null);
+    setIsEditProfileModalOpen(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!editFullName.trim()) {
+      setProfileBannerError('Full legal name is required.');
+      return;
+    }
+
+    setProfileActionLoading(true);
+    setProfileBannerError(null);
+    try {
+      const payload: any = {
+        fullName: editFullName.trim(),
+        email: editEmail.trim() || undefined,
+        title: editTitle.trim() || undefined,
+        highestQualification: editHighestQual.trim(),
+        institution: editInstitution.trim(),
+        specializations: editSpecialization
+          ? editSpecialization.split(',').map((s) => s.trim()).filter(Boolean)
+          : [],
+        yearsOfExperience: parseInt(editYearsExp, 10) || 0,
+        experienceSummary: editExpSummary.trim(),
+        skills: editSkills
+          ? editSkills.split(',').map((s) => s.trim()).filter(Boolean)
+          : [],
+        bio: editBio.trim(),
+      };
+
+      await caregiverApi.updateProfessionalProfile(payload);
+      setProfileBannerSuccess('Profile details saved successfully.');
+      setIsEditProfileModalOpen(false);
+      await loadProfile();
+    } catch (err: any) {
+      setProfileBannerError(err.message || 'Failed to update professional profile.');
+    } finally {
+      setProfileActionLoading(false);
+    }
+  };
+
+  const handleAddCredential = async () => {
+    if (!newCertTitle.trim()) {
+      setProfileBannerError('Certificate title is required.');
+      return;
+    }
+    if (!newIssuingOrg.trim()) {
+      setProfileBannerError('Issuing authority or organization is required.');
+      return;
+    }
+
+    setProfileActionLoading(true);
+    setProfileBannerError(null);
+    try {
+      await caregiverApi.addCredential({
+        certificateTitle: newCertTitle.trim(),
+        issuingAuthority: newIssuingOrg.trim(),
+        issuingOrganization: newIssuingOrg.trim(),
+        credentialCategory: newCredCategory.trim() || 'Professional Certificate',
+        documentNumber: newDocNumber.trim() || 'N/A',
+        documentType: newDocType,
+      });
+
+      setProfileBannerSuccess('Certification submitted for Admin verification.');
+      setIsAddCredModalOpen(false);
+      setNewCertTitle('');
+      setNewIssuingOrg('');
+      setNewCredCategory('');
+      setNewDocNumber('');
+      await loadProfile();
+    } catch (err: any) {
+      setProfileBannerError(err.message || 'Failed to add certification.');
+    } finally {
+      setProfileActionLoading(false);
+    }
+  };
+
+  const handleDeleteCredential = async (credId: string, title?: string) => {
+    Alert.alert(
+      'Remove Certification',
+      `Are you sure you want to remove "${title || 'this certificate'}" from your profile?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await caregiverApi.deleteCredential(credId);
+              setProfileBannerSuccess('Certification removed.');
+              await loadProfile();
+            } catch (err: any) {
+              Alert.alert('Removal Failed', err.message || 'Could not remove certificate.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   useEffect(() => {
     if (userSession) {
       loadVisits();
       loadPatients();
       loadRescheduleRequests();
+      loadProfile();
     }
-  }, [userSession, loadVisits, loadPatients, loadRescheduleRequests]);
+  }, [userSession, loadVisits, loadPatients, loadRescheduleRequests, loadProfile]);
 
   const onRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([loadVisits(), loadPatients(), loadRescheduleRequests()]);
+    await Promise.all([loadVisits(), loadPatients(), loadRescheduleRequests(), loadProfile()]);
     setIsRefreshing(false);
   };
 
@@ -1206,33 +1379,277 @@ export default function CaregiverApp() {
         {/* ================= TAB 4: PROFILE ================= */}
         {activeTab === 'profile' && (
           <View>
-            <Text style={styles.sectionTitle}>Clinician Profile & Credentials</Text>
+            <View style={styles.cardRowBetween}>
+              <View>
+                <Text style={styles.sectionTitle}>My Professional Profile</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Qualifications, certificates, and clinical settings
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.editProfileTopBtn}
+                onPress={handleOpenEditProfile}
+              >
+                <Text style={styles.editProfileTopBtnText}>✏️ Edit</Text>
+              </TouchableOpacity>
+            </View>
 
+            {profileBannerSuccess && (
+              <View style={styles.profileSuccessBanner}>
+                <Text style={styles.profileSuccessBannerText}>✓ {profileBannerSuccess}</Text>
+              </View>
+            )}
+
+            {profileBannerError && (
+              <View style={styles.profileErrorBanner}>
+                <Text style={styles.profileErrorBannerText}>⚠️ {profileBannerError}</Text>
+              </View>
+            )}
+
+            {/* Profile Completion Indicator */}
+            {profileData?.completion && (
+              <View style={styles.completionCard}>
+                <View style={styles.cardRowBetween}>
+                  <Text style={styles.completionHeading}>Profile Completion</Text>
+                  <Text style={styles.completionPercentText}>
+                    {profileData.completion.percentage}%
+                  </Text>
+                </View>
+
+                {/* Progress Bar */}
+                <View style={styles.progressBarTrack}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        width: `${Math.max(5, profileData.completion.percentage)}%`,
+                        backgroundColor:
+                          profileData.completion.percentage >= 80 ? '#10b981' : '#f59e0b',
+                      },
+                    ]}
+                  />
+                </View>
+
+                {profileData.completion.missingFields && profileData.completion.missingFields.length > 0 ? (
+                  <Text style={styles.completionMissingText}>
+                    Pending details: {profileData.completion.missingFields.join(', ')}
+                  </Text>
+                ) : (
+                  <Text style={styles.completionCompleteText}>
+                    ✓ Your professional profile is fully completed and up-to-date.
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {/* 1. Basic Identity Card */}
             <View style={styles.card}>
-              <Text style={styles.profileLabel}>Clinician Full Name</Text>
-              <Text style={styles.profileValue}>{userSession.fullName}</Text>
-
-              <Text style={styles.profileLabel}>Designated Role</Text>
-              <Text style={styles.profileValue}>{userSession.role.toUpperCase()}</Text>
-
-              <Text style={styles.profileLabel}>Registered Mobile</Text>
-              <Text style={styles.profileValue}>+91 {userSession.phone}</Text>
-
-              {userSession.email ? (
-                <>
-                  <Text style={styles.profileLabel}>Email Address</Text>
-                  <Text style={styles.profileValue}>{userSession.email}</Text>
-                </>
-              ) : null}
-
-              <Text style={styles.profileLabel}>Account Status</Text>
-              <Text style={[styles.profileValue, { color: '#059669' }]}>
-                {userSession.status.toUpperCase()}
-              </Text>
+              <View style={styles.cardHeaderRow}>
+                <View style={styles.profAvatarCircle}>
+                  <Text style={styles.profAvatarText}>
+                    {(userSession.fullName || 'CP')
+                      .split(' ')
+                      .map((n) => n[0])
+                      .slice(0, 2)
+                      .join('')
+                      .toUpperCase()}
+                  </Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.profHeaderName}>
+                    {profileData?.profile?.title ? `${profileData.profile.title} ` : ''}
+                    {userSession.fullName}
+                  </Text>
+                  <Text style={styles.profHeaderRole}>
+                    {(profileData?.profile?.professionType || userSession.role).toUpperCase()}
+                  </Text>
+                  <View style={styles.profStatusBadgeRow}>
+                    <View
+                      style={[
+                        styles.profStatusBadge,
+                        profileData?.profile?.verificationStatus === 'verified'
+                          ? styles.badgeVerified
+                          : profileData?.profile?.verificationStatus === 'rejected'
+                          ? styles.badgeRejected
+                          : styles.badgePending,
+                      ]}
+                    >
+                      <Text style={styles.profStatusBadgeText}>
+                        {profileData?.profile?.verificationStatus === 'verified'
+                          ? '● Verified by Admin'
+                          : profileData?.profile?.verificationStatus === 'rejected'
+                          ? '✕ Verification Rejected'
+                          : '⏳ Pending Admin Review'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
 
               <View style={styles.divider} />
 
-              <Text style={styles.profileLabel}>Secure Storage Engine</Text>
+              <Text style={styles.profileLabel}>Registered Mobile (Source of Truth)</Text>
+              <Text style={styles.profileValue}>+91 {userSession.phone}</Text>
+
+              <Text style={styles.profileLabel}>Email Address</Text>
+              <Text style={styles.profileValue}>
+                {userSession.email || 'Not provided (optional)'}
+              </Text>
+
+              <Text style={styles.profileLabel}>Account Status</Text>
+              <Text style={[styles.profileValue, { color: '#059669', fontWeight: '800' }]}>
+                {userSession.status.toUpperCase()}
+              </Text>
+            </View>
+
+            {/* 2. Professional Qualifications Card */}
+            <View style={styles.card}>
+              <Text style={styles.cardSectionTitle}>Professional Qualifications</Text>
+
+              <Text style={styles.profileLabel}>Highest Qualification / Degree</Text>
+              <Text style={styles.profileValueHighlight}>
+                {profileData?.profile?.highestQualification || 'Not specified (tap Edit to add)'}
+              </Text>
+
+              <Text style={styles.profileLabel}>Institution / University</Text>
+              <Text style={styles.profileValue}>
+                {profileData?.profile?.institution || 'Not specified'}
+              </Text>
+
+              <Text style={styles.profileLabel}>Primary Specialization</Text>
+              <Text style={styles.profileValue}>
+                {profileData?.profile?.specializations && profileData.profile.specializations.length > 0
+                  ? profileData.profile.specializations.join(', ')
+                  : 'General Palliative Care'}
+              </Text>
+
+              <Text style={styles.profileLabel}>Total Years of Clinical Experience</Text>
+              <Text style={styles.profileValue}>
+                {profileData?.profile?.yearsOfExperience !== undefined
+                  ? `${profileData.profile.yearsOfExperience} Years`
+                  : 'Not specified'}
+              </Text>
+
+              {profileData?.profile?.skills && profileData.profile.skills.length > 0 ? (
+                <>
+                  <Text style={styles.profileLabel}>Skills & Clinical Competencies</Text>
+                  <View style={styles.skillsChipRow}>
+                    {profileData.profile.skills.map((skill, idx) => (
+                      <View key={idx} style={styles.skillChip}>
+                        <Text style={styles.skillChipText}>✓ {skill}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </>
+              ) : null}
+
+              {profileData?.profile?.experienceSummary ? (
+                <>
+                  <Text style={styles.profileLabel}>Experience Summary</Text>
+                  <Text style={styles.profileValueBio}>"{profileData.profile.experienceSummary}"</Text>
+                </>
+              ) : null}
+            </View>
+
+            {/* 3. Certifications & Credentials Card */}
+            <View style={styles.card}>
+              <View style={styles.cardRowBetween}>
+                <View>
+                  <Text style={styles.cardSectionTitle}>Certifications & Credentials</Text>
+                  <Text style={styles.cardSubtext}>
+                    {profileData?.credentials?.length || 0} documented credential(s)
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.addCredBtn}
+                  onPress={() => {
+                    setProfileBannerError(null);
+                    setProfileBannerSuccess(null);
+                    setIsAddCredModalOpen(true);
+                  }}
+                >
+                  <Text style={styles.addCredBtnText}>➕ Add Credential</Text>
+                </TouchableOpacity>
+              </View>
+
+              {profileData?.credentials && profileData.credentials.length > 0 ? (
+                profileData.credentials.map((cred) => (
+                  <View key={cred.id || (cred as any)._id} style={styles.credItemBox}>
+                    <View style={styles.cardRowBetween}>
+                      <Text style={styles.credItemTitle}>
+                        {cred.certificateTitle || cred.documentType.replace(/_/g, ' ').toUpperCase()}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.credDeleteBtn}
+                        onPress={() => handleDeleteCredential(cred.id || (cred as any)._id, cred.certificateTitle)}
+                      >
+                        <Text style={styles.credDeleteBtnText}>🗑️</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <Text style={styles.credAuthorityText}>
+                      Issuing Authority: {cred.issuingOrganization || cred.issuingAuthority}
+                    </Text>
+
+                    {cred.credentialCategory ? (
+                      <Text style={styles.credCategoryText}>
+                        Category: {cred.credentialCategory}
+                      </Text>
+                    ) : null}
+
+                    {cred.documentNumber && cred.documentNumber !== 'N/A' ? (
+                      <Text style={styles.credDocNumberText}>
+                        Ref #: {cred.documentNumber}
+                      </Text>
+                    ) : null}
+
+                    {/* Verification Status Pill */}
+                    <View style={styles.credStatusRow}>
+                      <View
+                        style={[
+                          styles.credStatusPill,
+                          cred.verificationStatus === 'verified' || cred.verificationStatus === 'approved'
+                            ? styles.credVerifiedPill
+                            : cred.verificationStatus === 'rejected'
+                            ? styles.credRejectedPill
+                            : styles.credPendingPill,
+                        ]}
+                      >
+                        <Text style={styles.credStatusPillText}>
+                          {cred.verificationStatus === 'verified' || cred.verificationStatus === 'approved'
+                            ? '● Verified by Admin'
+                            : cred.verificationStatus === 'rejected'
+                            ? '✕ Rejected'
+                            : '⏳ Verification Pending'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Rejection Reason (Admin feedback) */}
+                    {cred.verificationStatus === 'rejected' && cred.rejectionReason ? (
+                      <View style={styles.rejectionReasonBanner}>
+                        <Text style={styles.rejectionReasonTitle}>Admin Rejection Reason:</Text>
+                        <Text style={styles.rejectionReasonBody}>"{cred.rejectionReason}"</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                ))
+              ) : (
+                <View style={styles.emptyCredBox}>
+                  <Text style={styles.emptyCredIcon}>📜</Text>
+                  <Text style={styles.emptyCredTitle}>No Certificates Added Yet</Text>
+                  <Text style={styles.emptyCredSubtext}>
+                    Certificates are optional. Add degrees, state council registrations, or training certificates anytime.
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* 4. App Security & Settings */}
+            <View style={styles.card}>
+              <Text style={styles.cardSectionTitle}>Application & Security Settings</Text>
+
+              <Text style={styles.profileLabel}>Secure Credential Storage Engine</Text>
               <Text style={styles.profileValue}>
                 {storageType === 'hardware_secure_store'
                   ? '🔒 Hardware Keystore / Keychain (expo-secure-store)'
@@ -1241,12 +1658,13 @@ export default function CaregiverApp() {
 
               <Text style={styles.profileLabel}>Connected API Endpoint</Text>
               <Text style={styles.profileValue}>{getMobileApiBaseUrl()}</Text>
-            </View>
 
-            {/* Logout Button */}
-            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-              <Text style={styles.logoutButtonText}>Conclude Shift & Sign Out</Text>
-            </TouchableOpacity>
+              <View style={styles.divider} />
+
+              <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+                <Text style={styles.logoutButtonText}>Conclude Shift & Sign Out</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
       </ScrollView>
@@ -1408,6 +1826,240 @@ export default function CaregiverApp() {
                 )}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Phase 13: Edit Profile Modal */}
+      <Modal
+        visible={isEditProfileModalOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsEditProfileModalOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
+            <View style={styles.cardRowBetween}>
+              <Text style={styles.modalTitle}>Edit Professional Profile</Text>
+              <TouchableOpacity onPress={() => setIsEditProfileModalOpen(false)}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalInstructionText}>
+                Update your professional qualifications and practice details. If verified qualifications change, verification status will be re-evaluated by clinical administration.
+              </Text>
+
+              {profileBannerError && (
+                <View style={styles.profileErrorBanner}>
+                  <Text style={styles.profileErrorBannerText}>⚠️ {profileBannerError}</Text>
+                </View>
+              )}
+
+              <Text style={styles.inputModalLabel}>Full Legal Name *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editFullName}
+                onChangeText={setEditFullName}
+                placeholder="Full Legal Name"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Email Address</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editEmail}
+                onChangeText={setEditEmail}
+                placeholder="name@organization.com"
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+
+              <Text style={styles.inputModalLabel}>Professional Title Prefix</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editTitle}
+                onChangeText={setEditTitle}
+                placeholder="e.g., Dr., Sister, Nurse, Caregiver"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Highest Qualification / Degree</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editHighestQual}
+                onChangeText={setEditHighestQual}
+                placeholder="e.g., MBBS, B.Sc Nursing, GNM, Certified Aide"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Institution or Awarding Organization</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editInstitution}
+                onChangeText={setEditInstitution}
+                placeholder="e.g., Maharashtra Nursing Council / MUHS"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Specialization(s) (Comma separated)</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editSpecialization}
+                onChangeText={setEditSpecialization}
+                placeholder="e.g., Palliative Oncology, Wound Care, Geriatrics"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Years of Clinical Experience</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editYearsExp}
+                onChangeText={setEditYearsExp}
+                placeholder="e.g., 4"
+                placeholderTextColor="#94a3b8"
+                keyboardType="numeric"
+              />
+
+              <Text style={styles.inputModalLabel}>Skills & Clinical Competencies (Comma separated)</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editSkills}
+                onChangeText={setEditSkills}
+                placeholder="e.g., Catheterization, Vitals, Pain Scale, Tracheostomy"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Experience Summary</Text>
+              <TextInput
+                style={[styles.modalTextInput, { minHeight: 60, textAlignVertical: 'top' }]}
+                value={editExpSummary}
+                onChangeText={setEditExpSummary}
+                placeholder="Brief summary of clinical or caregiving background..."
+                placeholderTextColor="#94a3b8"
+                multiline
+                numberOfLines={3}
+              />
+
+              <View style={styles.modalActionButtons}>
+                <TouchableOpacity
+                  style={styles.modalCancelButton}
+                  onPress={() => setIsEditProfileModalOpen(false)}
+                  disabled={profileActionLoading}
+                >
+                  <Text style={styles.modalCancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.modalSaveButton}
+                  onPress={handleSaveProfile}
+                  disabled={profileActionLoading}
+                >
+                  {profileActionLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.modalSaveButtonText}>Save Changes</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Phase 13: Add Credential Modal */}
+      <Modal
+        visible={isAddCredModalOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsAddCredModalOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '85%' }]}>
+            <View style={styles.cardRowBetween}>
+              <Text style={styles.modalTitle}>Add Certification or Degree</Text>
+              <TouchableOpacity onPress={() => setIsAddCredModalOpen(false)}>
+                <Text style={styles.modalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalInstructionText}>
+                Submit your credential for authorized clinical verification. All certifications remain optional.
+              </Text>
+
+              {profileBannerError && (
+                <View style={styles.profileErrorBanner}>
+                  <Text style={styles.profileErrorBannerText}>⚠️ {profileBannerError}</Text>
+                </View>
+              )}
+
+              <Text style={styles.inputModalLabel}>Certificate or Degree Title *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={newCertTitle}
+                onChangeText={setNewCertTitle}
+                placeholder="e.g., Basic Life Support (BLS) / GNM License"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Issuing Organization / Authority *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={newIssuingOrg}
+                onChangeText={setNewIssuingOrg}
+                placeholder="e.g., Indian Red Cross / Maharashtra Nursing Council"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Credential Category</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={newCredCategory}
+                onChangeText={setNewCredCategory}
+                placeholder="e.g., State Council License / Training Certificate"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <Text style={styles.inputModalLabel}>Document / Registration Reference # (Optional)</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={newDocNumber}
+                onChangeText={setNewDocNumber}
+                placeholder="e.g., MNC-2024-8849"
+                placeholderTextColor="#94a3b8"
+              />
+
+              <View style={styles.securityNoticeBox}>
+                <Text style={styles.securityNoticeBoxText}>
+                  🛡️ Verification Status: Submitted credentials are filed with Pending review status. Verification is performed by authorized Admin reviewers.
+                </Text>
+              </View>
+
+              <View style={styles.modalActionButtons}>
+                <TouchableOpacity
+                  style={styles.modalCancelButton}
+                  onPress={() => setIsAddCredModalOpen(false)}
+                  disabled={profileActionLoading}
+                >
+                  <Text style={styles.modalCancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.modalSaveButton}
+                  onPress={handleAddCredential}
+                  disabled={profileActionLoading}
+                >
+                  {profileActionLoading ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.modalSaveButtonText}>Submit Credential</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -2116,5 +2768,339 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#0f172a',
+  },
+  // Phase 13 Profile Styles
+  sectionSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  cardSectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  cardSubtext: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  editProfileTopBtn: {
+    backgroundColor: '#0284c7',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  editProfileTopBtnText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  profileSuccessBanner: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderLeftWidth: 4,
+    borderLeftColor: '#10b981',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  profileSuccessBannerText: {
+    color: '#065f46',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  profileErrorBanner: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderLeftWidth: 4,
+    borderLeftColor: '#ef4444',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  profileErrorBannerText: {
+    color: '#991b1b',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  completionCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  completionHeading: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  completionPercentText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0284c7',
+  },
+  progressBarTrack: {
+    height: 8,
+    backgroundColor: '#e2e8f0',
+    borderRadius: 4,
+    marginVertical: 8,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  completionMissingText: {
+    fontSize: 11,
+    color: '#d97706',
+    fontWeight: '600',
+  },
+  completionCompleteText: {
+    fontSize: 11,
+    color: '#059669',
+    fontWeight: '700',
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  profAvatarCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#0284c7',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profAvatarText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  profHeaderName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  profHeaderRole: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+    marginTop: 2,
+  },
+  profStatusBadgeRow: {
+    flexDirection: 'row',
+    marginTop: 4,
+  },
+  profStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  badgeVerified: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+  },
+  badgeRejected: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+  },
+  badgePending: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+  },
+  profStatusBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  profileValueHighlight: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0284c7',
+    marginBottom: 8,
+  },
+  profileValueBio: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    color: '#475569',
+    lineHeight: 18,
+    marginBottom: 8,
+  },
+  skillsChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+    marginTop: 2,
+  },
+  skillChip: {
+    backgroundColor: 'rgba(2, 132, 199, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(2, 132, 199, 0.3)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  skillChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0369a1',
+  },
+  addCredBtn: {
+    backgroundColor: '#059669',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  addCredBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  credItemBox: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    marginBottom: 10,
+  },
+  credItemTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0f172a',
+    flex: 1,
+  },
+  credDeleteBtn: {
+    padding: 4,
+  },
+  credDeleteBtnText: {
+    fontSize: 14,
+  },
+  credAuthorityText: {
+    fontSize: 11,
+    color: '#475569',
+    marginTop: 2,
+  },
+  credCategoryText: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  credDocNumberText: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  credStatusRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+  },
+  credStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  credVerifiedPill: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+  },
+  credRejectedPill: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+  },
+  credPendingPill: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+  },
+  credStatusPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  rejectionReasonBanner: {
+    backgroundColor: '#fff1f2',
+    borderLeftWidth: 3,
+    borderLeftColor: '#e11d48',
+    padding: 8,
+    borderRadius: 6,
+    marginTop: 8,
+  },
+  rejectionReasonTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#9f1239',
+  },
+  rejectionReasonBody: {
+    fontSize: 11,
+    color: '#be123c',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  emptyCredBox: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  emptyCredIcon: {
+    fontSize: 28,
+    marginBottom: 6,
+  },
+  emptyCredTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  emptyCredSubtext: {
+    fontSize: 11,
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: 4,
+    paddingHorizontal: 16,
+  },
+  inputModalLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 4,
+    marginTop: 10,
+    textTransform: 'uppercase',
+  },
+  modalTextInput: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0f172a',
+  },
+  modalSaveButton: {
+    flex: 1.5,
+    backgroundColor: '#0284c7',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalSaveButtonText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  securityNoticeBox: {
+    backgroundColor: '#f1f5f9',
+    padding: 10,
+    borderRadius: 8,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  securityNoticeBoxText: {
+    fontSize: 11,
+    color: '#475569',
+    lineHeight: 16,
   },
 });

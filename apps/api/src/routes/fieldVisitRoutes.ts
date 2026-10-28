@@ -19,7 +19,8 @@ import {
   scheduleVisitForSubscription,
   hideProviderFieldVisit,
 } from '../services/fieldOperationsService.js';
-import { getCaregiverAssignedPatients, deleteOrHideCareReport } from '../services/patientService.js';
+import { getCaregiverAssignedPatients, deleteOrHideCareReport, getPhoneVariants } from '../services/patientService.js';
+import { NotificationLog } from '../models/NotificationLog.js';
 import {
   getPendingRescheduleRequestsForApprover,
   approveRescheduleRequest,
@@ -729,6 +730,97 @@ router.post(
         success: true,
         message: 'Visit scheduled and confirmed successfully',
         data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/visits/provider/me/notifications
+ * Healthcare provider operational notifications feed with strict isolation
+ */
+router.get(
+  '/provider/me/notifications',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const phoneVariants = getPhoneVariants(user.phone);
+      const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+      const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 20));
+      const skip = (page - 1) * limit;
+
+      const query: any = {
+        recipientPhone: { $in: phoneVariants },
+      };
+
+      if (req.query.unreadOnly === 'true') {
+        query.isRead = { $ne: true };
+      }
+
+      const [notifications, total, unreadCount] = await Promise.all([
+        NotificationLog.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+        NotificationLog.countDocuments(query),
+        NotificationLog.countDocuments({ recipientPhone: { $in: phoneVariants }, isRead: { $ne: true } }),
+      ]);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          notifications,
+          unreadCount,
+          pagination: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit) || 1,
+          },
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/visits/provider/me/notifications/:id/read
+ * Mark provider notification as read with strict authorization
+ */
+router.patch(
+  '/provider/me/notifications/:id/read',
+  authenticateUser,
+  requireRole(['professional', 'caregiver', 'admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const user = req.user!;
+      const phoneVariants = getPhoneVariants(user.phone);
+
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        throw new AppError('Invalid notification identifier', 400);
+      }
+
+      const notif = await NotificationLog.findById(req.params.id);
+      if (!notif) {
+        throw new AppError('Notification not found', 404);
+      }
+
+      // Strict recipient isolation
+      if (!phoneVariants.includes(notif.recipientPhone) && !['admin', 'super_admin'].includes(user.role)) {
+        throw new AppError('Forbidden: You are not authorized to access this notification', 403);
+      }
+
+      notif.isRead = true;
+      notif.readAt = new Date();
+      await notif.save();
+
+      res.status(200).json({
+        success: true,
+        message: 'Notification marked as read',
+        data: notif,
       });
     } catch (error) {
       next(error);

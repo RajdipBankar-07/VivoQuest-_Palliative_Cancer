@@ -1,5 +1,7 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import { env } from './config/environment.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { healthRoutes } from './routes/healthRoutes.js';
@@ -16,11 +18,24 @@ import { adminRoutes } from './routes/adminRoutes.js';
 import { productRoutes } from './routes/productRoutes.js';
 import { fieldVisitRoutes } from './routes/fieldVisitRoutes.js';
 import { patientRoutes } from './routes/patientRoutes.js';
+import { professionalRoutes } from './routes/professionalRoutes.js';
+import { supplierPortalRoutes } from './routes/supplierPortalRoutes.js';
+import { adminMarketplaceRoutes } from './routes/adminMarketplaceRoutes.js';
+import { financeRouter } from './routes/financeRoutes.js';
+
+import { securityHeaders } from './middleware/securityHeaders.js';
+import { mongoSanitize } from './middleware/mongoSanitize.js';
 
 export const createApp = (): Express => {
   const app = express();
 
-  // 1. Security & CORS
+  // Disable server identification fingerprint
+  app.disable('x-powered-by');
+
+  // 1. HTTP Security Headers
+  app.use(securityHeaders);
+
+  // 2. Security & CORS
   const corsOptions: cors.CorsOptions = {
     origin: (origin, callback) => {
       // Allow requests with no origin (mobile native apps, curl, Postman, server-to-server)
@@ -70,12 +85,15 @@ export const createApp = (): Express => {
   app.options('*', cors(corsOptions));
 
 
-  // 2. Request Parsers
+  // 3. Request Parsers & Input Sanitization
   // Large files are uploaded directly to S3 via presigned URLs; small JSON limit protects against DoS
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-  // 3. Sanitized Request Logging
+  // Prevent NoSQL / MongoDB operator injection across body, query, and params
+  app.use(mongoSanitize);
+
+  // 4. Sanitized Request Logging
   app.use((req: Request, _res: Response, next: NextFunction) => {
     if (env.NODE_ENV !== 'test') {
       const sanitizedUrl = req.originalUrl.split('?')[0];
@@ -84,7 +102,23 @@ export const createApp = (): Express => {
     next();
   });
 
-  // 4. API Routes
+  // 5. Static Product & Medical Assets
+  const possibleAssetDirs = [
+    path.resolve(process.cwd(), 'frontend/public/assets'),
+    path.resolve(process.cwd(), '../frontend/public/assets'),
+    path.resolve(process.cwd(), '../../frontend/public/assets'),
+  ];
+  for (const assetDir of possibleAssetDirs) {
+    if (fs.existsSync(assetDir)) {
+      app.use('/assets', express.static(assetDir));
+      break;
+    }
+  }
+
+  // 6. Health & Diagnostic Probes (Root level for ALB / container readiness)
+  app.use('/', healthRoutes);
+
+  // 6. API v1 Routes
   app.use('/api/v1', healthRoutes);
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/users', userRoutes);
@@ -95,10 +129,14 @@ export const createApp = (): Express => {
   app.use('/api/v1/doctors', doctorRoutes);
   app.use('/api/v1/appointments', appointmentRoutes);
   app.use('/api/v1/hospitals', hospitalRoutes);
+  app.use('/api/v1/admin/finances', financeRouter);
   app.use('/api/v1/admin', adminRoutes);
   app.use('/api/v1/products', productRoutes);
   app.use('/api/v1/visits', fieldVisitRoutes);
   app.use('/api/v1/patients', patientRoutes);
+  app.use('/api/v1/professionals', professionalRoutes);
+  app.use('/api/v1/supplier', supplierPortalRoutes);
+  app.use('/api/v1/admin/marketplace', adminMarketplaceRoutes);
 
   // 5. Mock Storage Handler (For local testing without AWS S3)
   app.put('/api/v1/mock-storage/upload/:fileId', express.raw({ type: '*/*', limit: '20mb' }), (req, res) => {

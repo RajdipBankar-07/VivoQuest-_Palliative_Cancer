@@ -13,6 +13,11 @@ import {
   cancelPatientOrder,
   requestOrderReturn,
   scheduleOrderSetup,
+  submitProductReview,
+  listProductReviews,
+  submitProductComplaint,
+  listPatientComplaints,
+  updateOrderDeliveryEstimate,
 } from '../services/productCatalogService.js';
 import {
   getPaymentGatewayConfig,
@@ -60,13 +65,17 @@ productRoutes.get('/categories', (_req: Request, res: Response) => {
  */
 productRoutes.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { category, search, rentalOnly, inStockOnly, page, limit } = req.query;
+    const { category, search, rentalOnly, inStockOnly, sourcingType, installationOnly, status, sort, page, limit } = req.query;
 
     const result = await listMedicalProducts({
       category: category as string,
       search: search as string,
       rentalOnly: rentalOnly === 'true',
       inStockOnly: inStockOnly === 'true',
+      sourcingType: sourcingType as string,
+      installationOnly: installationOnly === 'true',
+      status: status as string,
+      sort: sort as string,
       page: page ? parseInt(page as string, 10) : 1,
       limit: limit ? parseInt(limit as string, 10) : 20,
     });
@@ -247,6 +256,31 @@ productRoutes.post('/payments/webhook', async (req: Request, res: Response, next
 // =============================================================================
 
 /**
+ * GET /api/v1/products/orders
+ * List orders for the authenticated patient, with optional status filter
+ */
+productRoutes.get(
+  '/orders',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { status } = req.query;
+      let orders = await getPatientOrders(req.userPayload!.userId);
+      if (status && typeof status === 'string' && status !== 'all') {
+        orders = orders.filter((o: any) => o.orderStatus === status);
+      }
+      res.json({
+        success: true,
+        count: orders.length,
+        data: orders,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * GET /api/v1/products/orders/me
  * List orders for the authenticated patient
  */
@@ -255,7 +289,11 @@ productRoutes.get(
   authenticateUser,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const orders = await getPatientOrders(req.userPayload!.userId);
+      const { status } = req.query;
+      let orders = await getPatientOrders(req.userPayload!.userId);
+      if (status && typeof status === 'string' && status !== 'all') {
+        orders = orders.filter((o: any) => o.orderStatus === status);
+      }
       res.json({
         success: true,
         count: orders.length,
@@ -381,7 +419,9 @@ productRoutes.patch(
   authenticateUser,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { setupDate, setupSlot, setupNotes } = req.body;
+      const setupDate = req.body.setupDate || req.body.preferredDate;
+      const setupSlot = req.body.setupSlot || req.body.preferredSlot || req.body.preferredTimeSlot;
+      const setupNotes = req.body.setupNotes || req.body.notes;
       const order = await scheduleOrderSetup(
         req.params.idOrNumber,
         req.userPayload!.userId,
@@ -392,6 +432,144 @@ productRoutes.patch(
         success: true,
         message: 'Clinician setup appointment scheduled successfully',
         data: order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/products/orders/:idOrNumber/delivery-estimate
+ * Attempt to update delivery estimate - guarded by strict RBAC in updateOrderDeliveryEstimate
+ */
+productRoutes.patch(
+  '/orders/:idOrNumber/delivery-estimate',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { estimatedDeliveryDate, reason } = req.body;
+      const order = await updateOrderDeliveryEstimate(
+        req.params.idOrNumber,
+        { estimatedDeliveryDate, reason },
+        req.user!
+      );
+
+      res.json({
+        success: true,
+        message: 'Estimated delivery date updated successfully',
+        data: order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// REVIEWS & COMPLAINTS ROUTES
+// =============================================================================
+
+/**
+ * GET /api/v1/products/complaints/my
+ * List complaints filed by authenticated patient
+ */
+productRoutes.get(
+  '/complaints/my',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const complaints = await listPatientComplaints(req.userPayload!.userId);
+      res.json({
+        success: true,
+        count: complaints.length,
+        data: complaints,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/products/orders/:idOrNumber/complaints
+ * Submit complaint for an order item
+ */
+productRoutes.post(
+  '/orders/:idOrNumber/complaints',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { productId, category, description, refundRequested } = req.body;
+      const complaint = await submitProductComplaint(
+        req.userPayload!.userId,
+        {
+          name: req.user?.fullName || '',
+          phone: req.user?.phone || '',
+          email: req.user?.email,
+        },
+        {
+          orderId: req.params.idOrNumber,
+          productId,
+          category,
+          description,
+          refundRequested,
+        }
+      );
+
+      res.status(201).json({
+        success: true,
+        message: 'Complaint submitted successfully and forwarded to quality operations',
+        data: complaint,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/products/:id/reviews
+ * List published reviews for a product
+ */
+productRoutes.get('/:id/reviews', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const page = req.query.page ? parseInt(req.query.page as string, 10) : 1;
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 20;
+    const result = await listProductReviews(req.params.id, page, limit);
+
+    res.json({
+      success: true,
+      count: result.reviews.length,
+      pagination: result.pagination,
+      data: result.reviews,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/v1/products/:id/reviews
+ * Submit verified product review for delivered order
+ */
+productRoutes.post(
+  '/:id/reviews',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { orderId, rating, title, comment } = req.body;
+      const review = await submitProductReview(
+        req.userPayload!.userId,
+        req.user?.fullName || '',
+        req.params.id,
+        { orderId, rating, title, comment }
+      );
+
+      res.status(201).json({
+        success: true,
+        message: 'Review submitted successfully',
+        data: review,
       });
     } catch (err) {
       next(err);

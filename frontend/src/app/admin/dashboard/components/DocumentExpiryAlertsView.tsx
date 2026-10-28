@@ -17,6 +17,7 @@ import {
   AlertCircle,
   BadgeAlert,
   ChevronRight,
+  ChevronLeft,
 } from 'lucide-react';
 import { adminApi } from '@/lib/api';
 
@@ -105,6 +106,15 @@ export function DocumentExpiryAlertsView({ onNavigateToCredential, onRefresh }: 
     }
     return true;
   });
+
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(filteredAlerts.length / pageSize));
+  const paginatedAlerts = filteredAlerts.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filterSeverity, filterRole, search]);
 
   return (
     <div className="space-y-6">
@@ -260,10 +270,11 @@ export function DocumentExpiryAlertsView({ onNavigateToCredential, onRefresh }: 
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredAlerts.map((item, idx) => {
+                {paginatedAlerts.map((item, idx) => {
                   const isCritical = item.severity === 'critical';
+                  const alertKey = item.credentialId || item._id || `exp-${(page - 1) * pageSize + idx}`;
                   return (
-                    <tr key={idx} className="hover:bg-slate-50/60 transition">
+                    <tr key={alertKey} className="hover:bg-slate-50/60 transition">
                       <td className="py-3 px-4">
                         <span
                           className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
@@ -330,6 +341,56 @@ export function DocumentExpiryAlertsView({ onNavigateToCredential, onRefresh }: 
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* 10-Item Pagination Controls */}
+        {!loading && filteredAlerts.length > 0 && (
+          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 bg-slate-50/50">
+            <div>
+              Showing <strong className="text-navy font-bold">{(page - 1) * pageSize + 1}</strong> to{' '}
+              <strong className="text-navy font-bold">{Math.min(page * pageSize, filteredAlerts.length)}</strong> of{' '}
+              <strong className="text-navy font-bold">{filteredAlerts.length}</strong> surveillance alerts
+              <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                10 per page
+              </span>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1 shadow-2xs"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" /> Previous
+                </button>
+
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((pg) => (
+                    <button
+                      key={pg}
+                      onClick={() => setPage(pg)}
+                      className={`w-7 h-7 rounded-lg text-xs font-bold transition ${
+                        page === pg ? 'bg-navy text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      {pg}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center gap-1 shadow-2xs"
+                >
+                  Next <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

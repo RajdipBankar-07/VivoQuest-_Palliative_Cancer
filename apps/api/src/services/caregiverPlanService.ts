@@ -710,10 +710,14 @@ export const activateCaregiverSubscription = async (
   }
 
   // 8. Create Subscription in MongoDB with concurrency guard
+  const invoiceNumber = `INV-SUB-${subscriptionNumber.replace('SUB-', '')}`;
+  const invoiceGeneratedAt = new Date();
   let sub: ICaregiverSubscription;
   try {
     sub = await CaregiverSubscription.create({
       subscriptionNumber,
+      invoiceNumber,
+      invoiceGeneratedAt,
       patientId: patient._id,
       patientName: patient.fullName,
       patientPhone: patient.phone,
@@ -961,10 +965,14 @@ export const activatePatientSubscriptionTestMode = async (
     : `test_mode_${Date.now()}`;
 
   // 7. Create Subscription with server-side atomic guard against concurrent requests
+  const invoiceNumber = `INV-SUB-${subscriptionNumber.replace('SUB-', '')}`;
+  const invoiceGeneratedAt = new Date();
   let sub: ICaregiverSubscription;
   try {
     sub = await CaregiverSubscription.create({
       subscriptionNumber,
+      invoiceNumber,
+      invoiceGeneratedAt,
       patientId: patient._id,
       patientName: patient.fullName,
       patientPhone: patient.phone,

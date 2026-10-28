@@ -1,3 +1,4 @@
+import http from 'http';
 import { createApp } from './app.js';
 import { connectDatabase, disconnectDatabase } from './config/database.js';
 import { env } from './config/environment.js';
@@ -15,8 +16,20 @@ const startServer = async () => {
   await seedServicesIfEmpty();
 
   const app = createApp();
+  const server = http.createServer(app);
 
-  const server = app.listen(env.PORT, () => {
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n[VivoQuest API] Port ${env.PORT} is already in use by another running instance.`);
+      console.error(`[VivoQuest API] To free port ${env.PORT}, run: .\\stop_all.bat`);
+      console.error(`[VivoQuest API] Or run in PowerShell: Stop-Process -Id (Get-NetTCPConnection -LocalPort ${env.PORT}).OwningProcess -Force\n`);
+    } else {
+      console.error('[VivoQuest API] Server runtime error:', err);
+    }
+    process.exit(1);
+  });
+
+  server.listen(env.PORT, () => {
     console.log(`[VivoQuest API] Listening on port ${env.PORT}`);
     console.log(`[VivoQuest API] Health check: ${env.API_BASE_URL}/api/v1/health`);
     console.log(`[VivoQuest API] Services directory: ${env.API_BASE_URL}/api/v1/services`);

@@ -46,11 +46,22 @@ export const siteConfig = {
     linkedin: process.env.NEXT_PUBLIC_LINKEDIN_URL || '',
   },
 
+  mobileApp: {
+    name: 'VivoQuest Patient Mobile App',
+    scheme: 'vivoquest',
+    playStoreUrl: process.env.NEXT_PUBLIC_PATIENT_APP_PLAYSTORE_URL || '',
+    appStoreUrl: process.env.NEXT_PUBLIC_PATIENT_APP_APPSTORE_URL || '',
+    apkDownloadUrl: process.env.NEXT_PUBLIC_PATIENT_APP_APK_URL || '/downloads/vivoquest-patient-release.apk',
+    expoUrl: process.env.NEXT_PUBLIC_PATIENT_APP_EXPO_URL || 'exp://10.151.164.41:8081',
+  },
+
   links: {
     explore: [
       { label: 'Home', href: '/' },
       { label: 'About VivoQuest', href: '/about' },
       { label: 'Healthcare Services', href: '/services' },
+      { label: 'Caregiver Subscriptions', href: '/subscriptions' },
+      { label: 'Caregiver Plans', href: '/caregiver-plans' },
       { label: 'Find a Doctor', href: '/doctors' },
       { label: 'Appointments', href: '/appointments' },
       { label: 'Medical Store', href: '/products' },
@@ -59,6 +70,7 @@ export const siteConfig = {
     ],
 
     services: [
+      { label: 'Caregiver & Nursing Subscriptions', href: '/subscriptions' },
       { label: 'Home Diagnostics & Blood Draws', href: '/services#home-diagnostics' },
       { label: 'Physiotherapy & Rehabilitation', href: '/services#physiotherapy' },
       { label: 'Doctor & Specialist Consultations', href: '/doctors' },

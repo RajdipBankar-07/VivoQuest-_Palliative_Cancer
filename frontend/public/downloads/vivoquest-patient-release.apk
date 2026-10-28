@@ -1,0 +1,10 @@
+# VivoQuest Patient Mobile App (Release Bundle)
+Version: 1.0.0
+Environment: Development / Sandbox
+Target: Android / Expo Go
+
+To install and run:
+1. Scan the QR code on the website with your Android phone camera or Expo Go.
+2. Expo Metro Bundler address: exp://10.151.164.41:8081
+3. For standalone APK builds, run `npx expo run:android` in apps/mobile-patient.
+

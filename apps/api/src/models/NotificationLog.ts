@@ -12,6 +12,9 @@ export type NotificationTemplateId =
   | 'CARE_LOOP_CLOSED'
   | 'SUBSCRIPTION_ACTIVATED_TEST_MODE'
   | 'NEW_CAREGIVER_SUBSCRIPTION_TEST_MODE'
+  | 'SUBSCRIPTION_ACTIVATED'
+  | 'SUBSCRIPTION_CANCELLED'
+  | 'SUBSCRIPTION_EXPIRED'
   | 'VISIT_RESCHEDULE_REQUESTED'
   | 'VISIT_RESCHEDULE_APPROVED'
   | 'VISIT_RESCHEDULE_REJECTED'
@@ -23,7 +26,21 @@ export type NotificationTemplateId =
   | 'CAREGIVER_REASSIGNED_REMOVED'
   | 'FIELD_VISIT_SCHEDULED'
   | 'VISIT_ASSIGNMENT_ACCEPTED'
-  | 'VISIT_ASSIGNMENT_REJECTED';
+  | 'VISIT_ASSIGNMENT_REJECTED'
+  | 'VISIT_STARTED'
+  | 'OVERDUE_VISIT_MISSED'
+  | 'VISIT_CANCELLED'
+  | 'PRODUCT_ORDER_PLACED'
+  | 'PRODUCT_ORDER_CONFIRMED'
+  | 'PRODUCT_ORDER_DELIVERY_UPDATED'
+  | 'PRODUCT_ORDER_DISPATCHED'
+  | 'PRODUCT_ORDER_DELIVERED'
+  | 'PRODUCT_ORDER_CANCELLED'
+  | 'PAYMENT_RECEIVED'
+  | 'PAYMENT_FAILED'
+  | 'INVOICE_GENERATED'
+  | 'INVENTORY_ALERT'
+  | 'OPERATIONAL_ALERT';
 
 export type NotificationStatus = 'sent' | 'delivered' | 'failed' | 'simulated';
 
@@ -31,8 +48,10 @@ export interface INotificationLog extends Document {
   recipientPhone: string;
   recipientName: string;
   recipientRole: 'patient' | 'caregiver' | 'professional' | 'hospital' | 'admin' | 'super_admin';
+  recipientUserId?: string;
   channel: NotificationChannel;
   templateId: NotificationTemplateId;
+  title?: string;
   messageBody: string;
   consentChecked: boolean;
   status: NotificationStatus;
@@ -50,12 +69,25 @@ export interface INotificationLog extends Document {
     orderId?: string;
     orderNumber?: string;
     appointmentId?: string;
+    requestId?: string;
+    patientId?: string;
+    patientName?: string;
+    patientPhone?: string;
+    caregiverId?: string;
+    caregiverName?: string;
+    caregiverPhone?: string;
+    city?: string;
+    totalAmount?: number;
     [key: string]: any;
   };
   type?: string;
   relatedEntityType?: string;
+  actionUrl?: string;
   isRead?: boolean;
   readAt?: Date;
+  isCleared?: boolean;
+  clearedAt?: Date;
+  clearedBy?: string[];
   sentAt?: Date;
   deliveredAt?: Date;
   failedAt?: Date;
@@ -80,6 +112,12 @@ const NotificationLogSchema = new Schema<INotificationLog>(
       type: String,
       enum: ['patient', 'caregiver', 'professional', 'hospital', 'admin', 'super_admin'],
       default: 'patient',
+      index: true,
+    },
+    recipientUserId: {
+      type: String,
+      trim: true,
+      index: true,
     },
     channel: {
       type: String,
@@ -99,6 +137,9 @@ const NotificationLogSchema = new Schema<INotificationLog>(
         'CARE_LOOP_CLOSED',
         'SUBSCRIPTION_ACTIVATED_TEST_MODE',
         'NEW_CAREGIVER_SUBSCRIPTION_TEST_MODE',
+        'SUBSCRIPTION_ACTIVATED',
+        'SUBSCRIPTION_CANCELLED',
+        'SUBSCRIPTION_EXPIRED',
         'VISIT_RESCHEDULE_REQUESTED',
         'VISIT_RESCHEDULE_APPROVED',
         'VISIT_RESCHEDULE_REJECTED',
@@ -111,9 +152,27 @@ const NotificationLogSchema = new Schema<INotificationLog>(
         'FIELD_VISIT_SCHEDULED',
         'VISIT_ASSIGNMENT_ACCEPTED',
         'VISIT_ASSIGNMENT_REJECTED',
+        'VISIT_STARTED',
+        'OVERDUE_VISIT_MISSED',
+        'VISIT_CANCELLED',
+        'PRODUCT_ORDER_PLACED',
+        'PRODUCT_ORDER_CONFIRMED',
+        'PRODUCT_ORDER_DELIVERY_UPDATED',
+        'PRODUCT_ORDER_DISPATCHED',
+        'PRODUCT_ORDER_DELIVERED',
+        'PRODUCT_ORDER_CANCELLED',
+        'PAYMENT_RECEIVED',
+        'PAYMENT_FAILED',
+        'INVOICE_GENERATED',
+        'INVENTORY_ALERT',
+        'OPERATIONAL_ALERT',
       ],
       required: true,
       index: true,
+    },
+    title: {
+      type: String,
+      trim: true,
     },
     messageBody: {
       type: String,
@@ -165,6 +224,10 @@ const NotificationLogSchema = new Schema<INotificationLog>(
       trim: true,
       index: true,
     },
+    actionUrl: {
+      type: String,
+      trim: true,
+    },
     isRead: {
       type: Boolean,
       default: false,
@@ -173,6 +236,19 @@ const NotificationLogSchema = new Schema<INotificationLog>(
     readAt: {
       type: Date,
     },
+    isCleared: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    clearedAt: {
+      type: Date,
+    },
+    clearedBy: [
+      {
+        type: String,
+      },
+    ],
     sentAt: {
       type: Date,
       default: Date.now,
@@ -188,8 +264,10 @@ const NotificationLogSchema = new Schema<INotificationLog>(
     timestamps: true,
     toJSON: {
       transform(_doc, ret: Record<string, any>) {
-        ret.id = ret._id.toString();
-        delete ret._id;
+        ret.id = ret._id ? ret._id.toString() : '';
+        if (ret._id) {
+          ret._id = ret._id.toString();
+        }
         delete ret.__v;
         return ret;
       },
@@ -199,7 +277,13 @@ const NotificationLogSchema = new Schema<INotificationLog>(
 
 NotificationLogSchema.index({ channel: 1, status: 1, createdAt: -1 });
 NotificationLogSchema.index({ recipientPhone: 1, createdAt: -1 });
+NotificationLogSchema.index({ recipientPhone: 1, isRead: 1 });
 NotificationLogSchema.index({ recipientRole: 1, isRead: 1, createdAt: -1 });
+NotificationLogSchema.index({ channel: 1, isRead: 1, isCleared: 1, createdAt: -1 });
+NotificationLogSchema.index({ 'metadata.visitId': 1, templateId: 1 });
+NotificationLogSchema.index({ 'metadata.orderId': 1, templateId: 1 });
+NotificationLogSchema.index({ 'metadata.subscriptionId': 1, templateId: 1 });
+NotificationLogSchema.index({ clearedBy: 1 });
 
 export const NotificationLog: Model<INotificationLog> =
   mongoose.models.NotificationLog || mongoose.model<INotificationLog>('NotificationLog', NotificationLogSchema);

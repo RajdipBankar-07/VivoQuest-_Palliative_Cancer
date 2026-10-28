@@ -1,9 +1,12 @@
 import { Router, Response } from 'express';
+import mongoose from 'mongoose';
 import { authenticateUser, requireRole, AuthRequest } from '../middleware/auth.js';
 import {
   getAdminDashboardOverview,
   listPlatformUsers,
+  getUserDetails,
   updateUserStatus,
+  deleteUserPermanently,
   listProfessionalCredentials,
   reviewProfessionalCredential,
   listHospitalOrganizations,
@@ -42,6 +45,7 @@ import {
   createPurchaseOrder,
   updatePurchaseOrderStatus,
 } from '../services/supplierService.js';
+import { updateOrderDeliveryEstimate } from '../services/productCatalogService.js';
 import {
   listCaregiverPlans,
   createCaregiverPlan,
@@ -60,18 +64,32 @@ import {
   listAdminFieldVisits,
   getAdminFieldOperationsStats,
   assignOrReassignFieldVisitProvider,
+  getEligibleCaregiversForVisit,
   listSyncOperations,
   getSyncStats,
   scheduleVisitForSubscription,
+  sweepAndDetectOverdueVisits,
+  deleteAdminFieldVisit,
 } from '../services/fieldOperationsService.js';
 import {
   listNotificationLogs,
   retryFailedNotification,
   markNotificationAsRead,
+  clearPastNotificationLogs,
+  clearAllNotificationLogs,
+  softClearAllAdminNotifications,
+  permanentlyDeleteNotification,
+  getNotificationById,
 } from '../services/notificationService.js';
 import { getAuthorizedPatientDetails } from '../services/patientService.js';
+import {
+  getProfessionalDetailForAdmin,
+  reviewCredentialAdmin,
+  updateProfessionalAdmin,
+} from '../services/professionalProfileService.js';
 import { OrderStatus } from '../models/ProductOrder.js';
 import { User } from '../models/User.js';
+import { AuditLog } from '../models/AuditLog.js';
 import { NotificationLog } from '../models/NotificationLog.js';
 import { AppError } from '../middleware/errorHandler.js';
 
@@ -165,6 +183,49 @@ adminRoutes.patch(
         success: true,
         message: `User account status updated to '${status}'`,
         data: updated,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/users/:id
+ * Retrieve comprehensive user profile, role-specific attributes, and audit history
+ */
+adminRoutes.get(
+  '/users/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const details = await getUserDetails(req.params.id);
+      res.json({
+        success: true,
+        data: details,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/users/:id
+ * Permanently delete a user account from MongoDB and clean up orphaned profile data
+ */
+adminRoutes.delete(
+  '/users/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const result = await deleteUserPermanently(req.params.id, req.user!);
+      res.json({
+        success: true,
+        message: result.message,
+        data: result,
       });
     } catch (err) {
       next(err);
@@ -618,6 +679,34 @@ adminRoutes.post(
 );
 
 /**
+ * PATCH /api/v1/admin/orders/:id/delivery-estimate
+ * Authorized update of estimated delivery date with mandatory reason, tracking update, and patient notification
+ */
+adminRoutes.patch(
+  '/orders/:id/delivery-estimate',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { estimatedDeliveryDate, reason } = req.body;
+      const order = await updateOrderDeliveryEstimate(
+        req.params.id,
+        { estimatedDeliveryDate, reason },
+        req.user!
+      );
+
+      res.json({
+        success: true,
+        message: 'Estimated delivery date updated successfully',
+        data: order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * GET /api/v1/admin/field-visits
  * Administrative supervision of all home healthcare visits and installations
  */
@@ -627,17 +716,18 @@ adminRoutes.get(
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
     try {
-      const { status, date, providerId, hospitalId, visitType, search, page, limit } = req.query;
+      const { status, date, dateScope, providerId, hospitalId, visitType, search, page, limit } = req.query;
 
       const result = await listAdminFieldVisits({
         status: status as string,
         date: date as string,
+        dateScope: dateScope as 'today' | 'upcoming' | 'past' | 'all' | undefined,
         providerId: providerId as string,
         hospitalId: hospitalId as string,
         visitType: visitType as string,
         search: search as string,
         page: page ? parseInt(page as string, 10) : 1,
-        limit: limit ? parseInt(limit as string, 10) : 20,
+        limit: limit ? parseInt(limit as string, 10) : 10,
       });
 
       res.json({
@@ -653,6 +743,33 @@ adminRoutes.get(
 );
 
 /**
+ * DELETE /api/v1/admin/field-visits/:id
+ * DELETE /api/v1/admin/visits/:id
+ * Administrative action to archive and remove a completed/concluded field visit
+ */
+const handleDeleteAdminVisit = async (req: AuthRequest, res: Response, next: any) => {
+  try {
+    const user = req.user!;
+    const { reason } = req.body || {};
+    const result = await deleteAdminFieldVisit(
+      req.params.id,
+      {
+        _id: user._id,
+        fullName: user.fullName,
+        role: user.role,
+      },
+      reason
+    );
+    res.json({ ...result });
+  } catch (err) {
+    next(err);
+  }
+};
+
+adminRoutes.delete('/field-visits/:id', authenticateUser, requireRole(['admin', 'super_admin']), handleDeleteAdminVisit);
+adminRoutes.delete('/visits/:id', authenticateUser, requireRole(['admin', 'super_admin']), handleDeleteAdminVisit);
+
+/**
  * GET /api/v1/admin/field-visits/stats
  * Real-time operational statistics, overdue count, and installation queues
  */
@@ -666,6 +783,66 @@ adminRoutes.get(
       res.json({
         success: true,
         data: stats,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/field-visits/check-missed
+ * Safely sweep and mark overdue uncompleted visits as missed with audit trail and alerts
+ */
+adminRoutes.post(
+  '/field-visits/check-missed',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const user = req.user!;
+      const dryRun = Boolean(req.body?.dryRun);
+      const result = await sweepAndDetectOverdueVisits({
+        actor: {
+          _id: user._id,
+          fullName: user.fullName,
+          role: user.role,
+        },
+        dryRun,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: `Overdue visits sweep completed. Evaluated: ${result.totalEvaluated}, Marked Missed: ${result.missedCount}`,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRoutes.post(
+  '/field-visits/sweep-missed',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const user = req.user!;
+      const dryRun = Boolean(req.body?.dryRun);
+      const result = await sweepAndDetectOverdueVisits({
+        actor: {
+          _id: user._id,
+          fullName: user.fullName,
+          role: user.role,
+        },
+        dryRun,
+      });
+
+      res.status(200).json({
+        success: true,
+        message: `Overdue visits sweep completed. Evaluated: ${result.totalEvaluated}, Marked Missed: ${result.missedCount}`,
+        data: result,
       });
     } catch (err) {
       next(err);
@@ -706,19 +883,66 @@ adminRoutes.patch(
         throw new AppError("Valid 'providerId' or registered active 'providerPhone' of an authorized caregiver is required", 400);
       }
 
+      const allowRejectedCaregiver = Boolean(req.body.allowRejectedCaregiver || req.body.forceReassign);
       const updated = await assignOrReassignFieldVisitProvider(
         req.params.id,
         providerId,
         req.user!,
         reason || notes,
         scheduledDate,
-        timeSlot
+        timeSlot,
+        { allowRejectedCaregiver }
       );
 
       res.json({
         success: true,
         message: `Field visit assigned to ${updated.providerName} successfully`,
         data: updated,
+      });
+    } catch (err: any) {
+      // Record failed reassignment attempt in AuditLog
+      try {
+        await AuditLog.create({
+          action: 'FIELD_VISIT_REASSIGNMENT_FAILED',
+          category: 'field_operations',
+          actorId: req.user?._id,
+          actorName: req.user?.fullName || 'Admin',
+          actorRole: req.user?.role || 'admin',
+          targetType: 'FieldVisit',
+          targetId: req.params.id,
+          details: {
+            visitId: req.params.id,
+            proposedProviderId: req.body?.providerId,
+            actingAdminId: req.user?._id?.toString(),
+            reason: req.body?.reason || req.body?.notes || 'Not specified',
+            outcome: 'failed',
+            failureReason: err.message,
+          },
+          severity: 'warning',
+          timestamp: new Date(),
+        });
+      } catch (auditErr) {}
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/field-visits/:id/eligible-caregivers
+ * Retrieve list of active, available, conflict-free caregivers eligible for this visit
+ */
+adminRoutes.get(
+  '/field-visits/:id/eligible-caregivers',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const result = await getEligibleCaregiversForVisit(req.params.id);
+      res.json({
+        success: true,
+        data: result.eligibleCaregivers,
+        count: result.count,
+        message: result.message,
       });
     } catch (err) {
       next(err);
@@ -788,18 +1012,41 @@ adminRoutes.get(
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
     try {
-      const { channel, status, isRead, search, page, limit, unread } = req.query;
+      const {
+        channel,
+        status,
+        isRead,
+        search,
+        page,
+        limit,
+        unread,
+        dateScope,
+        date,
+        autoDeletePast,
+        inbox,
+        includeCleared,
+      } = req.query;
+
       let parsedIsRead: boolean | undefined = undefined;
       if (isRead === 'true') parsedIsRead = true;
       if (isRead === 'false' || unread === 'true') parsedIsRead = false;
+
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
+      const isInbox = inbox === 'true' || channel === 'in_app';
 
       const result = await listNotificationLogs({
         channel: channel as string,
         status: status as string,
         isRead: parsedIsRead,
         search: search as string,
+        dateScope: (dateScope as any) || (isInbox ? 'all' : undefined),
+        date: date as string,
+        autoDeletePast: autoDeletePast === 'true' || autoDeletePast === '1',
         page: page ? parseInt(page as string, 10) : 1,
-        limit: limit ? parseInt(limit as string, 10) : 20,
+        limit: limit ? parseInt(limit as string, 10) : (isInbox ? 50 : 10),
+        adminUserId,
+        excludeCleared: includeCleared !== 'true',
+        inboxOnly: isInbox,
       });
 
       res.json({
@@ -817,20 +1064,33 @@ adminRoutes.get(
 /**
  * GET /api/v1/admin/notifications/unread-count
  * Count unread in-app notifications for the notification bell badge.
+ * Synchronized with the exact recipient, status, and soft-clear filters of the drawer.
  */
 adminRoutes.get(
   '/notifications/unread-count',
   authenticateUser,
   requireRole(['admin', 'super_admin']),
-  async (_req: AuthRequest, res: Response, next) => {
+  async (req: AuthRequest, res: Response, next) => {
     try {
-      const { NotificationLog } = await import('../models/NotificationLog.js');
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
       const count = await NotificationLog.countDocuments({
         channel: 'in_app',
         isRead: { $ne: true },
-        $or: [
-          { recipientPhone: 'ADMIN_DESK' },
-          { recipientRole: { $in: ['admin', 'super_admin'] } },
+        $and: [
+          {
+            $or: [
+              { recipientPhone: 'ADMIN_DESK' },
+              { recipientRole: { $in: ['admin', 'super_admin'] } },
+              ...(adminUserId ? [{ recipientUserId: adminUserId }] : []),
+            ],
+          },
+          {
+            $or: [
+              { isCleared: { $ne: true } },
+              { isCleared: { $exists: false } },
+            ],
+          },
+          ...(adminUserId ? [{ clearedBy: { $ne: adminUserId } }] : []),
         ],
       });
       res.json({ success: true, data: { unreadCount: count } });
@@ -842,28 +1102,44 @@ adminRoutes.get(
 
 /**
  * PATCH /api/v1/admin/notifications/mark-all-read
- * Mark all unread in-app notifications as read.
+ * Mark all unread in-app notifications for this admin as read.
  */
 adminRoutes.patch(
   '/notifications/mark-all-read',
   authenticateUser,
   requireRole(['admin', 'super_admin']),
-  async (_req: AuthRequest, res: Response, next) => {
+  async (req: AuthRequest, res: Response, next) => {
     try {
-      const { NotificationLog } = await import('../models/NotificationLog.js');
       const now = new Date();
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
       const result = await NotificationLog.updateMany(
         {
           channel: 'in_app',
           isRead: { $ne: true },
-          $or: [
-            { recipientPhone: 'ADMIN_DESK' },
-            { recipientRole: { $in: ['admin', 'super_admin'] } },
+          $and: [
+            {
+              $or: [
+                { recipientPhone: 'ADMIN_DESK' },
+                { recipientRole: { $in: ['admin', 'super_admin'] } },
+                ...(adminUserId ? [{ recipientUserId: adminUserId }] : []),
+              ],
+            },
+            {
+              $or: [
+                { isCleared: { $ne: true } },
+                { isCleared: { $exists: false } },
+              ],
+            },
+            ...(adminUserId ? [{ clearedBy: { $ne: adminUserId } }] : []),
           ],
         },
         { $set: { isRead: true, readAt: now } }
       );
-      res.json({ success: true, message: 'All in-app notifications marked as read', data: { markedRead: result.modifiedCount } });
+      res.json({
+        success: true,
+        message: 'All in-app notifications marked as read',
+        data: { markedRead: result.modifiedCount },
+      });
     } catch (err) {
       next(err);
     }
@@ -893,6 +1169,31 @@ adminRoutes.post(
 );
 
 /**
+ * GET /api/v1/admin/notifications/:id
+ * Retrieve details of a single notification for modal inspection
+ */
+adminRoutes.get(
+  '/notifications/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        throw new AppError('Invalid notification ID format', 400);
+      }
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
+      const notif = await getNotificationById(req.params.id, adminUserId, req.user?.role);
+      res.json({
+        success: true,
+        data: notif,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * PATCH /api/v1/admin/notifications/:id/read
  * Mark an administrative or in-app notification as read
  */
@@ -902,11 +1203,211 @@ adminRoutes.patch(
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
     try {
-      const readNotif = await markNotificationAsRead(req.params.id);
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        throw new AppError('Invalid notification ID format', 400);
+      }
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
+      const readNotif = await markNotificationAsRead(req.params.id, adminUserId, req.user?.role);
       res.json({
         success: true,
         message: 'Notification marked as read',
         data: readNotif,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/notifications/clear-past
+ * Permanently delete/clear all past notification logs older than today.
+ */
+adminRoutes.delete(
+  '/notifications/clear-past',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (_req: AuthRequest, res: Response, next) => {
+    try {
+      const result = await clearPastNotificationLogs();
+      res.json({
+        success: true,
+        message: `Cleared ${result.deletedCount} past notification logs older than today.`,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/notifications/clear-all
+ * POST /api/v1/admin/notifications/clear-all
+ * Clear all in-app notifications from the authenticated admin's inbox.
+ * Uses per-admin soft-clear/archive to preserve audit history and compliance.
+ */
+adminRoutes.delete(
+  '/notifications/clear-all',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
+      const result = await softClearAllAdminNotifications(adminUserId);
+
+      await AuditLog.create({
+        action: 'NOTIFICATIONS_CLEARED',
+        category: 'field_operations',
+        actorId: req.user?._id,
+        actorName: req.user?.fullName || 'Platform Administrator',
+        actorRole: req.user?.role || 'admin',
+        targetType: 'NotificationLog',
+        details: {
+          clearedCount: result.clearedCount,
+          softCleared: true,
+          retainedForAudit: true,
+        },
+        severity: 'info',
+        timestamp: new Date(),
+      });
+
+      res.json({
+        success: true,
+        message: `Cleared ${result.clearedCount} in-app notification alerts from your active inbox. Records remain archived for compliance.`,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRoutes.post(
+  '/notifications/clear-all',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
+      const result = await softClearAllAdminNotifications(adminUserId);
+
+      await AuditLog.create({
+        action: 'NOTIFICATIONS_CLEARED',
+        category: 'field_operations',
+        actorId: req.user?._id,
+        actorName: req.user?.fullName || 'Platform Administrator',
+        actorRole: req.user?.role || 'admin',
+        targetType: 'NotificationLog',
+        details: {
+          clearedCount: result.clearedCount,
+          softCleared: true,
+          retainedForAudit: true,
+        },
+        severity: 'info',
+        timestamp: new Date(),
+      });
+
+      res.json({
+        success: true,
+        message: `Cleared ${result.clearedCount} in-app notification alerts from your active inbox. Records remain archived for compliance.`,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/notifications/:id
+ * Permanently delete a single notification record from the database.
+ * Does not delete related visits, orders, subscriptions, or audit logs.
+ */
+adminRoutes.delete(
+  '/notifications/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        throw new AppError('Invalid notification ID format', 400);
+      }
+
+      const adminUserId = req.user?._id?.toString() || (req.user as any)?.id?.toString();
+      const result = await permanentlyDeleteNotification(req.params.id, adminUserId, req.user?.role);
+
+      await AuditLog.create({
+        action: 'NOTIFICATION_PERMANENTLY_DELETED',
+        category: 'field_operations',
+        actorId: req.user?._id,
+        actorName: req.user?.fullName || 'Platform Administrator',
+        actorRole: req.user?.role || 'admin',
+        targetType: 'NotificationLog',
+        targetId: req.params.id,
+        details: {
+          notificationId: req.params.id,
+          permanent: true,
+        },
+        severity: 'warning',
+        timestamp: new Date(),
+      });
+
+      res.json({
+        success: true,
+        message: 'Notification deleted permanently.',
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/notifications/bulk-delete
+ * Bulk permanently delete selected notification logs.
+ */
+adminRoutes.post(
+  '/notifications/bulk-delete',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { ids } = req.body || {};
+      const { bulkDeleteNotificationLogs } = await import('../services/notificationService.js');
+      const result = await bulkDeleteNotificationLogs(ids || []);
+      res.json({
+        success: true,
+        message: `Successfully deleted ${result.deletedCount} notifications.`,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/notifications/date-range
+ * Permanently delete notification logs between startDate and endDate.
+ */
+adminRoutes.delete(
+  '/notifications/date-range',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate) {
+        throw new AppError('Both startDate and endDate are required query parameters', 400);
+      }
+      const { deleteNotificationLogsByDateRange } = await import('../services/notificationService.js');
+      const result = await deleteNotificationLogsByDateRange(startDate as string, endDate as string);
+      res.json({
+        success: true,
+        message: `Successfully deleted ${result.deletedCount} notifications between ${startDate} and ${endDate}.`,
+        data: result,
       });
     } catch (err) {
       next(err);
@@ -1201,6 +1702,89 @@ adminRoutes.get(
         success: true,
         data: result.professionals,
         pagination: result.pagination,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/professionals/:id
+ * Detailed authorized admin inspection view of a healthcare professional.
+ */
+adminRoutes.get(
+  '/professionals/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const result = await getProfessionalDetailForAdmin(req.params.id);
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/professionals/:id/credentials/:credentialId/review
+ * Verify or reject a professional credential with mandatory reason when rejected.
+ */
+adminRoutes.patch(
+  '/professionals/:id/credentials/:credentialId/review',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const admin = req.user!;
+      const result = await reviewCredentialAdmin(
+        req.params.credentialId,
+        req.body,
+        {
+          id: admin._id.toString(),
+          fullName: admin.fullName,
+          role: admin.role,
+        }
+      );
+      res.json({
+        success: true,
+        message: `Credential review updated: status is now ${result.verificationStatus}`,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/professionals/:id
+ * Admin updates to healthcare professional profile.
+ */
+adminRoutes.patch(
+  '/professionals/:id',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const admin = req.user!;
+      const result = await updateProfessionalAdmin(
+        req.params.id,
+        req.body,
+        {
+          id: admin._id.toString(),
+          fullName: admin.fullName,
+          role: admin.role,
+        }
+      );
+      res.json({
+        success: true,
+        message: 'Professional profile updated by admin',
+        data: result,
       });
     } catch (err) {
       next(err);
@@ -1928,8 +2512,7 @@ adminRoutes.post(
 
 /**
  * DELETE /api/v1/admin/reschedule-requests/:requestId
- * Hide an eligible non-pending reschedule request from Admin view.
- * Keeps pending operational requests visible to the Admin responsible for managing them.
+ * Delete or hide a reschedule request (supports ?permanent=true to reclaim storage).
  */
 adminRoutes.delete(
   '/reschedule-requests/:requestId',
@@ -1937,8 +2520,9 @@ adminRoutes.delete(
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
     try {
-      const { hideRescheduleRequest } = await import('../services/visitRescheduleService.js');
-      const result = await hideRescheduleRequest(
+      const permanent = req.query.permanent === 'true';
+      const { deleteRescheduleRequest } = await import('../services/visitRescheduleService.js');
+      const result = await deleteRescheduleRequest(
         req.params.requestId,
         {
           _id: req.user!._id,
@@ -1946,7 +2530,95 @@ adminRoutes.delete(
           phone: req.user!.phone,
           role: req.user!.role,
         },
-        req.body?.reason
+        permanent
+      );
+      res.json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/reschedule-requests/bulk-delete
+ * Bulk delete or hide selected reschedule requests.
+ */
+adminRoutes.post(
+  '/reschedule-requests/bulk-delete',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { ids, permanent } = req.body || {};
+      const { bulkDeleteRescheduleRequests } = await import('../services/visitRescheduleService.js');
+      const result = await bulkDeleteRescheduleRequests(
+        ids || [],
+        {
+          _id: req.user!._id,
+          fullName: req.user!.fullName,
+          phone: req.user!.phone,
+          role: req.user!.role,
+        },
+        permanent !== false
+      );
+      res.json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/reschedule-requests/clear-resolved
+ * Clear all resolved (approved, rejected, cancelled) reschedule requests.
+ */
+adminRoutes.delete(
+  '/reschedule-requests/clear-resolved',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const permanent = req.query.permanent !== 'false';
+      const { clearResolvedRescheduleRequests } = await import('../services/visitRescheduleService.js');
+      const result = await clearResolvedRescheduleRequests(permanent);
+      res.json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * DELETE /api/v1/admin/reschedule-requests/date-range
+ * Clear or permanently delete reschedule requests in a date range.
+ */
+adminRoutes.delete(
+  '/reschedule-requests/date-range',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { startDate, endDate, permanent } = req.query;
+      if (!startDate || !endDate) {
+        throw new AppError('Both startDate and endDate query parameters are required', 400);
+      }
+      const { deleteRescheduleRequestsByDateRange } = await import('../services/visitRescheduleService.js');
+      const result = await deleteRescheduleRequestsByDateRange(
+        startDate as string,
+        endDate as string,
+        permanent !== 'false'
       );
       res.json({
         success: true,
@@ -2012,9 +2684,9 @@ adminRoutes.get(
  * Reassign a field visit to a different caregiver/provider.
  */
 const handleVisitReassign = async (req: AuthRequest, res: Response, next: any) => {
+  let newProviderId = req.body?.newProviderId || req.body?.providerId || req.body?.caregiverId;
+  const reason = req.body?.reason || req.body?.reassignmentReason || req.body?.notes;
   try {
-    let newProviderId = req.body.newProviderId || req.body.providerId || req.body.caregiverId;
-    const reason = req.body.reason || req.body.reassignmentReason || req.body.notes;
     const providerPhone = req.body.providerPhone || req.body.phone;
     const providerName = req.body.providerName;
     if (!newProviderId && providerPhone) {
@@ -2036,26 +2708,73 @@ const handleVisitReassign = async (req: AuthRequest, res: Response, next: any) =
       }
     }
     if (!newProviderId) throw new AppError("Valid 'newProviderId' or 'providerPhone' of an authorized caregiver is required", 400);
+    const allowRejectedCaregiver = Boolean(req.body.allowRejectedCaregiver || req.body.forceReassign);
     const result = await assignOrReassignFieldVisitProvider(
       req.params.visitId,
       newProviderId,
       req.user!,
       reason,
       req.body.scheduledDate,
-      req.body.timeSlot
+      req.body.timeSlot,
+      { allowRejectedCaregiver }
     );
     res.json({
       success: true,
       message: `Field visit assigned to ${result.providerName} successfully`,
       data: result,
     });
-  } catch (err) {
+  } catch (err: any) {
+    // Record failed reassignment attempt in AuditLog
+    try {
+      await AuditLog.create({
+        action: 'FIELD_VISIT_REASSIGNMENT_FAILED',
+        category: 'field_operations',
+        actorId: req.user?._id,
+        actorName: req.user?.fullName || 'Admin',
+        actorRole: req.user?.role || 'admin',
+        targetType: 'FieldVisit',
+        targetId: req.params.visitId,
+        details: {
+          visitId: req.params.visitId,
+          proposedProviderId: newProviderId,
+          actingAdminId: req.user?._id?.toString(),
+          reason: reason || 'Not specified',
+          outcome: 'failed',
+          failureReason: err.message,
+        },
+        severity: 'warning',
+        timestamp: new Date(),
+      });
+    } catch (auditErr) {}
     next(err);
   }
 };
 
 adminRoutes.patch('/visits/:visitId/reassign', authenticateUser, requireRole(['admin', 'super_admin']), handleVisitReassign);
 adminRoutes.post('/visits/:visitId/reassign', authenticateUser, requireRole(['admin', 'super_admin']), handleVisitReassign);
+
+/**
+ * GET /api/v1/admin/visits/:visitId/eligible-caregivers
+ * Retrieve list of active, available, conflict-free caregivers eligible for this visit
+ */
+adminRoutes.get(
+  '/visits/:visitId/eligible-caregivers',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const result = await getEligibleCaregiversForVisit(req.params.visitId);
+      res.json({
+        success: true,
+        data: result.eligibleCaregivers,
+        count: result.count,
+        message: result.message,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 // =============================================================================
 // ADMIN CARE REPORTS — Report Listing with Clinical Documentation

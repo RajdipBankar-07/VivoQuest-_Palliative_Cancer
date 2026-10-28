@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 500" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#f1f5f9"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity="0.1" flood-color="#0f172a"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="600" height="500" fill="url(#bgGrad)"/>
+  
+  <!-- Subtle Medical Grid Pattern -->
+  <g opacity="0.04" stroke="#0f172a" stroke-width="1">
+    <line x1="0" y1="50" x2="600" y2="50"/>
+    <line x1="0" y1="100" x2="600" y2="100"/>
+    <line x1="0" y1="150" x2="600" y2="150"/>
+    <line x1="0" y1="200" x2="600" y2="200"/>
+    <line x1="0" y1="250" x2="600" y2="250"/>
+    <line x1="0" y1="300" x2="600" y2="300"/>
+    <line x1="0" y1="350" x2="600" y2="350"/>
+    <line x1="0" y1="400" x2="600" y2="400"/>
+    <line x1="0" y1="450" x2="600" y2="450"/>
+    <line x1="50" y1="0" x2="50" y2="500"/>
+    <line x1="100" y1="0" x2="100" y2="500"/>
+    <line x1="150" y1="0" x2="150" y2="500"/>
+    <line x1="200" y1="0" x2="200" y2="500"/>
+    <line x1="250" y1="0" x2="250" y2="500"/>
+    <line x1="300" y1="0" x2="300" y2="500"/>
+    <line x1="350" y1="0" x2="350" y2="500"/>
+    <line x1="400" y1="0" x2="400" y2="500"/>
+    <line x1="450" y1="0" x2="450" y2="500"/>
+    <line x1="50" y1="0" x2="550" y2="500"/>
+  </g>
+
+  <!-- Central Card Surface -->
+  <rect x="50" y="40" width="500" height="420" rx="24" fill="#ffffff" filter="url(#shadow)" stroke="#e2e8f0" stroke-width="1.5"/>
+
+  <!-- Top VivoQuest Header Ribbon -->
+  <rect x="50" y="40" width="500" height="50" rx="24" fill="#0f172a"/>
+  <rect x="50" y="65" width="500" height="25" fill="#0f172a"/>
+  <text x="75" y="72" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="800" fill="#ffffff" letter-spacing="1">VIVOQUEST</text>
+  <text x="165" y="72" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#38bdf8">MEDICAL EQUIPMENT</text>
+  <rect x="420" y="55" width="110" height="22" rx="11" fill="#2563eb" fill-opacity="0.25"/>
+  <text x="475" y="70" font-family="system-ui, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#ffffff" text-anchor="middle" letter-spacing="0.5">RESPIRATORY</text>
+
+  <!-- Illustration Viewport -->
+  <g transform="translate(100, 110)">
+    
+      <!-- Main Console Body -->
+      <rect x="60" y="60" width="280" height="160" rx="20" fill="#f8fafc" stroke="#cbd5e1" stroke-width="4"/>
+      <!-- Heated Humidifier Water Chamber -->
+      <path d="M 240 70 L 320 70 C 330 70 330 180 320 210 L 240 210 Z" fill="#e0f2fe" stroke="#38bdf8" stroke-width="3" opacity="0.8"/>
+      <line x1="250" y1="150" x2="310" y2="150" stroke="#38bdf8" stroke-width="2" stroke-dasharray="4"/>
+      <text x="280" y="145" font-family="sans-serif" font-size="10" font-weight="700" fill="#0284c7" text-anchor="middle">MAX WATER</text>
+      <!-- Color Touch Display -->
+      <rect x="80" y="85" width="140" height="90" rx="8" fill="#0f172a"/>
+      <text x="95" y="110" font-family="monospace" font-size="11" font-weight="700" fill="#38bdf8">BiPAP AUTO ST</text>
+      <text x="95" y="135" font-family="monospace" font-size="20" font-weight="900" fill="#4ade80">15.0 <tspan font-size="10" fill="#94a3b8">cmH2O</tspan></text>
+      <text x="95" y="158" font-family="monospace" font-size="11" fill="#fbbf24">IPAP 15 | EPAP 5</text>
+      <!-- Control Rotary Dial -->
+      <circle cx="150" cy="195" r="14" fill="#e2e8f0" stroke="#94a3b8" stroke-width="2"/>
+      <circle cx="150" cy="195" r="4" fill="#0f172a"/>
+      <!-- Air Outlet Port with Tubing -->
+      <circle cx="310" cy="120" r="14" fill="#64748b"/>
+      <circle cx="310" cy="120" r="9" fill="#0f172a"/>
+      <path d="M 320 120 C 360 120 370 200 340 230" fill="none" stroke="#93c5fd" stroke-width="12" stroke-linecap="round"/>
+    
+  </g>
+
+  <!-- Product Title & Certification Footer -->
+  <line x1="75" y1="400" x2="525" y2="400" stroke="#f1f5f9" stroke-width="2"/>
+  <text x="75" y="425" font-family="system-ui, -apple-system, sans-serif" font-size="15" font-weight="700" fill="#0f172a">BiPAP Respiratory Ventilator</text>
+  <g transform="translate(75, 435)">
+    <circle cx="5" cy="5" r="4" fill="#10b981"/>
+    <text x="16" y="9" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#64748b">Verified Clinical Standard &bull; Biomedical Depot Tested</text>
+  </g>
+</svg>

@@ -6,6 +6,7 @@ export interface ICartItem {
   quantity: number;
   isRental: boolean;
   rentalDurationMonths?: number;
+  installationSelected?: boolean;
   addedAt: Date;
 }
 
@@ -42,6 +43,10 @@ const CartItemSchema = new Schema<ICartItem>(
       min: 1,
       max: 24,
       default: 1,
+    },
+    installationSelected: {
+      type: Boolean,
+      default: false,
     },
     addedAt: {
       type: Date,

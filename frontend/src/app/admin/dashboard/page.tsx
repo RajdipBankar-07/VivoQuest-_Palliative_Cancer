@@ -50,6 +50,7 @@ import {
   Edit3,
   Trash2,
   FileText,
+  UserCheck,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
@@ -62,9 +63,11 @@ import { CaregiverSubscriptionsView } from './components/CaregiverSubscriptionsV
 import { DocumentExpiryAlertsView } from './components/DocumentExpiryAlertsView';
 import { HealthcareProfessionalsView } from './components/HealthcareProfessionalsView';
 import { AdminRescheduleRequestsView } from './components/AdminRescheduleRequestsView';
+import { ProductsMarketplaceView } from './components/ProductsMarketplaceView';
 
 type TabType =
   | 'overview'
+  | 'products_marketplace'
   | 'finances'
   | 'suppliers'
   | 'subscriptions'
@@ -100,6 +103,9 @@ export default function AdminDashboardPage() {
   const [userRoleFilter, setUserRoleFilter] = useState('all');
   const [userStatusFilter, setUserStatusFilter] = useState('all');
   const [userSearch, setUserSearch] = useState('');
+  const [selectedUserForDetails, setSelectedUserForDetails] = useState<string | null>(null);
+  const [userDetailsData, setUserDetailsData] = useState<any | null>(null);
+  const [loadingUserDetails, setLoadingUserDetails] = useState(false);
 
   // Credentials Data
   const [credentials, setCredentials] = useState<any[]>([]);
@@ -152,7 +158,7 @@ export default function AdminDashboardPage() {
 
   // Audit Logs Data
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
-  const [auditPagination, setAuditPagination] = useState({ total: 0, page: 1, limit: 15, totalPages: 1 });
+  const [auditPagination, setAuditPagination] = useState({ total: 0, page: 1, limit: 10, totalPages: 1 });
   const [auditCategoryFilter, setAuditCategoryFilter] = useState('all');
   const [auditSeverityFilter, setAuditSeverityFilter] = useState('all');
 
@@ -184,7 +190,9 @@ export default function AdminDashboardPage() {
   const [fieldStatusFilter, setFieldStatusFilter] = useState('all');
   const [fieldVisitTypeFilter, setFieldVisitTypeFilter] = useState('all');
   const [fieldDateFilter, setFieldDateFilter] = useState('');
+  const [fieldDateScope, setFieldDateScope] = useState<'today' | 'upcoming' | 'past' | 'all'>('today');
   const [fieldSearch, setFieldSearch] = useState('');
+  const [reschedulePage, setReschedulePage] = useState(1);
   const [selectedVisitForAssign, setSelectedVisitForAssign] = useState<any | null>(null);
   const [showReassignModal, setShowReassignModal] = useState(false);
   const [reassignProviderId, setReassignProviderId] = useState('');
@@ -195,6 +203,29 @@ export default function AdminDashboardPage() {
   const [reassignTimeSlot, setReassignTimeSlot] = useState('11:00 AM - 01:00 PM');
   const [availableCaregivers, setAvailableCaregivers] = useState<any[]>([]);
   const [reassignModalError, setReassignModalError] = useState<string | null>(null);
+  const [isLoadingEligibleCaregivers, setIsLoadingEligibleCaregivers] = useState(false);
+  const [eligibleCaregiversMessage, setEligibleCaregiversMessage] = useState<string | null>(null);
+  const [isCheckingOverdue, setIsCheckingOverdue] = useState(false);
+
+  const fetchEligibleCaregiversForVisit = async (visitId: string) => {
+    setIsLoadingEligibleCaregivers(true);
+    setEligibleCaregiversMessage(null);
+    try {
+      const res = await adminApi.getEligibleCaregiversForVisit(visitId);
+      if (res && res.data) {
+        setAvailableCaregivers(res.data);
+        if (res.count === 0 || (res.data && res.data.length === 0)) {
+          setEligibleCaregiversMessage(
+            res.message || 'No eligible caregivers are currently available for this scheduled window. Visit remains marked as requiring replacement.'
+          );
+        }
+      }
+    } catch (err: any) {
+      console.warn('Could not fetch eligible caregivers:', err);
+    } finally {
+      setIsLoadingEligibleCaregivers(false);
+    }
+  };
 
   // Phase 4 & Phase 7: Offline Edge Sync Operations & In-App / Gateway Notifications
   const [fieldOpsSubTab, setFieldOpsSubTab] = useState<'visits' | 'sync_logs' | 'notifications' | 'reschedules'>('visits');
@@ -209,12 +240,28 @@ export default function AdminDashboardPage() {
   const [notifChannelFilter, setNotifChannelFilter] = useState('all');
   const [notifStatusFilter, setNotifStatusFilter] = useState('all');
   const [notifSearch, setNotifSearch] = useState('');
+  const [notifDateScope, setNotifDateScope] = useState<'today' | 'past' | 'all'>('today');
+  const [clearingNotifs, setClearingNotifs] = useState(false);
+  const [selectedNotifIds, setSelectedNotifIds] = useState<string[]>([]);
+  const [showNotifDateRangeModal, setShowNotifDateRangeModal] = useState(false);
+  const [notifStartDate, setNotifStartDate] = useState('');
+  const [notifEndDate, setNotifEndDate] = useState('');
   const [notifPagination, setNotifPagination] = useState({ total: 0, page: 1, limit: 10, totalPages: 1 });
 
-  // Notifications Bell & Unread Drawer
+  // Notifications Bell & Unread Drawer (Phase 12 Complete Notification System)
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(0);
   const [showNotifDrawer, setShowNotifDrawer] = useState<boolean>(false);
   const [inAppNotifs, setInAppNotifs] = useState<any[]>([]);
+  const [notifDrawerFilter, setNotifDrawerFilter] = useState<'all' | 'unread'>('all');
+  const [isDrawerLoading, setIsDrawerLoading] = useState<boolean>(false);
+  const [notifDrawerError, setNotifDrawerError] = useState<string | null>(null);
+  const [selectedNotifForDetail, setSelectedNotifForDetail] = useState<any | null>(null);
+  const [showNotifDetailModal, setShowNotifDetailModal] = useState<boolean>(false);
+  const [notifToDeletePermanently, setNotifToDeletePermanently] = useState<any | null>(null);
+  const [showPermanentDeleteModal, setShowPermanentDeleteModal] = useState<boolean>(false);
+  const [showClearAllModal, setShowClearAllModal] = useState<boolean>(false);
+  const [isClearingOrDeleting, setIsClearingOrDeleting] = useState<boolean>(false);
+  const [navigatingNotifId, setNavigatingNotifId] = useState<string | null>(null);
 
   // Visit Rescheduling Supervision
   const [rescheduleRequests, setRescheduleRequests] = useState<any[]>([]);
@@ -299,8 +346,41 @@ export default function AdminDashboardPage() {
 
       // Only dispatch supplementary background requests once authentication is verified
       adminApi.getAdminFieldVisitStats().then(setFieldStats).catch(() => null);
-      adminApi.getUnreadNotificationsCount().then((res) => setUnreadNotifCount(res.unreadCount || 0)).catch(() => null);
-      adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).then((res) => setInAppNotifs(res.data || [])).catch(() => null);
+      fetchDrawerNotifications(false);
+
+      // Restore active tab and subtab from URL query parameters if present
+      if (typeof window !== 'undefined') {
+        const sp = new URLSearchParams(window.location.search);
+        const urlTab = sp.get('tab') as TabType;
+        const urlSubTab = sp.get('subtab') as any;
+        if (
+          urlTab &&
+          [
+            'overview',
+            'finances',
+            'suppliers',
+            'subscriptions',
+            'reschedule_requests',
+            'expiry_alerts',
+            'professionals',
+            'accounts',
+            'credentials',
+            'hospitals',
+            'services',
+            'exceptions',
+            'support',
+            'audits',
+            'orders',
+            'field_ops',
+          ].includes(urlTab)
+        ) {
+          setActiveTab(urlTab);
+          if (urlTab === 'field_ops' && urlSubTab) {
+            setFieldOpsSubTab(urlSubTab);
+          }
+          await loadTabData(urlTab);
+        }
+      }
     } catch (err: any) {
       if (err instanceof ApiClientError && err.status === 401) {
         authApi.logout();
@@ -315,30 +395,112 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // Periodic background refresh to detect caregiver acceptances/rejections and alerts immediately
+  // Browser back/forward navigation popstate listener (PART C Requirement 6)
+  useEffect(() => {
+    const handlePopState = () => {
+      if (typeof window === 'undefined') return;
+      const sp = new URLSearchParams(window.location.search);
+      const urlTab = sp.get('tab') as TabType;
+      const urlSubTab = sp.get('subtab') as any;
+      if (urlTab) {
+        setActiveTab(urlTab);
+        if (urlTab === 'field_ops' && urlSubTab) {
+          setFieldOpsSubTab(urlSubTab);
+        }
+        loadTabData(urlTab);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Keyboard accessibility: Escape key closes active drawer or modals
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showNotifDetailModal) {
+          setShowNotifDetailModal(false);
+        } else if (showClearAllModal) {
+          setShowClearAllModal(false);
+        } else if (showPermanentDeleteModal) {
+          setShowPermanentDeleteModal(false);
+        } else if (showNotifDrawer) {
+          setShowNotifDrawer(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showNotifDrawer, showNotifDetailModal, showClearAllModal, showPermanentDeleteModal]);
+
+  // Periodic dynamic notification delivery & field ops supervision (PART B)
   useEffect(() => {
     if (!isAuthorized) return;
-    const interval = setInterval(() => {
-      adminApi.getAdminFieldVisitStats().then(setFieldStats).catch(() => null);
-      adminApi.getUnreadNotificationsCount().then((res) => setUnreadNotifCount(res.unreadCount || 0)).catch(() => null);
-      adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).then((res) => setInAppNotifs(res.data || [])).catch(() => null);
-      if (activeTab === 'field_ops') {
-        adminApi.getAdminFieldVisits({
-          status: fieldStatusFilter === 'all' ? undefined : fieldStatusFilter,
-          visitType: fieldVisitTypeFilter === 'all' ? undefined : fieldVisitTypeFilter,
-          date: fieldDateFilter || undefined,
-          search: fieldSearch.trim() || undefined,
-          page: fieldVisitsPagination.page,
-          limit: 10,
-        }).then((res) => {
-          setFieldVisits(res.data);
-          setFieldVisitsPagination(res.pagination);
-        }).catch(() => null);
-      }
-    }, 10000);
 
-    return () => clearInterval(interval);
-  }, [isAuthorized, activeTab, fieldStatusFilter, fieldVisitTypeFilter, fieldDateFilter, fieldSearch, fieldVisitsPagination.page]);
+    const intervalTime = showNotifDrawer ? 10000 : 25000;
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+
+      adminApi.getAdminFieldVisitStats().then(setFieldStats).catch(() => null);
+
+      if (showNotifDrawer) {
+        fetchDrawerNotifications(false);
+      } else {
+        adminApi
+          .getUnreadNotificationsCount()
+          .then((res) => setUnreadNotifCount(res.unreadCount || 0))
+          .catch(() => null);
+      }
+
+      if (activeTab === 'field_ops') {
+        adminApi
+          .getAdminFieldVisits({
+            status: fieldStatusFilter === 'all' ? undefined : fieldStatusFilter,
+            visitType: fieldVisitTypeFilter === 'all' ? undefined : fieldVisitTypeFilter,
+            date: fieldDateFilter || undefined,
+            dateScope: fieldDateScope === 'all' ? undefined : fieldDateScope,
+            search: fieldSearch.trim() || undefined,
+            page: fieldVisitsPagination.page,
+            limit: 10,
+          })
+          .then((res) => {
+            setFieldVisits(res.data);
+            setFieldVisitsPagination(res.pagination);
+          })
+          .catch(() => null);
+      }
+    }, intervalTime);
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        if (showNotifDrawer) {
+          fetchDrawerNotifications(false);
+        } else {
+          adminApi
+            .getUnreadNotificationsCount()
+            .then((res) => setUnreadNotifCount(res.unreadCount || 0))
+            .catch(() => null);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [
+    isAuthorized,
+    showNotifDrawer,
+    activeTab,
+    fieldStatusFilter,
+    fieldVisitTypeFilter,
+    fieldDateFilter,
+    fieldDateScope,
+    fieldSearch,
+    fieldVisitsPagination.page,
+  ]);
 
   const loadUsersData = async (opts?: { page?: number; role?: string; status?: string; search?: string }) => {
     try {
@@ -367,7 +529,16 @@ export default function AdminDashboardPage() {
     }
   };
 
-  const loadTabData = async (tab: TabType, overrides?: { fieldStatus?: string; fieldPage?: number }) => {
+  const loadTabData = async (
+    tab: TabType,
+    overrides?: {
+      fieldStatus?: string;
+      fieldPage?: number;
+      fieldDateScope?: 'today' | 'upcoming' | 'past' | 'all';
+      notifDateScope?: 'today' | 'past' | 'all';
+      notifPage?: number;
+    }
+  ) => {
     setError(null);
     try {
       if (tab === 'overview') {
@@ -375,11 +546,15 @@ export default function AdminDashboardPage() {
         setOverview(data);
       } else if (tab === 'field_ops') {
         const activeStatus = overrides?.fieldStatus ?? fieldStatusFilter;
+        const activeScope = overrides?.fieldDateScope ?? fieldDateScope;
+        const activeNotifScope = overrides?.notifDateScope ?? notifDateScope;
+        const activeNotifPage = overrides?.notifPage ?? notifPagination.page;
         const [visitsRes, statsRes, syncLogsRes, syncStatsRes, notifRes, reschedulesRes, caregiversRes, nurseCaregiversRes, unreadRes, inAppRes] = await Promise.all([
           adminApi.getAdminFieldVisits({
             status: activeStatus === 'all' ? undefined : activeStatus,
             visitType: fieldVisitTypeFilter === 'all' ? undefined : fieldVisitTypeFilter,
             date: fieldDateFilter || undefined,
+            dateScope: activeScope === 'all' ? undefined : activeScope,
             search: fieldSearch.trim() || undefined,
             page: overrides?.fieldPage ?? fieldVisitsPagination.page,
             limit: 10,
@@ -397,7 +572,8 @@ export default function AdminDashboardPage() {
             channel: notifChannelFilter === 'all' ? undefined : notifChannelFilter,
             status: notifStatusFilter === 'all' ? undefined : notifStatusFilter,
             search: notifSearch.trim() || undefined,
-            page: notifPagination.page,
+            dateScope: activeNotifScope,
+            page: activeNotifPage,
             limit: 10,
           }),
           adminApi.getRescheduleRequests(rescheduleStatusFilter === 'all' ? undefined : rescheduleStatusFilter).catch(() => ({ data: [] })),
@@ -461,7 +637,7 @@ export default function AdminDashboardPage() {
           category: auditCategoryFilter,
           severity: auditSeverityFilter,
           page: auditPagination.page,
-          limit: 15,
+          limit: 10,
         });
         setAuditLogs(res.data);
         setAuditPagination(res.pagination);
@@ -591,8 +767,8 @@ export default function AdminDashboardPage() {
         timeSlot: reassignTimeSlot || undefined,
       });
 
-      // Phase 3: Required exact user-facing success banner/toast
-      setSuccessMsg('Reassignment Successful! The new caregiver has been assigned to this visit, and the Patient and Caregiver Apps have been updated.');
+      // Phase 4: Required exact user-facing success banner/toast
+      setSuccessMsg('Reassignment Successful! The new caregiver assignment has been saved (Pending Caregiver Acceptance).');
       setShowReassignModal(false);
       setSelectedVisitForAssign(null);
       setReassignModalError(null);
@@ -607,6 +783,45 @@ export default function AdminDashboardPage() {
     } catch (err: any) {
       // Keep modal open and display actionable error message inside the modal
       setReassignModalError(err.message || 'Reassignment failed to save. Please retry.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Phase 5: Safe Overdue and Missed Visits Sweep
+  const handleCheckOverdueVisits = async () => {
+    setIsCheckingOverdue(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await adminApi.checkOverdueVisits();
+      setSuccessMsg(
+        `Overdue monitoring sweep completed: ${res.data?.totalEvaluated || 0} evaluated, ${res.data?.missedCount || 0} marked as missed.`
+      );
+      await Promise.all([
+        loadTabData('field_ops'),
+        adminApi.getAdminFieldVisitStats().then((stats: any) => setFieldStats(stats)).catch(() => {}),
+        adminApi.getUnreadNotificationsCount().then((u: any) => setUnreadNotifCount(u.unreadCount || 0)).catch(() => {}),
+      ]);
+    } catch (err: any) {
+      setError(err.message || 'Failed to execute overdue visits sweep');
+    } finally {
+      setIsCheckingOverdue(false);
+    }
+  };
+
+  // Archive or Dismiss Concluded / Outdated Field Visit
+  const handleDeleteVisit = async (visitId: string, visitNumber: string) => {
+    if (!window.confirm(`Are you sure you want to dismiss / archive Visit #${visitNumber}? This will remove it from the active operations queue.`)) {
+      return;
+    }
+    setActionLoading(true);
+    try {
+      await adminApi.deleteAdminFieldVisit(visitId, 'Administrative dismissal from operations dashboard');
+      setSuccessMsg(`Visit #${visitNumber} successfully archived/dismissed from the active queue.`);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to archive visit');
     } finally {
       setActionLoading(false);
     }
@@ -628,41 +843,478 @@ export default function AdminDashboardPage() {
     }
   };
 
-  // In-App Notifications: Mark as read
-  const handleMarkNotificationRead = async (id: string, notif?: any) => {
+  // Phase 4: Clear Past Notifications (Older than Today)
+  const handleClearPastNotifications = async () => {
+    if (!window.confirm("Permanently clear and delete all notification logs older than today? Today's active logs will be preserved.")) {
+      return;
+    }
+    setClearingNotifs(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await adminApi.clearPastNotifications();
+      setSuccessMsg(`Successfully cleared ${res.data?.deletedCount ?? 0} past notification logs older than today.`);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to clear past notifications');
+    } finally {
+      setClearingNotifs(false);
+    }
+  };
+
+  // Permanently delete a single notification log
+  const handleDeleteSingleNotification = async (id: string) => {
+    if (!window.confirm('Permanently delete this notification log to reclaim storage?')) return;
+    setActionLoading(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      await adminApi.deleteNotification(id);
+      setSuccessMsg('Notification log permanently deleted.');
+      setSelectedNotifIds((prev) => prev.filter((i) => i !== id));
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete notification.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Bulk delete selected notification logs
+  const handleBulkDeleteNotifications = async () => {
+    if (selectedNotifIds.length === 0) return;
+    if (!window.confirm(`Permanently delete ${selectedNotifIds.length} selected notification logs? This will reclaim storage space.`)) return;
+    setClearingNotifs(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await adminApi.bulkDeleteNotifications(selectedNotifIds);
+      setSuccessMsg(`Successfully deleted ${res.data?.deletedCount ?? selectedNotifIds.length} notification logs.`);
+      setSelectedNotifIds([]);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to bulk delete notifications.');
+    } finally {
+      setClearingNotifs(false);
+    }
+  };
+
+  // Delete notification logs in date range ("this time to this time")
+  const handleDeleteNotificationsByDateRange = async () => {
+    if (!notifStartDate || !notifEndDate) {
+      setError('Please select both a start date and an end date.');
+      return;
+    }
+    if (!window.confirm(`Permanently delete all notification logs between ${notifStartDate} and ${notifEndDate}?`)) return;
+    setClearingNotifs(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await adminApi.deleteNotificationsByDateRange(notifStartDate, notifEndDate);
+      setSuccessMsg(`Successfully deleted ${res.data?.deletedCount ?? 0} notifications between ${notifStartDate} and ${notifEndDate}.`);
+      setShowNotifDateRangeModal(false);
+      setSelectedNotifIds([]);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete notifications in date range.');
+    } finally {
+      setClearingNotifs(false);
+    }
+  };
+
+  const handleClearAllNotifications = async () => {
+    if (!window.confirm("Permanently clear and delete all notification logs from the system? This action cannot be undone.")) {
+      return;
+    }
+    setClearingNotifs(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await adminApi.clearAllNotifications();
+      setSuccessMsg(`Successfully cleared ${res.data?.deletedCount ?? res.data?.clearedCount ?? 0} notification logs.`);
+      await loadTabData('field_ops');
+    } catch (err: any) {
+      setError(err.message || 'Failed to clear notifications');
+    } finally {
+      setClearingNotifs(false);
+    }
+  };
+
+  const handleMarkNotificationRead = async (id: string, _log?: any) => {
+    try {
+      await adminApi.markNotificationRead(id);
+      setUnreadNotifCount((prev) => Math.max(0, prev - 1));
+      setNotificationLogs((prev: any[]) =>
+        prev.map((l: any) => (l._id === id ? { ...l, isRead: true, readAt: new Date().toISOString() } : l))
+      );
+      setInAppNotifs((prev: any[]) =>
+        prev.map((n: any) => (n._id === id ? { ...n, isRead: true, readAt: new Date().toISOString() } : n))
+      );
+    } catch (err: any) {
+      setError(err.message || 'Failed to mark notification as read');
+    }
+  };
+
+  const formatNotificationTitle = (notif: any): string => {
+    if (notif?.title) return notif.title;
+    const t = notif?.templateId || notif?.type || '';
+    if (t === 'VISIT_ASSIGNMENT_REJECTED') return 'Caregiver Assignment Rejected';
+    if (t === 'VISIT_ASSIGNMENT_ACCEPTED') return 'Caregiver Accepted Visit';
+    if (t === 'VISIT_STARTED') return 'Field Visit Started';
+    if (t === 'VISIT_COMPLETED') return 'Field Visit Completed';
+    if (t === 'DAILY_CARE_REPORT_SUBMITTED') return 'Clinical Care Report Submitted';
+    if (t === 'VISIT_RESCHEDULE_REQUESTED' || t.includes('RESCHEDULE')) return 'Visit Reschedule Request';
+    if (t === 'CAREGIVER_REASSIGNED') return 'Caregiver Reassigned';
+    if (t === 'OVERDUE_VISIT_MISSED') return 'Overdue / Missed Visit Alert';
+    if (t === 'PRODUCT_ORDER_PLACED') return 'New Medical Product Order';
+    if (t === 'PRODUCT_ORDER_DISPATCHED') return 'Product Order Dispatched';
+    if (t === 'PRODUCT_ORDER_DELIVERED') return 'Product Order Delivered';
+    if (t === 'PRODUCT_ORDER_CANCELLED') return 'Product Order Cancelled';
+    if (t === 'SUBSCRIPTION_ACTIVATED') return 'Caregiver Plan Subscription Activated';
+    if (t === 'SUBSCRIPTION_CANCELLED') return 'Caregiver Plan Subscription Cancelled';
+    if (t === 'SUBSCRIPTION_EXPIRED') return 'Caregiver Plan Subscription Expired';
+    if (t === 'PAYMENT_RECEIVED') return 'Payment Received Successfully';
+    if (t === 'PAYMENT_FAILED') return 'Payment Transaction Failed';
+    if (t === 'INVOICE_GENERATED') return 'Tax Invoice Generated';
+    if (t === 'INVENTORY_ALERT') return 'Product Inventory Stock Alert';
+    return t ? t.replace(/_/g, ' ') : 'System Notification';
+  };
+
+  // =========================================================================
+  // PHASE 12: AUTHORITATIVE IN-APP NOTIFICATION & DEEP NAVIGATION ENGINE
+  // =========================================================================
+
+  /**
+   * Helper to format relative time strings for notifications
+   */
+  const formatRelativeTime = (timestamp?: string | Date): string => {
+    if (!timestamp) return 'Recently';
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) return 'Recently';
+    const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (diffSec < 60) return 'Just now';
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    if (diffSec < 172800) return 'Yesterday';
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  /**
+   * Strict allowlisted notification destination resolver
+   */
+  const resolveNotificationDestination = (notif: any) => {
+    const notifType = notif.type || notif.templateId || '';
+    const entityType = notif.relatedEntityType || '';
+    const meta = notif.metadata || {};
+    const msg = notif.messageBody || '';
+
+    // 1. Caregiver Assignment Rejection
+    if (notifType === 'VISIT_ASSIGNMENT_REJECTED' || msg.includes('Assignment Rejected')) {
+      return {
+        isActionable: true,
+        tab: 'field_ops' as TabType,
+        subTab: 'visits' as const,
+        filter: { fieldStatus: 'rejected', search: meta.visitNumber || '' },
+        entityId: meta.visitId,
+        entityType: 'visit' as const,
+        actionLabel: 'Reassign Caregiver',
+        categoryLabel: 'Caregiver Rejected',
+        badgeClass: 'bg-rose-100 text-rose-800 border-rose-200',
+        iconName: 'AlertTriangle',
+      };
+    }
+
+    // 2. Caregiver Reassignment Notice
+    if (notifType.includes('CAREGIVER_REASSIGNED')) {
+      return {
+        isActionable: true,
+        tab: 'field_ops' as TabType,
+        subTab: 'visits' as const,
+        filter: { search: meta.visitNumber || '' },
+        entityId: meta.visitId,
+        entityType: 'visit' as const,
+        actionLabel: 'View Field Visit',
+        categoryLabel: 'Reassignment Notice',
+        badgeClass: 'bg-amber-100 text-amber-800 border-amber-200',
+        iconName: 'UserCheck',
+      };
+    }
+
+    // 3. Visit Reschedule Request / Decision
+    if (notifType.includes('RESCHEDULE') || entityType === 'VisitRescheduleRequest' || meta.requestId) {
+      return {
+        isActionable: true,
+        tab: 'reschedule_requests' as TabType,
+        filter: { search: meta.visitNumber || meta.patientPhone || '' },
+        entityId: meta.requestId || meta.visitId,
+        entityType: 'reschedule' as const,
+        actionLabel: 'Review Reschedule',
+        categoryLabel: 'Reschedule Request',
+        badgeClass: 'bg-blue-100 text-primary border-blue-200',
+        iconName: 'Calendar',
+      };
+    }
+
+    // 4. Clinical Care Report Submitted / Visit Completed
+    if (notifType === 'DAILY_CARE_REPORT_SUBMITTED' || notifType === 'VISIT_COMPLETED') {
+      return {
+        isActionable: true,
+        tab: 'field_ops' as TabType,
+        subTab: 'visits' as const,
+        filter: { fieldStatus: 'completed', search: meta.visitNumber || '' },
+        entityId: meta.visitId,
+        entityType: 'visit' as const,
+        actionLabel: 'Inspect Care Report',
+        categoryLabel: 'Clinical Report',
+        badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        iconName: 'FileText',
+      };
+    }
+
+    // 5. Overdue / Missed Visit
+    if (notifType === 'OVERDUE_VISIT_MISSED') {
+      return {
+        isActionable: true,
+        tab: 'field_ops' as TabType,
+        subTab: 'visits' as const,
+        filter: { search: meta.visitNumber || '' },
+        entityId: meta.visitId,
+        entityType: 'visit' as const,
+        actionLabel: 'Monitor Overdue Visit',
+        categoryLabel: 'Missed Visit',
+        badgeClass: 'bg-orange-100 text-orange-800 border-orange-200',
+        iconName: 'Clock',
+      };
+    }
+
+    // 6. Caregiver Assignment Accepted / Visit Started
+    if (
+      notifType === 'VISIT_ASSIGNMENT_ACCEPTED' ||
+      notifType === 'VISIT_STARTED' ||
+      notifType === 'FIELD_VISIT_SCHEDULED' ||
+      entityType === 'FieldVisit'
+    ) {
+      return {
+        isActionable: true,
+        tab: 'field_ops' as TabType,
+        subTab: 'visits' as const,
+        filter: { search: meta.visitNumber || '' },
+        entityId: meta.visitId,
+        entityType: 'visit' as const,
+        actionLabel: 'View Visit Details',
+        categoryLabel: 'Field Operations',
+        badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+        iconName: 'Activity',
+      };
+    }
+
+    // 7. Product Orders (New, Dispatched, Delivered, Cancelled)
+    if (
+      notifType.startsWith('PRODUCT_ORDER_') ||
+      notifType === 'NEW_ORDER' ||
+      entityType === 'ProductOrder' ||
+      meta.orderId ||
+      meta.orderNumber
+    ) {
+      const isCancel = notifType === 'PRODUCT_ORDER_CANCELLED';
+      return {
+        isActionable: true,
+        tab: 'orders' as TabType,
+        filter: { search: meta.orderNumber || '' },
+        entityId: meta.orderId,
+        entityType: 'order' as const,
+        actionLabel: 'Open Order Details',
+        categoryLabel: isCancel ? 'Order Cancelled' : 'Product Commerce',
+        badgeClass: isCancel ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-teal-100 text-teal-800 border-teal-200',
+        iconName: 'Package',
+      };
+    }
+
+    // 8. Caregiver Plan Subscriptions
+    if (
+      notifType.includes('SUBSCRIPTION') ||
+      entityType === 'CaregiverSubscription' ||
+      meta.subscriptionId ||
+      meta.subscriptionNumber
+    ) {
+      return {
+        isActionable: true,
+        tab: 'subscriptions' as TabType,
+        filter: { search: meta.subscriptionNumber || '' },
+        entityId: meta.subscriptionId,
+        entityType: 'subscription' as const,
+        actionLabel: 'Manage Subscription',
+        categoryLabel: 'Care Plan Subscription',
+        badgeClass: 'bg-purple-100 text-purple-800 border-purple-200',
+        iconName: 'ShieldAlert',
+      };
+    }
+
+    // 9. Finances, Payments, Invoices
+    if (notifType.includes('PAYMENT') || notifType.includes('INVOICE')) {
+      return {
+        isActionable: true,
+        tab: 'finances' as TabType,
+        actionLabel: 'View Finances',
+        categoryLabel: 'Finance & Billing',
+        badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+        iconName: 'CreditCard',
+      };
+    }
+
+    // 10. Inventory Alert
+    if (notifType === 'INVENTORY_ALERT' || notifType.includes('INVENTORY')) {
+      return {
+        isActionable: true,
+        tab: 'suppliers' as TabType,
+        actionLabel: 'Manage Inventory',
+        categoryLabel: 'Inventory Alert',
+        badgeClass: 'bg-amber-100 text-amber-800 border-amber-200',
+        iconName: 'AlertCircle',
+      };
+    }
+
+    // 11. Fallback non-actionable or general operational alert
+    return {
+      isActionable: false,
+      tab: undefined,
+      actionLabel: 'View Context',
+      categoryLabel: 'Operations Alert',
+      badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
+      iconName: 'Bell',
+    };
+  };
+
+  /**
+   * Authoritative drawer notification fetcher
+   */
+  const fetchDrawerNotifications = async (showLoadingState = true) => {
+    if (showLoadingState) setIsDrawerLoading(true);
+    setNotifDrawerError(null);
+    try {
+      const [unreadRes, logsRes] = await Promise.all([
+        adminApi.getUnreadNotificationsCount().catch(() => ({ unreadCount: 0 })),
+        adminApi.getNotificationLogs({ channel: 'in_app', limit: 50, inbox: true, dateScope: 'all' }),
+      ]);
+      setUnreadNotifCount(unreadRes.unreadCount || 0);
+
+      const incoming = logsRes.data || [];
+      setInAppNotifs(incoming);
+    } catch (err: any) {
+      console.warn('Failed to fetch notifications:', err);
+      setNotifDrawerError(err.message || 'Failed to load notifications. Please check your network and retry.');
+    } finally {
+      if (showLoadingState) setIsDrawerLoading(false);
+    }
+  };
+
+  /**
+   * Actionable notification deep-navigation handler
+   * Conforms to PART C Requirements:
+   * 1. Navigates to exact admin section
+   * 2. Opens specific entity details
+   * 3. Sets filters and search
+   * 4. Updates URL query params
+   * 5. Strictly allowlisted internal routes
+   * 6. Preserves browser back navigation
+   * 7. Confirms mark-read with backend; navigation proceeds even if mark-read fails with error retry
+   * 8. Does not mark as read merely when drawer opens
+   * 9. Fallback to detail modal for non-actionable alerts
+   * 10. RBAC enforced
+   */
+  const handleNotificationClick = async (notif: any) => {
+    setNavigatingNotifId(notif._id);
+
+    // Requirement 7: Mark notification as read only after backend confirms.
+    // If backend fails, show error and allow retry, while still navigating.
+    if (!notif.isRead) {
+      try {
+        await adminApi.markNotificationRead(notif._id);
+        setUnreadNotifCount((prev) => Math.max(0, prev - 1));
+        setInAppNotifs((prev) =>
+          prev.map((n) => (n._id === notif._id ? { ...n, isRead: true, readAt: new Date().toISOString() } : n))
+        );
+      } catch (markErr: any) {
+        console.warn('Could not mark notification as read on server:', markErr);
+        setError('Could not update notification read status on server. You may retry marking it read.');
+      }
+    }
+
+    setNavigatingNotifId(null);
+    const dest = resolveNotificationDestination(notif);
+
+    // Requirement 9: Non-actionable notifications open detail inspection modal
+    if (!dest.isActionable || !dest.tab) {
+      setSelectedNotifForDetail(notif);
+      setShowNotifDetailModal(true);
+      return;
+    }
+
+    // Close the notification drawer
+    setShowNotifDrawer(false);
+
+    // Navigate to destination tab
+    setActiveTab(dest.tab);
+    if (dest.tab === 'field_ops' && dest.subTab) {
+      setFieldOpsSubTab(dest.subTab);
+    }
+
+    // Apply destination filters
+    if (dest.filter?.fieldStatus) {
+      setFieldStatusFilter(dest.filter.fieldStatus);
+    }
+    if (dest.filter?.search) {
+      if (dest.tab === 'field_ops') setFieldSearch(dest.filter.search);
+      if (dest.tab === 'orders') setOrderSearch(dest.filter.search);
+    }
+
+    // Open entity details modal where applicable
+    if (dest.entityType === 'order') {
+      const targetOrderId = dest.entityId || notif.metadata?.orderId;
+      const targetOrderNumber = notif.metadata?.orderNumber;
+      if (targetOrderId || targetOrderNumber) {
+        const found = orders.find(
+          (o) => o._id === targetOrderId || o.orderNumber === targetOrderNumber
+        );
+        if (found) {
+          setSelectedOrder(found);
+          setShowOrderDetailModal(true);
+        }
+      }
+    }
+
+    // Update URL query parameters to preserve browser back navigation (Requirement 4 & 6)
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams();
+      urlParams.set('tab', dest.tab);
+      if (dest.subTab) urlParams.set('subtab', dest.subTab);
+      if (dest.entityId) urlParams.set('entityId', dest.entityId);
+      window.history.pushState(null, '', `?${urlParams.toString()}`);
+    }
+
+    // Trigger tab data reload for the destination tab
+    await loadTabData(dest.tab, dest.filter);
+  };
+
+  /**
+   * Mark individual notification as read without navigating
+   */
+  const handleMarkSingleRead = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
     try {
       await adminApi.markNotificationRead(id);
       setUnreadNotifCount((prev) => Math.max(0, prev - 1));
       setInAppNotifs((prev) =>
         prev.map((n) => (n._id === id ? { ...n, isRead: true, readAt: new Date().toISOString() } : n))
       );
-      if (notif) {
-        const notifType = notif.type || notif.templateId;
-        if (notifType === 'VISIT_ASSIGNMENT_REJECTED' || notif.messageBody?.includes('Assignment Rejected')) {
-          setActiveTab('field_ops');
-          setFieldOpsSubTab('visits');
-          setFieldStatusFilter('rejected');
-          loadTabData('field_ops', { fieldStatus: 'rejected' });
-          setShowNotifDrawer(false);
-        } else if (notif.relatedEntityType === 'CaregiverSubscription' || notifType === 'SUBSCRIPTION_ACTIVATED') {
-          setActiveTab('subscriptions');
-          setShowNotifDrawer(false);
-        } else if (notif.relatedEntityType === 'VisitRescheduleRequest' || notifType === 'VISIT_RESCHEDULE_REQUESTED') {
-          setActiveTab('field_ops');
-          setFieldOpsSubTab('reschedules');
-          setShowNotifDrawer(false);
-        } else if (notif.relatedEntityType === 'FieldVisit' || notifType?.includes('VISIT')) {
-          setActiveTab('field_ops');
-          setFieldOpsSubTab('visits');
-          setShowNotifDrawer(false);
-        }
-      }
     } catch (err: any) {
-      setError(err.message || 'Failed to mark notification read');
+      setError(err.message || 'Failed to mark notification read on server');
     }
   };
 
-  // In-App Notifications: Mark all as read
+  /**
+   * Mark all notifications belonging to the authenticated admin as read
+   */
   const handleMarkAllNotificationsRead = async () => {
     try {
       await adminApi.markAllNotificationsRead();
@@ -670,9 +1322,61 @@ export default function AdminDashboardPage() {
       setInAppNotifs((prev) =>
         prev.map((n) => ({ ...n, isRead: true, readAt: new Date().toISOString() }))
       );
-      setSuccessMsg('All notifications marked as read');
+      setSuccessMsg('All in-app alerts marked as read');
     } catch (err: any) {
       setError(err.message || 'Failed to mark all notifications read');
+    }
+  };
+
+  /**
+   * Clear All: Open confirmation dialog (soft-clears from active inbox)
+   */
+  const handlePromptClearAll = () => {
+    setShowClearAllModal(true);
+  };
+
+  const handleConfirmClearAll = async () => {
+    setIsClearingOrDeleting(true);
+    try {
+      const res = await adminApi.clearAllNotifications();
+      setInAppNotifs([]);
+      setUnreadNotifCount(0);
+      setShowClearAllModal(false);
+      setSuccessMsg(
+        `All active inbox alerts cleared (${res.data?.clearedCount ?? 0} archived). Operational history preserved.`
+      );
+    } catch (err: any) {
+      setError(err.message || 'Failed to clear notifications from inbox');
+    } finally {
+      setIsClearingOrDeleting(false);
+    }
+  };
+
+  /**
+   * Permanent Deletion: Open confirmation dialog (authorized permanent delete)
+   */
+  const handlePromptDeleteNotification = (e: React.MouseEvent, notif: any) => {
+    e.stopPropagation();
+    setNotifToDeletePermanently(notif);
+    setShowPermanentDeleteModal(true);
+  };
+
+  const handleConfirmPermanentDelete = async () => {
+    if (!notifToDeletePermanently) return;
+    setIsClearingOrDeleting(true);
+    try {
+      await adminApi.deleteNotification(notifToDeletePermanently._id);
+      if (!notifToDeletePermanently.isRead) {
+        setUnreadNotifCount((prev) => Math.max(0, prev - 1));
+      }
+      setInAppNotifs((prev) => prev.filter((n) => n._id !== notifToDeletePermanently._id));
+      setShowPermanentDeleteModal(false);
+      setNotifToDeletePermanently(null);
+      setSuccessMsg('Notification record deleted permanently from database.');
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete notification record');
+    } finally {
+      setIsClearingOrDeleting(false);
     }
   };
 
@@ -756,15 +1460,56 @@ export default function AdminDashboardPage() {
   // Account Status Toggle
   const handleToggleUserStatus = async (userId: string, currentStatus: string) => {
     const nextStatus = currentStatus === 'active' ? 'suspended' : 'active';
-    if (!window.confirm(`Are you sure you want to change user status to '${nextStatus}'?`)) return;
+    if (!window.confirm(`Are you sure you want to change user status to '${nextStatus}'? This will ${nextStatus === 'suspended' ? 'stop/suspend' : 'reactivate'} account access.`)) return;
 
     setActionLoading(true);
     try {
       await adminApi.updateUserStatus(userId, nextStatus);
       setSuccessMsg(`User status updated to '${nextStatus}'`);
-      await loadTabData('accounts');
+      if (userDetailsData && (userDetailsData.user?._id === userId || userDetailsData.user?.id === userId)) {
+        setUserDetailsData((prev: any) => prev ? { ...prev, user: { ...prev.user, status: nextStatus } } : null);
+      }
+      await loadUsersData({ page: usersPagination.page });
     } catch (err: any) {
       setError(err.message || 'Failed to update user status');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Open User Profile & Governance Details
+  const handleOpenUserDetails = async (userId: string) => {
+    setSelectedUserForDetails(userId);
+    setLoadingUserDetails(true);
+    setUserDetailsData(null);
+    try {
+      const res = await adminApi.getUserDetails(userId);
+      setUserDetailsData(res.data);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load user profile details');
+    } finally {
+      setLoadingUserDetails(false);
+    }
+  };
+
+  // Permanently Delete User Account (reclaim storage)
+  const handleDeleteUser = async (userId: string, userName: string, role: string) => {
+    if (!window.confirm(`Permanently delete account for "${userName}" (${role})? This will permanently remove the user, profiles, and associated records from MongoDB to reclaim storage space. This action cannot be undone.`)) {
+      return;
+    }
+    setActionLoading(true);
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const res = await adminApi.deleteUser(userId);
+      setSuccessMsg(res.message || `User '${userName}' was permanently deleted.`);
+      if (selectedUserForDetails === userId) {
+        setSelectedUserForDetails(null);
+        setUserDetailsData(null);
+      }
+      await loadUsersData({ page: usersPagination.page });
+    } catch (err: any) {
+      setError(err.message || 'Failed to permanently delete user account');
     } finally {
       setActionLoading(false);
     }
@@ -1037,24 +1782,23 @@ export default function AdminDashboardPage() {
                 {currentUser?.fullName || 'Operations Admin'} ({currentUser?.role})
               </div>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
+            <button
               onClick={() => loadTabData(activeTab)}
               disabled={isLoading || actionLoading}
-              className="bg-navy-light/50 border-white/20 text-white hover:bg-white/10 flex items-center gap-1.5"
+              className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/20 border border-white/25 text-white flex items-center gap-1.5 shadow-2xs transition active:scale-95 disabled:opacity-50"
+              title="Synchronize live platform data"
             >
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
-              Sync Data
-            </Button>
+              <span>Sync Data</span>
+            </button>
             <button
               onClick={() => {
                 setShowNotifDrawer(true);
-                adminApi.getUnreadNotificationsCount().then((res) => setUnreadNotifCount(res.unreadCount || 0)).catch(() => null);
-                adminApi.getNotificationLogs({ channel: 'in_app', limit: 20 }).then((res) => setInAppNotifs(res.data || [])).catch(() => null);
+                fetchDrawerNotifications(true);
               }}
               className="relative p-2 rounded-xl bg-navy-light/50 border border-white/20 text-white hover:bg-white/10 transition flex items-center justify-center"
               title="View In-App Alerts"
+              aria-label="View notifications and operations alerts"
             >
               <Bell size={16} />
               {unreadNotifCount > 0 && (
@@ -1067,29 +1811,32 @@ export default function AdminDashboardPage() {
         </div>
       </div>
 
-      {/* Sandbox & Demonstration Data Banner */}
-      <div className="bg-primary-light/40 border-b border-primary/20 py-2.5 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-[1560px] mx-auto flex items-center justify-between text-xs text-navy/80 gap-2">
+      {/* Executive Operations Status Banner */}
+      <div className="bg-white border-b border-border py-2 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-[1560px] mx-auto flex items-center justify-between text-xs text-slate-600 gap-2">
           <div className="flex items-center gap-2">
-            <Info size={15} className="text-primary shrink-0" />
-            <span>
-              <strong>Real Backend Data Mode:</strong> Connected to Express &amp; MongoDB at{' '}
-              <code className="bg-white px-1.5 py-0.5 rounded border border-primary/20 font-mono text-[11px]">
-                127.0.0.1:27017/vivoquest_db
-              </code>
-              . Demonstration accounts, test clinics, and sandbox referrals are explicitly tagged.
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="font-semibold text-navy">Platform Operational Status:</span>
+            <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-bold border border-emerald-200 flex items-center gap-1">
+              <CheckCircle2 size={11} />
+              <span>Real-Time Clinical &amp; Commerce Engine</span>
             </span>
           </div>
-          <div className="hidden md:flex items-center gap-3 text-slate-500 text-[11px]">
-            <span>Security: Least-Privilege Enforced</span>
+          <div className="hidden sm:flex items-center gap-3 text-slate-500 text-[11px]">
+            <span className="flex items-center gap-1">
+              <ShieldAlert size={12} className="text-primary" />
+              <span>Role-Based Access Control</span>
+            </span>
             <span>•</span>
-            <span>Audit Logging Active</span>
+            <span>Structured Audit Logging</span>
+            <span>•</span>
+            <span>DPDP Act Compliance</span>
           </div>
         </div>
       </div>
 
       {/* Main Content Area */}
-      <div className="max-w-[1560px] mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full flex-1">
+      <div className="max-w-[1560px] mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full flex-1">
         {/* Alerts / Error display */}
         {error && (
           <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start justify-between gap-3 shadow-sm">
@@ -1121,59 +1868,205 @@ export default function AdminDashboardPage() {
           </div>
         )}
 
-        {/* Tab Navigation Navigation Bar */}
-        <div className="bg-white rounded-2xl shadow-sm border border-border p-1.5 mb-8 flex flex-wrap gap-1">
-          {[
-            { id: 'overview', label: 'Overview', icon: Activity },
-            { id: 'finances', label: 'Finances & P&L', icon: CreditCard },
-            { id: 'suppliers', label: 'Suppliers & Procurement', icon: Truck },
-            { id: 'subscriptions', label: 'Caregiver Plans', icon: HeartPulse },
-            { id: 'reschedule_requests', label: 'Reschedule Requests', icon: Calendar, badge: overview?.pendingRescheduleCount, alert: overview?.pendingRescheduleCount > 0 },
-            { id: 'expiry_alerts', label: 'Expiry Alerts', icon: AlertTriangle, badge: overview?.pendingCredentialsCount, alert: overview?.pendingCredentialsCount > 0 },
-            { id: 'professionals', label: 'Healthcare Staff', icon: Stethoscope },
-            { id: 'orders', label: 'Orders & DME Fulfillment', icon: Package, badge: ordersPagination.total || undefined },
-            { id: 'field_ops', label: 'Field Operations & DME', icon: Navigation, badge: fieldStats?.activeVisits || undefined },
-            { id: 'accounts', label: 'Accounts & Users', icon: Users, badge: overview?.totalUsers },
-            { id: 'credentials', label: 'Credential Reviews', icon: FileCheck, badge: overview?.pendingCredentialsCount, alert: overview?.pendingCredentialsCount > 0 },
-            { id: 'hospitals', label: 'Hospital Partners', icon: Building2, badge: overview?.totalHospitals },
-            { id: 'services', label: 'Service Catalog', icon: Layers },
-            { id: 'exceptions', label: 'Exceptions & Triage', icon: AlertTriangle, badge: overview?.recentExceptions?.urgentPendingReferrals?.length },
-            { id: 'support', label: 'Support & Tickets', icon: HelpCircle, badge: overview?.openSupportTicketsCount },
-            { id: 'audits', label: 'Audit Trail', icon: ShieldAlert },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as TabType)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                  isActive
-                    ? 'bg-navy text-white shadow-sm'
-                    : 'text-slate-600 hover:text-navy hover:bg-slate-100'
-                }`}
-              >
-                <Icon size={16} className={isActive ? 'text-secondary' : 'text-slate-400'} />
-                <span>{tab.label}</span>
-                {typeof tab.badge === 'number' && tab.badge > 0 && (
-                  <span
-                    className={`ml-1 px-2 py-0.5 rounded-full text-xs font-bold ${
-                      isActive
-                        ? 'bg-white/20 text-white'
-                        : tab.alert
-                        ? 'bg-rose-100 text-rose-700'
-                        : 'bg-slate-100 text-slate-700'
-                    }`}
-                  >
-                    {tab.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {/* Executive Module Navigation */}
+        {(() => {
+          type MainCategory = 'overview' | 'care' | 'subscriptions' | 'equipment' | 'finances' | 'governance';
 
-        {/* Phase 2: Central Commerce, Governance & Financial Tabs */}
+          const tabToCategoryMap: Record<TabType, MainCategory> = {
+            overview: 'overview',
+            accounts: 'care',
+            professionals: 'care',
+            field_ops: 'care',
+            reschedule_requests: 'care',
+            subscriptions: 'subscriptions',
+            services: 'subscriptions',
+            products_marketplace: 'equipment',
+            orders: 'equipment',
+            suppliers: 'equipment',
+            finances: 'finances',
+            hospitals: 'governance',
+            credentials: 'governance',
+            expiry_alerts: 'governance',
+            audits: 'governance',
+            support: 'governance',
+            exceptions: 'governance',
+          };
+
+          const currentCategory = tabToCategoryMap[activeTab] || 'overview';
+
+          const categoryModules: Array<{
+            id: MainCategory;
+            label: string;
+            icon: any;
+            defaultTab: TabType;
+            badge?: number;
+            alert?: boolean;
+            subTabs?: Array<{ id: TabType; label: string; icon: any; badge?: number; alert?: boolean }>;
+          }> = [
+            {
+              id: 'overview',
+              label: 'Overview',
+              icon: Activity,
+              defaultTab: 'overview',
+            },
+            {
+              id: 'care',
+              label: 'Patients & Care',
+              icon: Users,
+              defaultTab: 'accounts',
+              badge: overview?.pendingRescheduleCount,
+              alert: overview?.pendingRescheduleCount > 0,
+              subTabs: [
+                { id: 'accounts', label: 'Patient & Family Accounts', icon: Users, badge: overview?.totalUsers },
+                { id: 'professionals', label: 'Healthcare Staff', icon: Stethoscope },
+                { id: 'field_ops', label: 'Field Operations & Bedside Visits', icon: Navigation, badge: fieldStats?.activeVisits || undefined },
+                { id: 'reschedule_requests', label: 'Reschedule Requests', icon: Calendar, badge: overview?.pendingRescheduleCount, alert: overview?.pendingRescheduleCount > 0 },
+              ],
+            },
+            {
+              id: 'subscriptions',
+              label: 'Subscriptions & Plans',
+              icon: HeartPulse,
+              defaultTab: 'subscriptions',
+              subTabs: [
+                { id: 'subscriptions', label: 'Caregiver Subscriptions', icon: HeartPulse },
+                { id: 'services', label: 'Service Catalog & Packages', icon: Layers },
+              ],
+            },
+            {
+              id: 'equipment',
+              label: 'Products & Marketplace',
+              icon: Package,
+              defaultTab: 'products_marketplace',
+              badge: ordersPagination.total || undefined,
+              subTabs: [
+                { id: 'products_marketplace', label: 'Products & Marketplace', icon: Package },
+                { id: 'orders', label: 'Orders & Deliveries', icon: Truck, badge: ordersPagination.total || undefined },
+                { id: 'suppliers', label: 'Suppliers & Vendors', icon: Building2 },
+              ],
+            },
+            {
+              id: 'finances',
+              label: 'Finances & Invoices',
+              icon: CreditCard,
+              defaultTab: 'finances',
+            },
+            {
+              id: 'governance',
+              label: 'Network & Governance',
+              icon: ShieldAlert,
+              defaultTab: 'hospitals',
+              badge:
+                (overview?.pendingCredentialsCount || 0) +
+                (overview?.openSupportTicketsCount || 0) +
+                (overview?.recentExceptions?.urgentPendingReferrals?.length || 0),
+              alert: (overview?.pendingCredentialsCount || 0) > 0,
+              subTabs: [
+                { id: 'hospitals', label: 'Hospital Partners', icon: Building2, badge: overview?.totalHospitals },
+                { id: 'credentials', label: 'Staff Credential Reviews', icon: FileCheck, badge: overview?.pendingCredentialsCount, alert: overview?.pendingCredentialsCount > 0 },
+                { id: 'expiry_alerts', label: 'Document Expiry Alerts', icon: AlertTriangle, badge: overview?.pendingCredentialsCount, alert: overview?.pendingCredentialsCount > 0 },
+                { id: 'audits', label: 'Audit Trail & Compliance', icon: ShieldAlert },
+                { id: 'support', label: 'Support & Tickets', icon: HelpCircle, badge: overview?.openSupportTicketsCount },
+                { id: 'exceptions', label: 'Clinical Exceptions & Triage', icon: AlertTriangle, badge: overview?.recentExceptions?.urgentPendingReferrals?.length },
+              ],
+            },
+          ];
+
+          return (
+            <div className="bg-white rounded-2xl shadow-sm border border-border p-2 mb-6">
+              {/* Primary 6 Module Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                {categoryModules.map((cat) => {
+                  const Icon = cat.icon;
+                  const isSelected = currentCategory === cat.id;
+                  return (
+                    <button
+                      key={cat.id}
+                      onClick={() => {
+                        if (currentCategory !== cat.id) {
+                          setActiveTab(cat.defaultTab);
+                        }
+                      }}
+                      className={`flex items-center justify-between sm:justify-start gap-2 px-3.5 py-3 rounded-xl font-bold text-xs sm:text-sm transition-all duration-150 ${
+                        isSelected
+                          ? 'bg-navy text-white shadow-md shadow-navy/20'
+                          : 'text-slate-600 hover:text-navy hover:bg-slate-100 border border-transparent hover:border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <Icon size={17} className={isSelected ? 'text-secondary shrink-0' : 'text-slate-400 shrink-0'} />
+                        <span className="truncate">{cat.label}</span>
+                      </div>
+                      {typeof cat.badge === 'number' && cat.badge > 0 && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold shrink-0 sm:ml-auto ${
+                            isSelected
+                              ? 'bg-white/20 text-white'
+                              : cat.alert
+                              ? 'bg-rose-100 text-rose-700'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {cat.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Secondary Sub-Tabs Navigation for active module */}
+              {(() => {
+                const activeCategoryObj = categoryModules.find((c) => c.id === currentCategory);
+                if (!activeCategoryObj?.subTabs || activeCategoryObj.subTabs.length === 0) return null;
+
+                return (
+                  <div className="mt-3 pt-3 border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-2 shrink-0 hidden sm:inline">
+                      {activeCategoryObj.label} Modules:
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {activeCategoryObj.subTabs.map((sub) => {
+                        const SubIcon = sub.icon;
+                        const isSubActive = activeTab === sub.id;
+                        return (
+                          <button
+                            key={sub.id}
+                            onClick={() => setActiveTab(sub.id)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold shrink-0 transition-all ${
+                              isSubActive
+                                ? 'bg-primary text-white shadow-xs font-bold'
+                                : 'text-slate-600 hover:text-navy hover:bg-slate-100 bg-slate-50/70 border border-border/60'
+                            }`}
+                          >
+                            <SubIcon size={13} className={isSubActive ? 'text-white' : 'text-slate-400'} />
+                            <span>{sub.label}</span>
+                            {typeof sub.badge === 'number' && sub.badge > 0 && (
+                              <span
+                                className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                                  isSubActive
+                                    ? 'bg-white/30 text-white'
+                                    : sub.alert
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-slate-200 text-slate-700'
+                                }`}
+                              >
+                                {sub.badge}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          );
+        })()}
+
+        {/* Central Commerce, Products, Governance & Financial Tabs */}
+        {activeTab === 'products_marketplace' && <ProductsMarketplaceView />}
         {activeTab === 'finances' && <FinancialSummaryView />}
         {activeTab === 'suppliers' && <SupplierManagementView />}
         {activeTab === 'subscriptions' && (
@@ -1308,9 +2201,9 @@ export default function AdminDashboardPage() {
 
                 <div className="space-y-3">
                   {overview?.recentExceptions?.urgentPendingReferrals?.length > 0 ? (
-                    overview.recentExceptions.urgentPendingReferrals.map((ref: any) => (
+                    overview.recentExceptions.urgentPendingReferrals.map((ref: any, idx: number) => (
                       <div
-                        key={ref._id}
+                        key={ref._id || ref.id || ref.referralId || `ref-${idx}`}
                         className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/50 flex items-center justify-between"
                       >
                         <div>
@@ -1319,7 +2212,7 @@ export default function AdminDashboardPage() {
                               Urgent Referral
                             </span>
                             <span className="text-xs font-bold text-navy">
-                              {ref.referralId || ref._id.substring(0, 8)}
+                              {ref.referralId || (ref._id?.toString() || ref.id || '').substring(0, 8)}
                             </span>
                           </div>
                           <p className="text-xs text-slate-600 mt-1">
@@ -1342,9 +2235,9 @@ export default function AdminDashboardPage() {
                   )}
 
                   {overview?.recentExceptions?.unassignedBookings?.length > 0 && (
-                    overview.recentExceptions.unassignedBookings.map((bk: any) => (
+                    overview.recentExceptions.unassignedBookings.map((bk: any, idx: number) => (
                       <div
-                        key={bk._id}
+                        key={bk._id || bk.id || bk.bookingReference || `bk-${idx}`}
                         className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/50 flex items-center justify-between"
                       >
                         <div>
@@ -1353,7 +2246,7 @@ export default function AdminDashboardPage() {
                               Unassigned Booking
                             </span>
                             <span className="text-xs font-bold text-navy">
-                              {bk.bookingReference || bk._id.substring(0, 8)}
+                              {bk.bookingReference || (bk._id?.toString() || bk.id || '').substring(0, 8)}
                             </span>
                           </div>
                           <p className="text-xs text-slate-600 mt-1">
@@ -1389,8 +2282,8 @@ export default function AdminDashboardPage() {
 
                 <div className="divide-y divide-border">
                   {overview?.recentAuditLogs?.length > 0 ? (
-                    overview.recentAuditLogs.slice(0, 5).map((log: any) => (
-                      <div key={log._id} className="py-3 flex items-start justify-between gap-3 text-xs">
+                    overview.recentAuditLogs.slice(0, 5).map((log: any, idx: number) => (
+                      <div key={log._id || log.id || `audit-${idx}`} className="py-3 flex items-start justify-between gap-3 text-xs">
                         <div>
                           <div className="font-semibold text-navy flex items-center gap-2">
                             <span>{log.action}</span>
@@ -1399,7 +2292,7 @@ export default function AdminDashboardPage() {
                             </span>
                           </div>
                           <p className="text-slate-500 mt-0.5">
-                            By: {log.performedBy?.fullName || log.performedBy?.phone || 'System'} • Target: {log.targetType}
+                            By: {log.performedBy?.fullName || log.performedBy?.phone || log.actorName || 'System'} • Target: {log.targetType}
                           </p>
                         </div>
                         <div className="text-[11px] text-slate-400 whitespace-nowrap">
@@ -1449,57 +2342,99 @@ export default function AdminDashboardPage() {
               </div>
             </div>
 
-            {/* Metrics Row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Field Visits</div>
-                <div className="text-xl font-black text-navy mt-1">{fieldStats?.totalVisits ?? '—'}</div>
-                <div className="text-[10px] text-slate-400 mt-0.5">Cumulative roster</div>
-              </div>
-
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pending Acceptance</div>
-                <div className="text-xl font-black text-amber-600 mt-1">{fieldStats?.pendingAcceptanceCount ?? 0}</div>
-                <div className="text-[10px] text-amber-600 font-semibold mt-0.5">Awaiting caregiver</div>
-              </div>
-
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Accepted</div>
-                <div className="text-xl font-black text-emerald-600 mt-1">{fieldStats?.acceptedCount ?? '—'}</div>
-                <div className="text-[10px] text-emerald-600 font-semibold mt-0.5 flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Confirmed
+            {/* Executive Pastel Gradient KPI Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Card 1: Today's Schedule & Active Roster */}
+              <div
+                onClick={() => {
+                  setFieldDateScope('today');
+                  setFieldStatusFilter('all');
+                  loadTabData('field_ops', { fieldDateScope: 'today', fieldStatus: 'all', fieldPage: 1 });
+                }}
+                className={`p-5 rounded-2xl border transition-all cursor-pointer bg-gradient-to-br from-indigo-50/90 via-white to-blue-50/40 hover:shadow-md ${
+                  fieldDateScope === 'today' ? 'border-indigo-400 ring-2 ring-indigo-300/40 shadow-sm' : 'border-indigo-100/80 shadow-xs'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Today's Daily Roster</span>
+                  <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-sm shadow-indigo-200">
+                    <Calendar size={18} />
+                  </div>
+                </div>
+                <div className="text-2xl font-black text-navy">{fieldStats?.todayCount ?? 0} Today</div>
+                <div className="flex items-center gap-1.5 mt-2 text-xs font-semibold text-indigo-700">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                  <span>{fieldStats?.totalVisits ?? 0} cumulative visits on roster</span>
                 </div>
               </div>
 
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Rejected by Caregiver</div>
-                <div className="text-xl font-black text-rose-600 mt-1">{fieldStats?.rejectedCount ?? 0}</div>
-                <div className="text-[10px] text-rose-500 font-semibold mt-0.5">Reassignment needed</div>
+              {/* Card 2: Accepted & En Route Caregivers */}
+              <div
+                onClick={() => {
+                  setFieldStatusFilter('accepted');
+                  loadTabData('field_ops', { fieldStatus: 'accepted', fieldPage: 1 });
+                }}
+                className={`p-5 rounded-2xl border transition-all cursor-pointer bg-gradient-to-br from-emerald-50/90 via-white to-teal-50/40 hover:shadow-md ${
+                  fieldStatusFilter === 'accepted' ? 'border-emerald-400 ring-2 ring-emerald-300/40 shadow-sm' : 'border-emerald-100/80 shadow-xs'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-bold text-emerald-900 uppercase tracking-wider">Accepted &amp; En Route</span>
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm shadow-emerald-200">
+                    <CheckCircle2 size={18} />
+                  </div>
+                </div>
+                <div className="text-2xl font-black text-emerald-950">{(fieldStats?.acceptedCount || 0) + (fieldStats?.inProgressCount || 0)}</div>
+                <div className="flex items-center gap-1.5 mt-2 text-xs font-semibold text-emerald-700">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span>{fieldStats?.acceptedCount ?? 0} confirmed • {fieldStats?.inProgressCount ?? 0} in progress</span>
+                </div>
               </div>
 
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Overdue Visits</div>
-                <div className="text-xl font-black text-amber-600 mt-1">{fieldStats?.overdueVisits ?? 0}</div>
-                <div className="text-[10px] text-amber-600 font-semibold mt-0.5">SLA attention needed</div>
+              {/* Card 3: Caregiver Rejections & Exceptions */}
+              <div
+                onClick={() => {
+                  setFieldStatusFilter('rejected');
+                  loadTabData('field_ops', { fieldStatus: 'rejected', fieldPage: 1 });
+                }}
+                className={`p-5 rounded-2xl border transition-all cursor-pointer bg-gradient-to-br from-rose-50/90 via-white to-amber-50/40 hover:shadow-md ${
+                  fieldStatusFilter === 'rejected' ? 'border-rose-400 ring-2 ring-rose-300/40 shadow-sm' : 'border-rose-100/80 shadow-xs'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-bold text-rose-900 uppercase tracking-wider">Rejections &amp; Overdue</span>
+                  <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center shadow-sm shadow-rose-200">
+                    <AlertTriangle size={18} />
+                  </div>
+                </div>
+                <div className="text-2xl font-black text-rose-950">
+                  {(fieldStats?.rejectedCount || 0) + (fieldStats?.replacementRequiredCount || 0) + (fieldStats?.missedCount || 0) + (fieldStats?.overdueCount || 0)}
+                </div>
+                <div className="flex items-center gap-1.5 mt-2 text-xs font-semibold text-rose-700">
+                  <span>{fieldStats?.rejectedCount ?? 0} rejected • {((fieldStats?.overdueCount || 0) + (fieldStats?.missedCount || 0) + (fieldStats?.replacementRequiredCount || 0))} overdue/exceptions</span>
+                </div>
               </div>
 
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Exceptions / Failed</div>
-                <div className="text-xl font-black text-rose-600 mt-1">{fieldStats?.failedVisits ?? 0}</div>
-                <div className="text-[10px] text-rose-500 font-semibold mt-0.5">Requires reassignment</div>
-              </div>
-
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Completed Today</div>
-                <div className="text-xl font-black text-secondary mt-1">{fieldStats?.completedVisits ?? 0}</div>
-                <div className="text-[10px] text-secondary font-semibold mt-0.5">Documented &amp; signed</div>
-              </div>
-
-              <div className="bg-white p-3.5 rounded-2xl border border-border shadow-sm">
-                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">DME Setups Verified</div>
-                <div className="text-xl font-black text-indigo-600 mt-1">{fieldStats?.equipmentInstallationsVerified ?? 0}</div>
-                <div className="text-[10px] text-indigo-600 font-semibold mt-0.5">Barcode / Serial logged</div>
+              {/* Card 4: Concluded Care & DME Installations */}
+              <div
+                onClick={() => {
+                  setFieldDateScope('past');
+                  loadTabData('field_ops', { fieldDateScope: 'past', fieldPage: 1 });
+                }}
+                className={`p-5 rounded-2xl border transition-all cursor-pointer bg-gradient-to-br from-teal-50/90 via-white to-slate-50/40 hover:shadow-md ${
+                  fieldDateScope === 'past' ? 'border-teal-400 ring-2 ring-teal-300/40 shadow-sm' : 'border-teal-100/80 shadow-xs'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-bold text-teal-900 uppercase tracking-wider">Completed &amp; DME Setup</span>
+                  <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shadow-sm shadow-teal-200">
+                    <Package size={18} />
+                  </div>
+                </div>
+                <div className="text-2xl font-black text-teal-950">{fieldStats?.completedCount ?? fieldStats?.completedVisits ?? 0}</div>
+                <div className="flex items-center gap-1.5 mt-2 text-xs font-semibold text-teal-700">
+                  <span>{fieldStats?.completedTodayCount ?? 0} completed today • {fieldStats?.equipmentInstallationsVerified ?? 0} DME verified</span>
+                </div>
               </div>
             </div>
 
@@ -1611,17 +2546,96 @@ export default function AdminDashboardPage() {
             {fieldOpsSubTab === 'visits' && (
               /* Field Visits Queue Table with Filters */
               <div className="bg-white rounded-2xl border border-border shadow-sm p-6 space-y-6">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-bold text-navy">All Field Healthcare Visits ({fieldVisitsPagination.total})</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Filter by status, visit type, date, or search patient and clinician names.
-                  </p>
+                {/* Daily Roster & Date Scope Switcher */}
+                <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100/80 rounded-2xl border border-slate-200/80">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFieldDateScope('today');
+                      loadTabData('field_ops', { fieldDateScope: 'today', fieldPage: 1 });
+                    }}
+                    className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                      fieldDateScope === 'today'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-navy hover:bg-white/80'
+                    }`}
+                  >
+                    <Clock size={13} />
+                    <span>Today's Daily Roster</span>
+                    <span className={`px-2 py-0.2 rounded-full text-[10px] font-extrabold ${
+                      fieldDateScope === 'today' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                    }`}>
+                      {fieldStats?.todayCount ?? 0}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFieldDateScope('upcoming');
+                      loadTabData('field_ops', { fieldDateScope: 'upcoming', fieldPage: 1 });
+                    }}
+                    className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                      fieldDateScope === 'upcoming'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-navy hover:bg-white/80'
+                    }`}
+                  >
+                    <Calendar size={13} />
+                    <span>Upcoming Schedule</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFieldDateScope('past');
+                      loadTabData('field_ops', { fieldDateScope: 'past', fieldPage: 1 });
+                    }}
+                    className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                      fieldDateScope === 'past'
+                        ? 'bg-slate-700 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-navy hover:bg-white/80'
+                    }`}
+                  >
+                    <Layers size={13} />
+                    <span>Past &amp; Concluded Archive</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFieldDateScope('all');
+                      loadTabData('field_ops', { fieldDateScope: 'all', fieldPage: 1 });
+                    }}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold ml-auto transition-all ${
+                      fieldDateScope === 'all'
+                        ? 'bg-navy text-white shadow-xs font-bold'
+                        : 'text-slate-500 hover:text-navy hover:bg-white/80'
+                    }`}
+                  >
+                    <span>All Cumulative ({fieldStats?.totalVisits ?? 0})</span>
+                  </button>
                 </div>
 
-                {/* Filters */}
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <div className="relative">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-navy">
+                      {fieldDateScope === 'today'
+                        ? "Today's Active Field Schedule"
+                        : fieldDateScope === 'upcoming'
+                        ? "Upcoming Scheduled Visits"
+                        : fieldDateScope === 'past'
+                        ? "Past & Concluded Visit History"
+                        : "All Field Healthcare Visits"} ({fieldVisitsPagination.total})
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Filter by status, visit type, date, or search patient and clinician names.
+                    </p>
+                  </div>
+
+                  {/* Filters */}
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <div className="relative">
                     <Search size={15} className="absolute left-3 top-2.5 text-slate-400" />
                     <input
                       type="text"
@@ -1646,10 +2660,13 @@ export default function AdminDashboardPage() {
                     <option value="assigned">Pending Acceptance (Assigned)</option>
                     <option value="accepted">Accepted by Caregiver</option>
                     <option value="rejected">Rejected by Caregiver</option>
+                    <option value="replacement_required">Replacement Required</option>
                     <option value="en_route">En Route</option>
                     <option value="arrived">Arrived</option>
                     <option value="in_progress">In Progress</option>
                     <option value="completed">Completed</option>
+                    <option value="missed">Missed Visit</option>
+                    <option value="overdue">Overdue Active Visits</option>
                     <option value="failed">Failed / Exception</option>
                     <option value="cancelled">Cancelled</option>
                   </select>
@@ -1687,6 +2704,16 @@ export default function AdminDashboardPage() {
                     disabled={isLoading}
                   >
                     Filter
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                    onClick={handleCheckOverdueVisits}
+                    disabled={isCheckingOverdue || isLoading}
+                  >
+                    {isCheckingOverdue ? 'Sweeping...' : 'Check Overdue'}
                   </Button>
                 </div>
               </div>
@@ -1749,6 +2776,22 @@ export default function AdminDashboardPage() {
                               {v.providerPhone && (
                                 <div className="text-[11px] text-slate-400">+91 {v.providerPhone}</div>
                               )}
+                              {v.timestamps?.assignedAt && (
+                                <div className="text-[10px] text-slate-400 mt-0.5">
+                                  Assigned: {new Date(v.timestamps.assignedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' })}
+                                </div>
+                              )}
+                              {(() => {
+                                const rejHist = v.statusHistory?.find((h: any) => h.status === 'rejected');
+                                if (rejHist && v.status !== 'rejected') {
+                                  return (
+                                    <div className="mt-1 text-[10px] text-amber-700 bg-amber-50 p-1 rounded border border-amber-200">
+                                      Prev: <span className="font-semibold">{rejHist.changedByName || 'Previous Staff'}</span> (Replaced)
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </td>
 
                             <td className="py-3.5 px-4 whitespace-nowrap">
@@ -1764,14 +2807,28 @@ export default function AdminDashboardPage() {
                                   ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                   : v.status === 'in_progress'
                                   ? 'bg-blue-100 text-primary animate-pulse'
+                                  : v.status === 'missed'
+                                  ? 'bg-purple-100 text-purple-800 border border-purple-300'
                                   : v.status === 'rejected'
                                   ? 'bg-rose-100 text-rose-800 border border-rose-300 font-extrabold'
                                   : v.status === 'failed' || v.status === 'cancelled'
                                   ? 'bg-rose-100 text-rose-800'
                                   : 'bg-amber-100 text-amber-800'
                               }`}>
-                                {v.status === 'assigned' ? 'Pending Acceptance' : v.status?.replace('_', ' ')}
+                                {v.status === 'assigned' || v.assignmentStatus === 'pending'
+                                  ? 'Pending Acceptance'
+                                  : v.status === 'missed'
+                                  ? 'Missed Visit'
+                                  : v.status?.replace('_', ' ')}
                               </span>
+
+                              {Boolean(v.replacementRequired) && (
+                                <div className="mt-1">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                                    ⚠️ Replacement Required
+                                  </span>
+                                </div>
+                              )}
 
                               {v.status === 'rejected' && (
                                 <div className="mt-1 text-[11px] text-rose-700 bg-rose-50 p-1.5 rounded-lg border border-rose-200">
@@ -1876,22 +2933,34 @@ export default function AdminDashboardPage() {
                                   onClick={() => {
                                     setSelectedVisitForAssign(v);
                                     setReassignModalError(null);
-                                    setReassignProviderId(v.status === 'rejected' ? '' : (v.providerId || ''));
-                                    setReassignProviderName(v.status === 'rejected' ? '' : (v.providerName || ''));
-                                    setReassignProviderPhone(v.status === 'rejected' ? '' : (v.providerPhone || ''));
+                                    setEligibleCaregiversMessage(null);
+                                    setReassignProviderId(v.status === 'rejected' || v.replacementRequired ? '' : (v.providerId || ''));
+                                    setReassignProviderName(v.status === 'rejected' || v.replacementRequired ? '' : (v.providerName || ''));
+                                    setReassignProviderPhone(v.status === 'rejected' || v.replacementRequired ? '' : (v.providerPhone || ''));
                                     setReassignScheduledDate(v.scheduledDate || new Date().toISOString().slice(0, 10));
                                     setReassignTimeSlot(v.timeSlot || '09:00 AM - 11:00 AM');
                                     const rejectionMsg = v.rejectionReason || v.assignmentRejection?.reason || '';
                                     setReassignReason(
-                                      v.status === 'rejected'
+                                      v.status === 'rejected' || v.replacementRequired
                                         ? `Replacement for rejected caregiver ${v.providerName || ''}${rejectionMsg ? ` (${rejectionMsg})` : ''}`
                                         : 'Clinical route balancing and priority assignment'
                                     );
                                     setShowReassignModal(true);
+                                    const visitId = v._id || v.id || v.visitNumber;
+                                    fetchEligibleCaregiversForVisit(visitId);
                                   }}
                                 >
-                                  {v.status === 'rejected' ? 'Reassign Caregiver' : 'Reassign'}
+                                  {v.status === 'rejected' || v.replacementRequired ? 'Reassign Caregiver' : 'Reassign'}
                                 </Button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteVisit(v._id || v.id, v.visitNumber)}
+                                  disabled={actionLoading}
+                                  className="p-1.5 rounded-lg border border-border text-slate-400 hover:text-rose-600 hover:bg-rose-50 hover:border-rose-200 transition"
+                                  title="Dismiss / Archive from Active Queue"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -2006,96 +3075,100 @@ export default function AdminDashboardPage() {
                     </thead>
                     <tbody className="divide-y divide-border bg-white">
                       {rescheduleRequests.length > 0 ? (
-                        rescheduleRequests.map((req) => {
-                          const isPending = req.status === 'pending';
-                          const isApproved = req.status === 'approved';
-                          const isRejected = req.status === 'rejected';
+                        (() => {
+                          const pageSize = 10;
+                          const paginated = rescheduleRequests.slice((reschedulePage - 1) * pageSize, reschedulePage * pageSize);
+                          return paginated.map((req, idx) => {
+                            const isPending = req.status === 'pending';
+                            const isApproved = req.status === 'approved';
+                            const isRejected = req.status === 'rejected';
 
-                          return (
-                            <tr key={req._id} className="hover:bg-slate-50/60 transition-colors">
-                              <td className="py-3.5 px-4">
-                                <div className="font-bold text-navy">{req.patientName || 'Patient'}</div>
-                                <div className="text-[11px] text-slate-500 font-mono">
-                                  {req.patientPhone ? `+91 ${req.patientPhone}` : ''}
-                                </div>
-                              </td>
-                              <td className="py-3.5 px-4">
-                                <span className="font-mono font-bold text-primary bg-primary-light/60 px-2 py-0.5 rounded">
-                                  {req.visitNumber || req.visitId}
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-4">
-                                <div className="font-semibold text-slate-800">
-                                  {req.caregiverName || 'Unassigned'}
-                                </div>
-                                {req.caregiverPhone && (
-                                  <div className="text-[11px] text-slate-400 font-mono">
-                                    +91 {req.caregiverPhone}
+                            return (
+                              <tr key={req._id || req.id || req.visitId || `resched-${idx}`} className="hover:bg-slate-50/60 transition-colors">
+                                <td className="py-3.5 px-4">
+                                  <div className="font-bold text-navy">{req.patientName || 'Patient'}</div>
+                                  <div className="text-[11px] text-slate-500 font-mono">
+                                    {req.patientPhone ? `+91 ${req.patientPhone}` : ''}
                                   </div>
-                                )}
-                              </td>
-                              <td className="py-3.5 px-4 whitespace-nowrap">
-                                <div className="font-medium text-slate-700">{req.originalScheduledDate}</div>
-                                <div className="text-[11px] text-slate-400">{req.originalTimeSlot}</div>
-                              </td>
-                              <td className="py-3.5 px-4 whitespace-nowrap">
-                                <div className="font-bold text-primary">{req.requestedDate}</div>
-                                <div className="text-[11px] text-primary/80 font-medium">{req.requestedTimeSlot}</div>
-                              </td>
-                              <td className="py-3.5 px-4 max-w-xs">
-                                <div className="text-slate-700 italic">"{req.reason}"</div>
-                                {req.rejectionReason && (
-                                  <div className="text-[10px] text-rose-600 mt-1 font-semibold">
-                                    Rejection note: {req.rejectionReason}
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  <span className="font-mono font-bold text-primary bg-primary-light/60 px-2 py-0.5 rounded">
+                                    {req.visitNumber || req.visitId}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  <div className="font-semibold text-slate-800">
+                                    {req.caregiverName || 'Unassigned'}
                                   </div>
-                                )}
-                              </td>
-                              <td className="py-3.5 px-4">
-                                <span
-                                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                                    isApproved
-                                      ? 'bg-emerald-100 text-emerald-800'
-                                      : isPending
-                                      ? 'bg-amber-100 text-amber-800'
-                                      : 'bg-rose-100 text-rose-800'
-                                  }`}
-                                >
-                                  {req.status}
-                                </span>
-                              </td>
-                              <td className="py-3.5 px-4 text-right">
-                                {isPending ? (
-                                  <div className="flex items-center justify-end gap-2">
-                                    <button
-                                      onClick={() => handleApproveReschedule(req._id)}
-                                      disabled={actionLoading}
-                                      className="px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition disabled:opacity-50 flex items-center gap-1"
-                                      title="Approve reschedule and synchronize schedule"
-                                    >
-                                      <CheckCircle2 size={12} />
-                                      Approve
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setSelectedRescheduleForReject(req);
-                                        setRejectReason('');
-                                        setShowRejectModal(true);
-                                      }}
-                                      disabled={actionLoading}
-                                      className="px-2.5 py-1 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition disabled:opacity-50 flex items-center gap-1"
-                                      title="Reject reschedule and notify patient"
-                                    >
-                                      <X size={12} />
-                                      Reject
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <span className="text-[11px] text-slate-400 italic">Resolved</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })
+                                  {req.caregiverPhone && (
+                                    <div className="text-[11px] text-slate-400 font-mono">
+                                      +91 {req.caregiverPhone}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-4 whitespace-nowrap">
+                                  <div className="font-medium text-slate-700">{req.originalScheduledDate}</div>
+                                  <div className="text-[11px] text-slate-400">{req.originalTimeSlot}</div>
+                                </td>
+                                <td className="py-3.5 px-4 whitespace-nowrap">
+                                  <div className="font-bold text-primary">{req.requestedDate}</div>
+                                  <div className="text-[11px] text-primary/80 font-medium">{req.requestedTimeSlot}</div>
+                                </td>
+                                <td className="py-3.5 px-4 max-w-xs">
+                                  <div className="text-slate-700 italic">"{req.reason}"</div>
+                                  {req.rejectionReason && (
+                                    <div className="text-[10px] text-rose-600 mt-1 font-semibold">
+                                      Rejection note: {req.rejectionReason}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  <span
+                                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                      isApproved
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : isPending
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : 'bg-rose-100 text-rose-800'
+                                    }`}
+                                  >
+                                    {req.status}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  {isPending ? (
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button
+                                        onClick={() => handleApproveReschedule(req._id)}
+                                        disabled={actionLoading}
+                                        className="px-2.5 py-1 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition disabled:opacity-50 flex items-center gap-1"
+                                        title="Approve reschedule and synchronize schedule"
+                                      >
+                                        <CheckCircle2 size={12} />
+                                        Approve
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setSelectedRescheduleForReject(req);
+                                          setRejectReason('');
+                                          setShowRejectModal(true);
+                                        }}
+                                        disabled={actionLoading}
+                                        className="px-2.5 py-1 rounded-lg text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition disabled:opacity-50 flex items-center gap-1"
+                                        title="Reject reschedule and notify patient"
+                                      >
+                                        <X size={12} />
+                                        Reject
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-400 italic">Resolved</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          });
+                        })()
                       ) : (
                         <tr>
                           <td colSpan={8} className="py-12 text-center text-slate-400">
@@ -2110,6 +3183,38 @@ export default function AdminDashboardPage() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* 10-item Universal Pagination Controls */}
+                {(() => {
+                  const pageSize = 10;
+                  const totalPages = Math.ceil(rescheduleRequests.length / pageSize) || 1;
+                  if (totalPages <= 1) return null;
+                  return (
+                    <div className="flex items-center justify-between text-xs text-slate-500 pt-2">
+                      <span>
+                        Showing page {reschedulePage} of {totalPages} ({rescheduleRequests.length} requests)
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={reschedulePage <= 1}
+                          onClick={() => setReschedulePage((p) => Math.max(1, p - 1))}
+                        >
+                          <ChevronLeft size={14} /> Previous
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={reschedulePage >= totalPages}
+                          onClick={() => setReschedulePage((p) => Math.min(totalPages, p + 1))}
+                        >
+                          Next <ChevronRight size={14} />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -2330,23 +3435,127 @@ export default function AdminDashboardPage() {
               <div className="bg-white rounded-2xl border border-border shadow-sm p-6 space-y-6">
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                   <div>
-                    <h3 className="text-lg font-bold text-navy">Patient &amp; Caregiver Notification Logs ({notifPagination.total})</h3>
+                    <div className="flex items-center gap-2.5">
+                      <h3 className="text-lg font-bold text-navy">Patient &amp; Caregiver Notification Logs ({notifPagination.total})</h3>
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        {notifDateScope === 'today' ? "Today's Daily Feed" : notifDateScope === 'past' ? "Past Logs" : "All Messages"}
+                      </span>
+                    </div>
                     <p className="text-xs text-slate-500 mt-0.5">
                       Carrier SMS and WhatsApp messaging dispatches. Sanitized logistical updates (no clinical diagnoses exposed).
                     </p>
                   </div>
 
-                  {/* Filters */}
-                  <div className="flex flex-wrap items-center gap-2.5">
+                  {/* Actions: Clear Past & Clear All */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {selectedNotifIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleBulkDeleteNotifications}
+                        disabled={clearingNotifs}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-700 bg-rose-100 hover:bg-rose-200 border border-rose-300 transition-colors disabled:opacity-50"
+                        title="Permanently delete selected notifications to reclaim storage"
+                      >
+                        <Trash2 size={13} />
+                        <span>Delete Selected ({selectedNotifIds.length})</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowNotifDateRangeModal(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 transition-colors"
+                      title="Permanently delete notifications in a specific date range"
+                    >
+                      <Calendar size={13} />
+                      <span>Delete Range...</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearPastNotifications}
+                      disabled={clearingNotifs}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 transition-colors disabled:opacity-50"
+                      title="Permanently remove yesterday and older notifications (keeps today's active logs)"
+                    >
+                      <Trash2 size={13} />
+                      <span>{clearingNotifs ? 'Clearing...' : 'Clear Past Logs (Older than Today)'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearAllNotifications}
+                      disabled={clearingNotifs}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-300 transition-colors disabled:opacity-50"
+                      title="Permanently remove all notification logs from the system"
+                    >
+                      <Trash2 size={13} />
+                      <span>Clear All Logs</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter and Date Scope Bar */}
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 pt-3 border-t border-border/70">
+                  {/* Date Scope Pills */}
+                  <div className="flex items-center gap-1.5 p-1 bg-slate-100/90 rounded-xl w-fit border border-slate-200/80">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotifDateScope('today');
+                        setNotifPagination((p) => ({ ...p, page: 1 }));
+                        loadTabData('field_ops', { notifDateScope: 'today', notifPage: 1 });
+                      }}
+                      className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        notifDateScope === 'today'
+                          ? 'bg-navy text-white shadow-xs'
+                          : 'text-slate-600 hover:text-navy hover:bg-white/70'
+                      }`}
+                    >
+                      <Clock size={12} />
+                      <span>Today's Messages (Daily)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotifDateScope('past');
+                        setNotifPagination((p) => ({ ...p, page: 1 }));
+                        loadTabData('field_ops', { notifDateScope: 'past', notifPage: 1 });
+                      }}
+                      className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        notifDateScope === 'past'
+                          ? 'bg-navy text-white shadow-xs'
+                          : 'text-slate-600 hover:text-navy hover:bg-white/70'
+                      }`}
+                    >
+                      <Calendar size={12} />
+                      <span>Past Messages</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotifDateScope('all');
+                        setNotifPagination((p) => ({ ...p, page: 1 }));
+                        loadTabData('field_ops', { notifDateScope: 'all', notifPage: 1 });
+                      }}
+                      className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        notifDateScope === 'all'
+                          ? 'bg-navy text-white shadow-xs'
+                          : 'text-slate-600 hover:text-navy hover:bg-white/70'
+                      }`}
+                    >
+                      <span>All History</span>
+                    </button>
+                  </div>
+
+                  {/* Channel, Status, Search Filters */}
+                  <div className="flex flex-wrap items-center gap-2">
                     <div className="relative">
-                      <Search size={15} className="absolute left-3 top-2.5 text-slate-400" />
+                      <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
                       <input
                         type="text"
                         placeholder="Search phone, recipient, text..."
                         value={notifSearch}
                         onChange={(e) => setNotifSearch(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && loadTabData('field_ops')}
-                        className="pl-9 pr-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary w-48 sm:w-56"
+                        onKeyDown={(e) => e.key === 'Enter' && loadTabData('field_ops', { notifPage: 1 })}
+                        className="pl-8 pr-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary w-44 sm:w-52"
                       />
                     </div>
 
@@ -2354,9 +3563,10 @@ export default function AdminDashboardPage() {
                       value={notifChannelFilter}
                       onChange={(e) => {
                         setNotifChannelFilter(e.target.value);
-                        setTimeout(() => loadTabData('field_ops'), 0);
+                        setNotifPagination((p) => ({ ...p, page: 1 }));
+                        setTimeout(() => loadTabData('field_ops', { notifPage: 1 }), 0);
                       }}
-                      className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
+                      className="px-2.5 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
                     >
                       <option value="all">All Channels</option>
                       <option value="sms">SMS</option>
@@ -2368,9 +3578,10 @@ export default function AdminDashboardPage() {
                       value={notifStatusFilter}
                       onChange={(e) => {
                         setNotifStatusFilter(e.target.value);
-                        setTimeout(() => loadTabData('field_ops'), 0);
+                        setNotifPagination((p) => ({ ...p, page: 1 }));
+                        setTimeout(() => loadTabData('field_ops', { notifPage: 1 }), 0);
                       }}
-                      className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
+                      className="px-2.5 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
                     >
                       <option value="all">All Statuses</option>
                       <option value="sent">Sent (Carrier Acknowledged)</option>
@@ -2381,7 +3592,7 @@ export default function AdminDashboardPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => loadTabData('field_ops')}
+                      onClick={() => loadTabData('field_ops', { notifPage: 1 })}
                       className="text-xs"
                     >
                       Filter
@@ -2394,6 +3605,25 @@ export default function AdminDashboardPage() {
                   <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="border-b border-border bg-slate-50/50 text-[11px] font-bold text-slate-500 uppercase">
+                        <th className="py-3 px-3 w-8">
+                          <input
+                            type="checkbox"
+                            checked={
+                              notificationLogs.length > 0 &&
+                              notificationLogs.every((l) => selectedNotifIds.includes(l._id || l.id))
+                            }
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                const ids = notificationLogs.map((l) => l._id || l.id).filter(Boolean);
+                                setSelectedNotifIds(ids);
+                              } else {
+                                setSelectedNotifIds([]);
+                              }
+                            }}
+                            className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary"
+                            title="Select all on this page"
+                          />
+                        </th>
                         <th className="py-3 px-3">Dispatched</th>
                         <th className="py-3 px-3">Recipient</th>
                         <th className="py-3 px-3">Channel</th>
@@ -2406,13 +3636,32 @@ export default function AdminDashboardPage() {
                     </thead>
                     <tbody className="divide-y divide-border">
                       {notificationLogs.length > 0 ? (
-                        notificationLogs.map((log) => {
+                        notificationLogs.map((log, idx) => {
                           const isSimulated = log.status === 'simulated' || log.provider === 'simulated_gateway';
                           const isFailed = log.status === 'failed';
                           const isSent = log.status === 'sent' || log.status === 'delivered';
+                          const isSelected = selectedNotifIds.includes(log._id || log.id);
 
                           return (
-                            <tr key={log._id} className="hover:bg-slate-50/70 transition-colors">
+                            <tr
+                              key={log._id || log.id || `notif-${idx}`}
+                              className={`hover:bg-slate-50/70 transition-colors ${isSelected ? 'bg-primary/5' : ''}`}
+                            >
+                              <td className="py-3 px-3">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const id = log._id || log.id;
+                                    if (e.target.checked) {
+                                      setSelectedNotifIds((p) => [...p, id]);
+                                    } else {
+                                      setSelectedNotifIds((p) => p.filter((x) => x !== id));
+                                    }
+                                  }}
+                                  className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary"
+                                />
+                              </td>
                               <td className="py-3 px-3 whitespace-nowrap text-slate-500">
                                 {new Date(log.sentAt || log.createdAt).toLocaleDateString()} {new Date(log.sentAt || log.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </td>
@@ -2482,32 +3731,43 @@ export default function AdminDashboardPage() {
                                 )}
                               </td>
                               <td className="py-3 px-3 text-right">
-                                {log.channel === 'in_app' && !log.isRead && (
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {log.channel === 'in_app' && !log.isRead && (
+                                    <button
+                                      onClick={() => handleMarkNotificationRead(log._id, log)}
+                                      className="px-2.5 py-1 rounded text-xs font-semibold text-primary hover:bg-primary-light/50 transition mr-1"
+                                    >
+                                      Mark Read
+                                    </button>
+                                  )}
+                                  {isFailed && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleRetryNotification(log._id)}
+                                      disabled={actionLoading}
+                                      className="text-[11px] text-rose-700 hover:bg-rose-50 border-rose-300"
+                                    >
+                                      Retry
+                                    </Button>
+                                  )}
                                   <button
-                                    onClick={() => handleMarkNotificationRead(log._id, log)}
-                                    className="px-2.5 py-1 rounded text-xs font-semibold text-primary hover:bg-primary-light/50 transition mr-1.5"
-                                  >
-                                    Mark Read
-                                  </button>
-                                )}
-                                {isFailed && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => handleRetryNotification(log._id)}
+                                    type="button"
+                                    onClick={() => handleDeleteSingleNotification(log._id || log.id)}
                                     disabled={actionLoading}
-                                    className="text-[11px] text-rose-700 hover:bg-rose-50 border-rose-300"
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition"
+                                    title="Permanently delete this notification record"
                                   >
-                                    Retry
-                                  </Button>
-                                )}
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
                         })
                       ) : (
                         <tr>
-                          <td colSpan={8} className="py-12 text-center text-slate-400">
+                          <td colSpan={9} className="py-12 text-center text-slate-400">
                             <Smartphone size={32} className="mx-auto mb-2 text-slate-300" />
                             <p className="font-semibold text-slate-600">No notifications sent yet</p>
                             <p className="text-xs text-slate-400 mt-0.5">Automated SMS and WhatsApp messages will appear here when appointments or visits progress.</p>
@@ -2530,8 +3790,9 @@ export default function AdminDashboardPage() {
                         variant="outline"
                         disabled={notifPagination.page <= 1}
                         onClick={() => {
-                          setNotifPagination((prev) => ({ ...prev, page: prev.page - 1 }));
-                          setTimeout(() => loadTabData('field_ops'), 0);
+                          const newPage = notifPagination.page - 1;
+                          setNotifPagination((prev) => ({ ...prev, page: newPage }));
+                          loadTabData('field_ops', { notifPage: newPage });
                         }}
                       >
                         Previous
@@ -2541,12 +3802,93 @@ export default function AdminDashboardPage() {
                         variant="outline"
                         disabled={notifPagination.page >= notifPagination.totalPages}
                         onClick={() => {
-                          setNotifPagination((prev) => ({ ...prev, page: prev.page + 1 }));
-                          setTimeout(() => loadTabData('field_ops'), 0);
+                          const newPage = notifPagination.page + 1;
+                          setNotifPagination((prev) => ({ ...prev, page: newPage }));
+                          loadTabData('field_ops', { notifPage: newPage });
                         }}
                       >
                         Next
                       </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Date Range Purge Modal */}
+                {showNotifDateRangeModal && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+                    <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4">
+                      <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-rose-50 text-rose-600">
+                            <Calendar size={18} />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-slate-900 text-sm">Delete Notifications by Date Range</h3>
+                            <p className="text-xs text-slate-500">Purge logs between specific dates to reclaim storage</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowNotifDateRangeModal(false)}
+                          className="text-slate-400 hover:text-slate-600 p-1"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Start Date (From)
+                          </label>
+                          <input
+                            type="date"
+                            value={notifStartDate}
+                            onChange={(e) => setNotifStartDate(e.target.value)}
+                            className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            End Date (To)
+                          </label>
+                          <input
+                            type="date"
+                            value={notifEndDate}
+                            onChange={(e) => setNotifEndDate(e.target.value)}
+                            className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                          />
+                        </div>
+
+                        <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-800 space-y-1">
+                          <div className="font-semibold flex items-center gap-1.5">
+                            <span>⚠️ Permanent Storage Cleanup</span>
+                          </div>
+                          <p>
+                            All notification delivery logs created between the selected dates will be permanently removed from MongoDB storage. This action cannot be undone.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => setShowNotifDateRangeModal(false)}
+                          className="px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDeleteNotificationsByDateRange}
+                          disabled={!notifStartDate || !notifEndDate || clearingNotifs}
+                          className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition disabled:opacity-50"
+                        >
+                          <Trash2 size={13} />
+                          <span>{clearingNotifs ? 'Deleting...' : 'Delete Range'}</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2562,9 +3904,9 @@ export default function AdminDashboardPage() {
           <div className="bg-white rounded-2xl border border-border shadow-sm p-6 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold text-navy">Patient &amp; Professional Accounts</h2>
+                <h2 className="text-xl font-bold text-navy">Platform User Accounts &amp; Access Governance</h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  View, filter, activate, or suspend platform user credentials with mandatory audit logging.
+                  Dedicated management for patients, nurses, and doctors with role-specific verification and audit trails.
                 </p>
               </div>
 
@@ -2583,23 +3925,6 @@ export default function AdminDashboardPage() {
                 </div>
 
                 <select
-                  value={userRoleFilter}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setUserRoleFilter(val);
-                    loadUsersData({ page: 1, role: val });
-                  }}
-                  className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
-                >
-                  <option value="all">All Roles</option>
-                  <option value="patient">Patients (Registered Mobile Users)</option>
-                  <option value="caregiver">Family Caregivers</option>
-                  <option value="professional">Professionals (Doctors/Nurses)</option>
-                  <option value="hospital">Hospital Staff</option>
-                  <option value="admin">Administrators</option>
-                </select>
-
-                <select
                   value={userStatusFilter}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -2609,8 +3934,8 @@ export default function AdminDashboardPage() {
                   className="px-3 py-1.5 text-xs rounded-xl border border-border focus:outline-none focus:border-primary bg-white"
                 >
                   <option value="all">All Statuses</option>
-                  <option value="active">Active</option>
-                  <option value="suspended">Suspended</option>
+                  <option value="active">Active Accounts</option>
+                  <option value="suspended">Suspended Accounts</option>
                   <option value="pending_verification">Pending Verification</option>
                 </select>
 
@@ -2623,6 +3948,87 @@ export default function AdminDashboardPage() {
                   Filter
                 </Button>
               </div>
+            </div>
+
+            {/* 3 Dedicated Account Sections */}
+            <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100/80 rounded-2xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setUserRoleFilter('patient');
+                  loadUsersData({ page: 1, role: 'patient' });
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  userRoleFilter === 'patient'
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'text-slate-600 hover:text-navy hover:bg-white/80'
+                }`}
+              >
+                <Users size={14} />
+                <span>Patients &amp; Family Accounts</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                  userRoleFilter === 'patient' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {userRoleFilter === 'patient' ? usersPagination.total : overview?.totalPatients ?? 'Patients'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setUserRoleFilter('caregiver');
+                  loadUsersData({ page: 1, role: 'caregiver' });
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  userRoleFilter === 'caregiver'
+                    ? 'bg-teal-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-navy hover:bg-white/80'
+                }`}
+              >
+                <HeartPulse size={14} />
+                <span>Nurses &amp; Palliative Caregivers</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                  userRoleFilter === 'caregiver' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {userRoleFilter === 'caregiver' ? usersPagination.total : 'Caregivers'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setUserRoleFilter('professional');
+                  loadUsersData({ page: 1, role: 'professional' });
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                  userRoleFilter === 'professional'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-navy hover:bg-white/80'
+                }`}
+              >
+                <Stethoscope size={14} />
+                <span>Doctors &amp; Medical Specialists</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                  userRoleFilter === 'professional' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {userRoleFilter === 'professional' ? usersPagination.total : overview?.totalProfessionals ?? 'Doctors'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setUserRoleFilter('all');
+                  loadUsersData({ page: 1, role: 'all' });
+                }}
+                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold ml-auto transition-all ${
+                  userRoleFilter === 'all'
+                    ? 'bg-navy text-white shadow-xs font-bold'
+                    : 'text-slate-500 hover:text-navy hover:bg-white/80'
+                }`}
+              >
+                <span>All Roles</span>
+              </button>
             </div>
 
             {/* Users Table */}
@@ -2646,8 +4052,16 @@ export default function AdminDashboardPage() {
                       return (
                         <tr key={userId} className="hover:bg-slate-50/60 transition-colors">
                           <td className="py-3.5 px-4">
-                            <div className="font-bold text-navy flex items-center gap-1.5">
-                              {u.fullName}
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenUserDetails(userId)}
+                                className="font-bold text-navy hover:text-primary hover:underline transition-colors text-left flex items-center gap-1.5 group"
+                                title="Click to view full user profile, clinical details, and governance controls"
+                              >
+                                <span>{u.fullName}</span>
+                                <Eye size={12} className="text-slate-400 group-hover:text-primary transition-colors shrink-0" />
+                              </button>
                               {isPatient && (
                                 <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.2 rounded font-medium">
                                   App Patient
@@ -2675,6 +4089,15 @@ export default function AdminDashboardPage() {
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenUserDetails(userId)}
+                                className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 transition-colors inline-flex items-center gap-1"
+                                title="View complete user profile details"
+                              >
+                                <Eye size={12} />
+                                <span>Profile</span>
+                              </button>
                               {isPatient && (
                                 <button
                                   onClick={() => setActiveTab('subscriptions')}
@@ -2685,22 +4108,34 @@ export default function AdminDashboardPage() {
                                 </button>
                               )}
                               {u.role !== 'super_admin' && (
-                                <button
-                                  onClick={() =>
-                                    handleToggleUserStatus(
-                                      userId,
-                                      u.status || (u.isActive === false ? 'suspended' : 'active')
-                                    )
-                                  }
-                                  disabled={actionLoading}
-                                  className={`px-3 py-1 rounded-lg font-semibold text-xs transition-colors ${
-                                    u.status === 'suspended' || u.isActive === false
-                                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                                      : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
-                                  }`}
-                                >
-                                  {u.status === 'suspended' || u.isActive === false ? 'Activate' : 'Suspend'}
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() =>
+                                      handleToggleUserStatus(
+                                        userId,
+                                        u.status || (u.isActive === false ? 'suspended' : 'active')
+                                      )
+                                    }
+                                    disabled={actionLoading}
+                                    className={`px-2.5 py-1 rounded-lg font-semibold text-xs transition-colors ${
+                                      u.status === 'suspended' || u.isActive === false
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                                        : 'bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100'
+                                    }`}
+                                    title={u.status === 'suspended' || u.isActive === false ? 'Resume account access' : 'Temporarily stop/suspend account access'}
+                                  >
+                                    {u.status === 'suspended' || u.isActive === false ? 'Activate' : 'Suspend'}
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteUser(userId, u.fullName, u.role)}
+                                    disabled={actionLoading}
+                                    className="px-2.5 py-1 rounded-lg font-semibold text-xs text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-colors inline-flex items-center gap-1"
+                                    title="Permanently delete user account and reclaim database storage"
+                                  >
+                                    <Trash2 size={12} />
+                                    <span>Delete</span>
+                                  </button>
+                                </>
                               )}
                             </div>
                           </td>
@@ -2748,6 +4183,334 @@ export default function AdminDashboardPage() {
                   >
                     Next <ChevronRight size={14} />
                   </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Modal: Comprehensive User Profile & Governance */}
+            {selectedUserForDetails && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/60 backdrop-blur-xs overflow-y-auto">
+                <div className="bg-white rounded-3xl p-6 sm:p-8 max-w-2xl w-full shadow-2xl border border-border space-y-6 my-8 animate-in fade-in zoom-in-95 duration-150">
+                  {/* Modal Header */}
+                  <div className="flex items-start justify-between pb-4 border-b border-border">
+                    <div className="flex items-center gap-3.5">
+                      <div className="w-12 h-12 rounded-2xl bg-primary/10 text-primary flex items-center justify-center font-bold text-lg border border-primary/20">
+                        {userDetailsData?.user?.fullName?.charAt(0) || <UserCheck size={24} />}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-bold text-navy">
+                            {userDetailsData?.user?.fullName || 'User Profile Details'}
+                          </h3>
+                          {userDetailsData?.user?.role && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700">
+                              {userDetailsData.user.role.replace('_', ' ')}
+                            </span>
+                          )}
+                          {userDetailsData?.user?.status && (
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider ${
+                                userDetailsData.user.status === 'active'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {userDetailsData.user.status}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 font-mono mt-0.5">
+                          Account ID: {userDetailsData?.user?._id || selectedUserForDetails}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedUserForDetails(null);
+                        setUserDetailsData(null);
+                      }}
+                      className="p-1 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  {loadingUserDetails ? (
+                    <div className="py-12 text-center text-slate-400 space-y-2">
+                      <RefreshCw size={24} className="animate-spin mx-auto text-primary" />
+                      <p className="text-xs font-semibold">Loading verified profile and audit data...</p>
+                    </div>
+                  ) : userDetailsData ? (
+                    <div className="space-y-5 max-h-[65vh] overflow-y-auto pr-1">
+                      {/* Section 1: Contact & Verification Grid */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                            Mobile Phone Number
+                          </span>
+                          <div className="text-xs font-bold text-navy font-mono flex items-center gap-1.5">
+                            <Phone size={13} className="text-slate-400" />
+                            <span>{userDetailsData.user.phone}</span>
+                            {userDetailsData.user.isPhoneVerified && (
+                              <span className="text-[10px] text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded font-bold">
+                                Verified
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                            Email Address
+                          </span>
+                          <div className="text-xs font-semibold text-navy flex items-center gap-1.5">
+                            <Mail size={13} className="text-slate-400" />
+                            <span>{userDetailsData.user.email || 'No email provided'}</span>
+                            {userDetailsData.user.isEmailVerified && (
+                              <span className="text-[10px] text-emerald-700 bg-emerald-100 px-1.5 py-0.2 rounded font-bold">
+                                Verified
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                            Registration Date
+                          </span>
+                          <div className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                            <Calendar size={13} className="text-slate-400" />
+                            <span>{new Date(userDetailsData.user.createdAt).toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                            DPDP Act 2023 Consent
+                          </span>
+                          <div className="text-xs font-semibold text-emerald-700 flex items-center gap-1.5">
+                            <CheckCircle2 size={13} />
+                            <span>Consented ({userDetailsData.user.dpdpConsent?.policyVersion || 'v1.0'})</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section 2: Role-Specific Details */}
+                      {/* Patient Profile Details */}
+                      {userDetailsData.user.role === 'patient' && (
+                        <div className="p-4 rounded-2xl bg-primary/5 border border-primary/20 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-primary uppercase tracking-wider flex items-center gap-1.5">
+                              <Users size={14} />
+                              <span>Patient Clinical Profile &amp; Residence</span>
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-semibold">
+                              Total Visits: {userDetailsData.visitsCount ?? 0}
+                            </span>
+                          </div>
+
+                          {userDetailsData.patientProfile ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Registered Address</span>
+                                <p className="font-semibold text-slate-800">
+                                  {[
+                                    userDetailsData.patientProfile.address?.street,
+                                    userDetailsData.patientProfile.address?.city,
+                                    userDetailsData.patientProfile.address?.state,
+                                    userDetailsData.patientProfile.address?.pincode,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(', ') || 'No address on file'}
+                                </p>
+                              </div>
+
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Emergency Contact</span>
+                                <p className="font-semibold text-slate-800">
+                                  {userDetailsData.patientProfile.emergencyContact?.name ? (
+                                    <>
+                                      {userDetailsData.patientProfile.emergencyContact.name} (
+                                      {userDetailsData.patientProfile.emergencyContact.relationship}) &bull;{' '}
+                                      {userDetailsData.patientProfile.emergencyContact.phone}
+                                    </>
+                                  ) : (
+                                    'None recorded'
+                                  )}
+                                </p>
+                              </div>
+
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Chronic Conditions</span>
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {userDetailsData.patientProfile.chronicConditions?.length > 0 ? (
+                                    userDetailsData.patientProfile.chronicConditions.map((c: string, idx: number) => (
+                                      <span key={idx} className="px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[10px] font-semibold text-slate-700">
+                                        {c}
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="text-slate-400 italic">None recorded</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Allergies / Blood Group</span>
+                                <p className="font-semibold text-slate-800">
+                                  Blood: {userDetailsData.patientProfile.bloodGroup || 'Unknown'} &bull;{' '}
+                                  {userDetailsData.patientProfile.allergies?.join(', ') || 'No known allergies'}
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-500 italic">
+                              Patient has not completed detailed medical history onboarding yet.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Professional / Nurse / Doctor Profile Details */}
+                      {['caregiver', 'professional'].includes(userDetailsData.user.role) && (
+                        <div className="p-4 rounded-2xl bg-teal-50/60 border border-teal-200/80 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-teal-800 uppercase tracking-wider flex items-center gap-1.5">
+                              <Stethoscope size={14} />
+                              <span>Professional Credentials &amp; Dispatch Governance</span>
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-semibold">
+                              Visits Completed: {userDetailsData.visitsCount ?? 0}
+                            </span>
+                          </div>
+
+                          {userDetailsData.professionalProfile ? (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Medical Registration</span>
+                                <p className="font-semibold text-slate-800 font-mono">
+                                  {userDetailsData.professionalProfile.registrationNumber} (
+                                  {userDetailsData.professionalProfile.registrationCouncil})
+                                </p>
+                              </div>
+
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Experience &amp; Title</span>
+                                <p className="font-semibold text-slate-800">
+                                  {userDetailsData.professionalProfile.title} &bull;{' '}
+                                  {userDetailsData.professionalProfile.yearsOfExperience} Years Experience
+                                </p>
+                              </div>
+
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Specializations</span>
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {userDetailsData.professionalProfile.specializations?.map((s: string, idx: number) => (
+                                    <span key={idx} className="px-2 py-0.5 rounded-md bg-white border border-teal-200 text-[10px] font-semibold text-teal-900">
+                                      {s}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div>
+                                <span className="text-[11px] text-slate-500 block">Verification Status</span>
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                  {userDetailsData.professionalProfile.verificationStatus || 'Verified'}
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-500 italic">
+                              Clinical council profile records are synced via credentials repository.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Section 3: Administrative Governance & Danger Zone */}
+                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                        <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                          Account Access Governance &amp; Controls
+                        </h4>
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                          <div>
+                            <p className="text-xs font-semibold text-slate-800">
+                              Account State: {userDetailsData.user.status?.toUpperCase() || 'ACTIVE'}
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              {userDetailsData.user.status === 'suspended'
+                                ? 'Account is currently suspended. User cannot sign in to web or mobile apps.'
+                                : 'Account is active. Suspending will stop user access temporarily without data loss.'}
+                            </p>
+                          </div>
+
+                          {userDetailsData.user.role !== 'super_admin' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleToggleUserStatus(
+                                  userDetailsData.user._id || userDetailsData.user.id,
+                                  userDetailsData.user.status
+                                )
+                              }
+                              disabled={actionLoading}
+                              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-xs ${
+                                userDetailsData.user.status === 'suspended'
+                                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                  : 'bg-amber-600 hover:bg-amber-700 text-white'
+                              }`}
+                            >
+                              {userDetailsData.user.status === 'suspended' ? 'Activate / Resume Access' : 'Suspend / Stop Access'}
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Danger Zone: Permanent Deletion */}
+                        {userDetailsData.user.role !== 'super_admin' && (
+                          <div className="pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-xs font-bold text-rose-700">Permanent Account Deletion</p>
+                              <p className="text-[11px] text-slate-500">
+                                Irreversibly delete this user account and associated profile records from MongoDB to reclaim storage space.
+                              </p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleDeleteUser(
+                                  userDetailsData.user._id || userDetailsData.user.id,
+                                  userDetailsData.user.fullName,
+                                  userDetailsData.user.role
+                                )
+                              }
+                              disabled={actionLoading}
+                              className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition shadow-xs flex items-center gap-1.5"
+                            >
+                              <Trash2 size={13} />
+                              <span>Delete Permanently</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Footer */}
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedUserForDetails(null);
+                        setUserDetailsData(null);
+                      }}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition"
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -3562,8 +5325,8 @@ export default function AdminDashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border bg-white font-mono text-[11px]">
-                  {auditLogs.map((l) => (
-                    <tr key={l._id} className="hover:bg-slate-50/60 transition-colors">
+                  {auditLogs.map((l, idx) => (
+                    <tr key={l._id || l.id || `audit-${idx}`} className="hover:bg-slate-50/60 transition-colors">
                       <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
                         {new Date(l.timestamp).toLocaleString()}
                       </td>
@@ -4514,12 +6277,53 @@ export default function AdminDashboardPage() {
                 </div>
               )}
 
+              {eligibleCaregiversMessage && (
+                <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-800">
+                  <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-bold text-amber-900">No Eligible Caregivers Available</p>
+                    <p className="mt-0.5 text-amber-700">{eligibleCaregiversMessage}</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const vId = selectedVisitForAssign._id || selectedVisitForAssign.id || selectedVisitForAssign.visitNumber;
+                        fetchEligibleCaregiversForVisit(vId);
+                      }}
+                      className="mt-2 text-[11px] font-semibold text-amber-800 underline hover:text-amber-900"
+                    >
+                      Retry Checking Eligible Staff
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {reassignModalError && (
                 <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800 animate-in fade-in">
                   <AlertCircle size={16} className="text-rose-600 shrink-0 mt-0.5" />
-                  <div>
+                  <div className="flex-1">
                     <p className="font-bold text-rose-900">Reassignment Failed</p>
                     <p className="mt-0.5 text-rose-700">{reassignModalError}</p>
+                    <div className="mt-2.5 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => handleReassignVisitSubmit(e)}
+                        className="px-2.5 py-1 bg-rose-600 text-white rounded-lg font-medium text-[11px] hover:bg-rose-700 transition"
+                      >
+                        Retry Reassignment
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReassignProviderId('');
+                          setReassignProviderName('');
+                          setReassignProviderPhone('');
+                          setReassignModalError(null);
+                        }}
+                        className="px-2.5 py-1 bg-white border border-rose-300 text-rose-700 rounded-lg font-medium text-[11px] hover:bg-rose-50 transition"
+                      >
+                        Select Another Caregiver
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -5072,132 +6876,541 @@ export default function AdminDashboardPage() {
         )}
 
         {/* ========================================================================= */}
-        {/* DRAWER: IN-APP NOTIFICATIONS & ALERTS */}
+        {/* DRAWER: IN-APP NOTIFICATIONS & ALERTS (PHASE 12) */}
         {/* ========================================================================= */}
         {showNotifDrawer && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end">
+          <div
+            className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex justify-end"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setShowNotifDrawer(false);
+            }}
+          >
             <div className="bg-white w-full max-w-md h-full shadow-2xl flex flex-col animate-slide-left border-l border-border">
-              <div className="p-4 sm:p-5 border-b border-border flex items-center justify-between bg-navy text-white">
+              {/* Drawer Top Header */}
+              <div className="p-4 sm:p-5 border-b border-border flex items-center justify-between bg-navy text-white shrink-0">
                 <div className="flex items-center gap-2.5">
-                  <Bell size={18} />
-                  <h3 className="font-bold text-base">In-App Operations Alerts</h3>
+                  <div className="relative">
+                    <Bell size={20} className="text-secondary" />
+                    {unreadNotifCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping" />
+                    )}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-base leading-tight">In-App Operations Alerts</h3>
+                    <p className="text-[11px] text-slate-300">Clinical, carrier &amp; commerce dispatches</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
                   {unreadNotifCount > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-xs font-extrabold bg-rose-500 text-white">
+                    <span className="px-2 py-0.5 rounded-full text-xs font-extrabold bg-rose-500 text-white shadow-xs">
                       {unreadNotifCount} unread
                     </span>
                   )}
-                </div>
-                <button
-                  onClick={() => setShowNotifDrawer(false)}
-                  className="text-white/70 hover:text-white p-1 rounded-lg"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              {unreadNotifCount > 0 && (
-                <div className="p-3 bg-slate-50 border-b border-border flex items-center justify-between">
-                  <span className="text-xs text-slate-500">Unread notifications require review</span>
                   <button
-                    onClick={handleMarkAllNotificationsRead}
-                    className="text-xs font-bold text-primary hover:underline"
+                    onClick={() => setShowNotifDrawer(false)}
+                    aria-label="Close notifications drawer"
+                    className="text-white/70 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition"
                   >
-                    Mark all as read
+                    <X size={20} />
                   </button>
                 </div>
-              )}
+              </div>
 
+              {/* Filters & Batch Controls Bar */}
+              <div className="p-3 bg-slate-50 border-b border-border flex items-center justify-between gap-2 shrink-0">
+                {/* Filter Tabs */}
+                <div className="flex items-center bg-slate-200/70 p-0.5 rounded-lg">
+                  <button
+                    onClick={() => setNotifDrawerFilter('all')}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition ${
+                      notifDrawerFilter === 'all'
+                        ? 'bg-white text-navy shadow-2xs'
+                        : 'text-slate-600 hover:text-navy'
+                    }`}
+                  >
+                    All ({inAppNotifs.length})
+                  </button>
+                  <button
+                    onClick={() => setNotifDrawerFilter('unread')}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 ${
+                      notifDrawerFilter === 'unread'
+                        ? 'bg-white text-navy shadow-2xs'
+                        : 'text-slate-600 hover:text-navy'
+                    }`}
+                  >
+                    <span>Unread</span>
+                    {unreadNotifCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-rose-500 text-white">
+                        {unreadNotifCount}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {/* Batch Actions */}
+                <div className="flex items-center gap-2">
+                  {unreadNotifCount > 0 && (
+                    <button
+                      onClick={handleMarkAllNotificationsRead}
+                      className="text-xs font-bold text-primary hover:text-primary-dark transition"
+                    >
+                      Mark all read
+                    </button>
+                  )}
+                  {inAppNotifs.length > 0 && (
+                    <button
+                      onClick={handlePromptClearAll}
+                      disabled={isClearingOrDeleting}
+                      className="text-xs font-bold text-rose-600 hover:text-rose-800 transition flex items-center gap-1"
+                      title="Clear notifications from active inbox"
+                    >
+                      <Trash2 size={12} />
+                      Clear all
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Drawer Notifications List */}
               <div className="flex-1 overflow-y-auto divide-y divide-border">
-                {inAppNotifs.length > 0 ? (
-                  inAppNotifs.map((notif) => {
-                    const isUnread = !notif.isRead;
-                    const notifType = notif.type || notif.templateId;
-                    const isSubscription = notif.relatedEntityType === 'CaregiverSubscription' || notifType === 'SUBSCRIPTION_ACTIVATED';
-                    const isReschedule = notif.relatedEntityType === 'VisitRescheduleRequest' || notifType?.includes('RESCHEDULE');
-                    const isRejection = notifType === 'VISIT_ASSIGNMENT_REJECTED' || notif.messageBody?.includes('Assignment Rejected');
+                {/* Loading State */}
+                {isDrawerLoading && inAppNotifs.length === 0 ? (
+                  <div className="p-4 space-y-3">
+                    <div className="flex items-center justify-center gap-2 py-8 text-xs font-semibold text-slate-500">
+                      <RefreshCw size={16} className="animate-spin text-primary" />
+                      <span>Synchronizing operations alerts...</span>
+                    </div>
+                    {[1, 2, 3].map((skeleton) => (
+                      <div key={skeleton} className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 animate-pulse space-y-2">
+                        <div className="h-4 bg-slate-200 rounded w-1/3" />
+                        <div className="h-3 bg-slate-200 rounded w-full" />
+                        <div className="h-3 bg-slate-200 rounded w-2/3" />
+                      </div>
+                    ))}
+                  </div>
+                ) : notifDrawerError ? (
+                  /* Error State with Retry */
+                  <div className="p-6 text-center text-slate-600 space-y-3">
+                    <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-100">
+                      <AlertTriangle size={24} />
+                    </div>
+                    <p className="font-bold text-sm text-slate-800">Alert Synchronization Failed</p>
+                    <p className="text-xs text-slate-500 leading-relaxed">{notifDrawerError}</p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => fetchDrawerNotifications(true)}
+                      className="text-xs inline-flex items-center gap-1.5"
+                    >
+                      <RefreshCw size={12} />
+                      Retry Connection
+                    </Button>
+                  </div>
+                ) : (
+                  (() => {
+                    const displayed =
+                      notifDrawerFilter === 'unread'
+                        ? inAppNotifs.filter((n) => !n.isRead)
+                        : inAppNotifs;
 
-                    return (
-                      <div
-                        key={notif._id}
-                        onClick={() => handleMarkNotificationRead(notif._id, notif)}
-                        className={`p-4 hover:bg-slate-50/80 transition cursor-pointer flex items-start gap-3 ${
-                          isUnread
-                            ? isRejection
-                              ? 'bg-rose-50/70 border-l-4 border-l-rose-500'
-                              : 'bg-primary-light/20 border-l-4 border-l-primary'
-                            : ''
-                        }`}
-                      >
-                        <div
-                          className={`mt-1.5 w-2.5 h-2.5 rounded-full shrink-0 ${
-                            isUnread ? (isRejection ? 'bg-rose-600' : 'bg-primary') : 'bg-slate-300'
-                          }`}
-                        />
-                        <div className="flex-1 space-y-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className={`font-bold text-xs ${isRejection ? 'text-rose-900' : 'text-navy'}`}>
-                              {isRejection ? '🚨 Assignment Rejected' : notifType?.replace(/_/g, ' ') || 'Notification'}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              {new Date(notif.sentAt || notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
+                    if (displayed.length === 0) {
+                      if (notifDrawerFilter === 'unread') {
+                        return (
+                          /* Empty Unread View */
+                          <div className="py-20 text-center text-slate-400 p-6 space-y-2">
+                            <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto border border-emerald-100">
+                              <CheckCircle2 size={24} />
+                            </div>
+                            <p className="font-bold text-slate-700 text-sm">All Caught Up!</p>
+                            <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                              You have zero unread alerts. Switch to &ldquo;All&rdquo; above to inspect past dispatches.
+                            </p>
                           </div>
+                        );
+                      }
 
-                          <p className="text-xs text-slate-700 leading-snug">
-                            {notif.messageBody}
+                      return (
+                        /* Empty Inbox View */
+                        <div className="py-20 text-center text-slate-400 p-6 space-y-2">
+                          <Bell size={32} className="mx-auto text-slate-300" />
+                          <p className="font-bold text-slate-700 text-sm">No In-App Alerts</p>
+                          <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                            All operations alerts are cleared. New caregiver reassignments, reschedule requests, and visit reports will appear here automatically.
                           </p>
+                        </div>
+                      );
+                    }
 
-                          <div className="flex items-center gap-2 pt-1 flex-wrap">
-                            {isRejection && (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200">
-                                REASSIGNMENT REQUIRED
+                    return displayed.map((notif) => {
+                      const isUnread = !notif.isRead;
+                      const dest = resolveNotificationDestination(notif);
+                      const isRejection =
+                        notif.type === 'VISIT_ASSIGNMENT_REJECTED' ||
+                        notif.messageBody?.includes('Assignment Rejected');
+
+                      return (
+                        <div
+                          key={notif._id}
+                          onClick={() => handleNotificationClick(notif)}
+                          className={`p-4 transition cursor-pointer flex items-start gap-3 group relative ${
+                            isUnread
+                              ? isRejection
+                                ? 'bg-rose-50/70 border-l-4 border-l-rose-500 hover:bg-rose-50'
+                                : 'bg-primary-light/20 border-l-4 border-l-primary hover:bg-primary-light/30'
+                              : 'bg-white hover:bg-slate-50/80'
+                          }`}
+                        >
+                          {/* Unread indicator dot */}
+                          <div
+                            className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+                              isUnread
+                                ? isRejection
+                                  ? 'bg-rose-600 animate-pulse'
+                                  : 'bg-primary animate-pulse'
+                                : 'bg-transparent'
+                            }`}
+                          />
+
+                          <div className="flex-1 space-y-1.5 min-w-0">
+                            {/* Card Category Badge & Time */}
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-extrabold border uppercase tracking-wider ${dest.badgeClass}`}
+                              >
+                                {dest.categoryLabel}
                               </span>
-                            )}
-                            {isSubscription && (
-                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
-                                TEST MODE
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className="text-[11px] text-slate-400 font-mono"
+                                  title={new Date(notif.sentAt || notif.createdAt).toLocaleString()}
+                                >
+                                  {formatRelativeTime(notif.sentAt || notif.createdAt)}
+                                </span>
+                                {/* Quick Mark as Read button */}
+                                {isUnread && (
+                                  <button
+                                    onClick={(e) => handleMarkSingleRead(e, notif._id)}
+                                    className="p-1 rounded text-slate-400 hover:text-primary hover:bg-primary-light/30 transition"
+                                    title="Mark as read"
+                                    aria-label="Mark alert as read"
+                                  >
+                                    <Check size={13} />
+                                  </button>
+                                )}
+                                {/* Quick Permanent Delete button */}
+                                <button
+                                  onClick={(e) => handlePromptDeleteNotification(e, notif)}
+                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                                  title="Permanently delete this alert"
+                                  aria-label="Permanently delete alert"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Card Title */}
+                            <h4
+                              className={`text-xs font-bold truncate ${
+                                isRejection
+                                  ? 'text-rose-900'
+                                  : isUnread
+                                  ? 'text-navy'
+                                  : 'text-slate-800'
+                              }`}
+                            >
+                              {notif.title || dest.actionLabel}
+                            </h4>
+
+                            {/* Card Message Body */}
+                            <p className="text-xs text-slate-600 leading-snug line-clamp-3">
+                              {notif.messageBody}
+                            </p>
+
+                            {/* Entity Metadata Badges */}
+                            <div className="flex items-center gap-1.5 pt-1 flex-wrap">
+                              {notif.metadata?.visitNumber && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700">
+                                  #{notif.metadata.visitNumber}
+                                </span>
+                              )}
+                              {notif.metadata?.orderNumber && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-teal-50 text-teal-800 border border-teal-100">
+                                  {notif.metadata.orderNumber}
+                                </span>
+                              )}
+                              {notif.metadata?.subscriptionNumber && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-purple-50 text-purple-800 border border-purple-100">
+                                  {notif.metadata.subscriptionNumber}
+                                </span>
+                              )}
+                              {notif.metadata?.patientName && (
+                                <span className="text-[10px] text-slate-500 font-medium truncate max-w-[140px]">
+                                  Pt: {notif.metadata.patientName}
+                                </span>
+                              )}
+                              {notif.metadata?.caregiverName && (
+                                <span className="text-[10px] text-slate-500 font-medium truncate max-w-[140px]">
+                                  CG: {notif.metadata.caregiverName}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Action CTA Button */}
+                            <div className="pt-1 flex items-center justify-between">
+                              <span className="text-[11px] font-bold text-primary group-hover:underline inline-flex items-center gap-1">
+                                <span>{dest.actionLabel}</span>
+                                <ChevronRight size={12} className="group-hover:translate-x-0.5 transition" />
                               </span>
-                            )}
-                            {isReschedule && (
-                              <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-blue-100 text-primary">
-                                Reschedule
+                              <span className="text-[10px] text-slate-400">
+                                {new Date(notif.sentAt || notif.createdAt).toLocaleDateString([], {
+                                  month: 'short',
+                                  day: 'numeric',
+                                })}
                               </span>
-                            )}
-                            <span className="text-[10px] text-slate-400">
-                              {new Date(notif.sentAt || notif.createdAt).toLocaleDateString()}
-                            </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="py-16 text-center text-slate-400 p-4">
-                    <Bell size={32} className="mx-auto mb-2 text-slate-300" />
-                    <p className="font-semibold text-slate-600 text-sm">No In-App Alerts</p>
-                    <p className="text-xs text-slate-400 mt-1">
-                      New subscription activations, reschedule requests, and visit reports will appear here.
-                    </p>
-                  </div>
+                      );
+                    });
+                  })()
                 )}
               </div>
 
-              <div className="p-3 border-t border-border bg-slate-50 flex items-center justify-between">
+              {/* Drawer Bottom Bar */}
+              <div className="p-3 border-t border-border bg-slate-50 flex items-center justify-between gap-2 shrink-0">
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Real-time sync active</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => fetchDrawerNotifications(true)}
+                    disabled={isDrawerLoading}
+                    className="text-xs flex items-center gap-1.5"
+                  >
+                    <RefreshCw size={12} className={isDrawerLoading ? 'animate-spin' : ''} />
+                    Refresh
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => setShowNotifDrawer(false)}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: CLEAR ALL CONFIRMATION (SOFT-CLEAR INBOX ARCHIVE) */}
+        {/* ========================================================================= */}
+        {showClearAllModal && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-7 shadow-2xl border border-border animate-scale-up space-y-4">
+              <div className="flex items-start gap-3.5">
+                <div className="p-3 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 shrink-0">
+                  <AlertCircle size={24} />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-navy">Clear In-App Operations Alerts?</h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    This action will clear all operational alerts from your active inbox. In compliance with clinical auditing requirements, notification records remain securely preserved in the platform history.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-3 rounded-xl border border-border text-xs text-slate-500 space-y-1">
+                <div className="font-semibold text-slate-700">What happens when you clear:</div>
+                <div>• Your unread alert badge will reset to 0.</div>
+                <div>• Notifications will be archived from this active inbox view.</div>
+                <div>• Clinical visits, orders, and subscriptions will NOT be affected.</div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => loadTabData('field_ops')}
-                  className="text-xs"
+                  onClick={() => setShowClearAllModal(false)}
+                  disabled={isClearingOrDeleting}
                 >
-                  <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
-                  Refresh
+                  Cancel
                 </Button>
                 <Button
                   size="sm"
                   variant="primary"
-                  onClick={() => setShowNotifDrawer(false)}
+                  onClick={handleConfirmClearAll}
+                  disabled={isClearingOrDeleting}
+                  className="bg-rose-600 hover:bg-rose-700 text-white border-rose-600"
                 >
-                  Close
+                  {isClearingOrDeleting ? 'Clearing...' : 'Confirm Clear All'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: PERMANENT DELETE CONFIRMATION */}
+        {/* ========================================================================= */}
+        {showPermanentDeleteModal && notifToDeletePermanently && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-7 shadow-2xl border border-border animate-scale-up space-y-4">
+              <div className="flex items-start gap-3.5">
+                <div className="p-3 rounded-2xl bg-rose-50 text-rose-600 border border-rose-200 shrink-0">
+                  <Trash2 size={24} />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-navy">Permanently Delete Notification Record?</h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Are you sure you want to permanently delete this notification record from the database? This action is permanent and cannot be undone.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-rose-50/60 p-3 rounded-xl border border-rose-100 text-xs text-rose-800 space-y-1">
+                <div className="font-bold">Record Protection Safeguard:</div>
+                <div>
+                  Only the notification log will be deleted. Any related clinical visit, doctor/caregiver report, medical product order, or subscription remains untouched.
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setShowPermanentDeleteModal(false);
+                    setNotifToDeletePermanently(null);
+                  }}
+                  disabled={isClearingOrDeleting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={handleConfirmPermanentDelete}
+                  disabled={isClearingOrDeleting}
+                  className="bg-rose-600 hover:bg-rose-700 text-white border-rose-600"
+                >
+                  {isClearingOrDeleting ? 'Deleting...' : 'Delete Permanently'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* MODAL: NOTIFICATION DETAIL INSPECTION (PART C Requirement 9) */}
+        {/* ========================================================================= */}
+        {showNotifDetailModal && selectedNotifForDetail && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-border animate-scale-up space-y-4">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 rounded-xl bg-primary-light/30 text-primary">
+                    <Bell size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-navy">Alert Context Details</h3>
+                    <p className="text-xs text-slate-400">
+                      ID: {selectedNotifForDetail._id}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowNotifDetailModal(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <span className="font-bold text-slate-700 block mb-0.5">Title</span>
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-border font-semibold text-navy">
+                    {selectedNotifForDetail.title || formatNotificationTitle(selectedNotifForDetail)}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="font-bold text-slate-700 block mb-0.5">Message</span>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-border text-slate-700 leading-relaxed">
+                    {selectedNotifForDetail.messageBody}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-border">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Template ID</span>
+                    <span className="font-mono text-slate-700">{selectedNotifForDetail.templateId || 'N/A'}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-border">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Channel</span>
+                    <span className="font-semibold text-slate-700 uppercase">{selectedNotifForDetail.channel || 'in_app'}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-border">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Recipient Role</span>
+                    <span className="font-semibold text-slate-700 capitalize">{selectedNotifForDetail.recipientRole || 'admin'}</span>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-border">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Dispatched At</span>
+                    <span className="text-slate-700">
+                      {new Date(selectedNotifForDetail.createdAt || selectedNotifForDetail.sentAt).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedNotifForDetail.metadata && Object.keys(selectedNotifForDetail.metadata).length > 0 && (
+                  <div>
+                    <span className="font-bold text-slate-700 block mb-0.5">Entity Context / Metadata</span>
+                    <pre className="p-3 rounded-xl bg-slate-900 text-slate-200 font-mono text-[11px] overflow-x-auto">
+                      {JSON.stringify(selectedNotifForDetail.metadata, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-border">
+                <div>
+                  {!selectedNotifForDetail.isRead && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          await adminApi.markNotificationRead(selectedNotifForDetail._id);
+                          setUnreadNotifCount((prev) => Math.max(0, prev - 1));
+                          setInAppNotifs((prev) =>
+                            prev.map((n) =>
+                              n._id === selectedNotifForDetail._id ? { ...n, isRead: true } : n
+                            )
+                          );
+                          setSelectedNotifForDetail((prev: any) => ({ ...prev, isRead: true }));
+                        } catch (err: any) {
+                          setError('Failed to mark read');
+                        }
+                      }}
+                      className="text-xs flex items-center gap-1.5"
+                    >
+                      <Check size={12} />
+                      Mark as Read
+                    </Button>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => setShowNotifDetailModal(false)}
+                >
+                  Close Inspection
                 </Button>
               </div>
             </div>

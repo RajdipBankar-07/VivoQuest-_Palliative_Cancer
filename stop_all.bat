@@ -8,10 +8,10 @@ echo ===========================================================================
 echo                 VivoQuest Healthcare Platform - Stop All Services
 echo ==============================================================================
 echo.
-echo [*] Terminating background processes on ports 3000, 4000, and 8000...
+echo [*] Terminating background processes on ports 3000, 4000, 8000, 8081, and 8082...
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$ports = @(3000, 4000, 8000);" ^
+    "$ports = @(3000, 4000, 8000, 8081, 8082);" ^
     "foreach ($p in $ports) {" ^
     "    $conns = Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue;" ^
     "    if ($conns) {" ^

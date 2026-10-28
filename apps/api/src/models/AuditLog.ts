@@ -124,6 +124,8 @@ AuditLogSchema.index({ actorRole: 1, timestamp: -1 });
 AuditLogSchema.index({ targetType: 1, targetId: 1, timestamp: -1 });
 AuditLogSchema.index({ 'details.subscriptionId': 1, timestamp: -1 });
 AuditLogSchema.index({ 'details.subscriptionNumber': 1, timestamp: -1 });
+AuditLogSchema.index({ 'details.visitId': 1, timestamp: -1 });
+AuditLogSchema.index({ 'details.visitNumber': 1, timestamp: -1 });
 
 // Safeguard against modifying audit records (immutable audit trail)
 AuditLogSchema.pre(['updateOne', 'updateMany', 'findOneAndUpdate'], function (next) {

@@ -19,6 +19,8 @@ export interface CartItem {
   stockAvailable: number;
   setupRequired: boolean;
   isDemo: boolean;
+  installationSelected?: boolean;
+  installationCharge?: number;
 }
 
 export interface CartPricing {
@@ -26,6 +28,8 @@ export interface CartPricing {
   deliveryFee: number;
   taxGst: number;
   totalAmount: number;
+  discountTotal?: number;
+  installationCharge?: number;
 }
 
 interface CartContextType {
@@ -43,7 +47,8 @@ interface CartContextType {
     product: any,
     quantity?: number,
     isRental?: boolean,
-    rentalDurationMonths?: number
+    rentalDurationMonths?: number,
+    installationSelected?: boolean
   ) => Promise<void>;
   removeItem: (productId: string, isRental?: boolean) => Promise<void>;
   updateQuantity: (
@@ -90,6 +95,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
           quantity: i.quantity,
           isRental: i.isRental,
           rentalDurationMonths: i.rentalDurationMonths || 1,
+          installationSelected: Boolean(i.installationSelected),
         }));
         await productsApi.saveCart(simpleItems).catch(() => null);
       }
@@ -116,6 +122,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
           quantity: i.quantity,
           isRental: i.isRental,
           rentalDurationMonths: i.rentalDurationMonths,
+          installationSelected: Boolean(i.installationSelected),
         }))
       );
 
@@ -185,11 +192,12 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     product: any,
     quantity = 1,
     isRental = false,
-    rentalDurationMonths = 1
+    rentalDurationMonths = 1,
+    installationSelected = false
   ) => {
     const productId = product.id || product._id || product.productId;
     const existingIndex = items.findIndex(
-      (item) => item.productId === productId && item.isRental === isRental
+      (item) => item.productId === productId && item.isRental === isRental && Boolean(item.installationSelected) === Boolean(installationSelected)
     );
 
     let updatedRaw: any[] = [];
@@ -203,6 +211,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
             quantity: item.stockAvailable ? Math.min(newQty, item.stockAvailable) : newQty,
             isRental: item.isRental,
             rentalDurationMonths: item.rentalDurationMonths,
+            installationSelected: Boolean(item.installationSelected),
           };
         }
         return {
@@ -210,6 +219,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
           quantity: item.quantity,
           isRental: item.isRental,
           rentalDurationMonths: item.rentalDurationMonths,
+          installationSelected: Boolean(item.installationSelected),
         };
       });
     } else {
@@ -219,12 +229,14 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
           quantity: i.quantity,
           isRental: i.isRental,
           rentalDurationMonths: i.rentalDurationMonths,
+          installationSelected: Boolean(i.installationSelected),
         })),
         {
           productId,
           quantity,
           isRental,
           rentalDurationMonths: isRental ? rentalDurationMonths : 1,
+          installationSelected: Boolean(installationSelected),
         },
       ];
     }
@@ -241,6 +253,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         quantity: i.quantity,
         isRental: i.isRental,
         rentalDurationMonths: i.rentalDurationMonths,
+        installationSelected: Boolean(i.installationSelected),
       }));
 
     await revalidateItems(updatedRaw);
@@ -263,6 +276,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
           quantity,
           isRental: item.isRental,
           rentalDurationMonths: item.rentalDurationMonths,
+          installationSelected: Boolean(item.installationSelected),
         };
       }
       return {
@@ -270,6 +284,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         quantity: item.quantity,
         isRental: item.isRental,
         rentalDurationMonths: item.rentalDurationMonths,
+        installationSelected: Boolean(item.installationSelected),
       };
     });
 

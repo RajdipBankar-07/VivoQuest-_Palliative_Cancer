@@ -324,11 +324,18 @@ export default function OrdersHistoryPage() {
 
                     {/* Bottom Info Bar */}
                     <div className="flex flex-wrap items-center justify-between text-xs text-muted-foreground pt-1 border-t border-slate-50 gap-2">
-                      <div className="flex items-center gap-4">
+                      <div className="flex flex-wrap items-center gap-3">
                         <span className="flex items-center gap-1 text-[11px]">
                           <Truck size={13} className="text-secondary" />
                           Delivery to {order.deliveryAddress?.city} ({order.deliveryAddress?.pincode})
                         </span>
+
+                        {order.estimatedDeliveryDate && (
+                          <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                            <Calendar size={12} className="text-emerald-600" />
+                            Est. Delivery: {new Date(order.estimatedDeliveryDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </span>
+                        )}
 
                         {requiresSetup && (
                           <span className="flex items-center gap-1 text-[11px] text-purple-700 font-semibold">

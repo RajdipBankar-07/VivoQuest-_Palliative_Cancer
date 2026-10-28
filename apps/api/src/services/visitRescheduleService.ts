@@ -968,3 +968,132 @@ export const rejectRescheduleRequest = async (
 
   return updatedReq;
 };
+
+/**
+ * Permanently delete or hide a single reschedule request
+ */
+export const deleteRescheduleRequest = async (
+  requestId: string,
+  user: UserContext,
+  permanent: boolean = true
+): Promise<{ success: boolean; message: string; requestId: string }> => {
+  if (!mongoose.Types.ObjectId.isValid(requestId)) {
+    throw new AppError('Invalid reschedule request identifier', 400);
+  }
+
+  const reqDoc = await VisitRescheduleRequest.findById(requestId);
+  if (!reqDoc) {
+    throw new AppError('Reschedule request not found', 404);
+  }
+
+  if (permanent && ['admin', 'super_admin'].includes(user.role)) {
+    await VisitRescheduleRequest.findByIdAndDelete(requestId);
+    return {
+      success: true,
+      message: 'Reschedule request permanently deleted to reclaim storage.',
+      requestId,
+    };
+  }
+
+  return await hideRescheduleRequest(requestId, user);
+};
+
+/**
+ * Bulk delete reschedule requests (either permanently or hide from admin view)
+ */
+export const bulkDeleteRescheduleRequests = async (
+  requestIds: string[],
+  user: UserContext,
+  permanent: boolean = true
+): Promise<{ deletedCount: number; message: string }> => {
+  if (!requestIds || requestIds.length === 0) {
+    return { deletedCount: 0, message: 'No request IDs provided' };
+  }
+  const validIds = requestIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  if (validIds.length === 0) {
+    return { deletedCount: 0, message: 'No valid request IDs provided' };
+  }
+
+  if (permanent && ['admin', 'super_admin'].includes(user.role)) {
+    const result = await VisitRescheduleRequest.deleteMany({ _id: { $in: validIds } });
+    return {
+      deletedCount: result.deletedCount || 0,
+      message: `Permanently deleted ${result.deletedCount || 0} reschedule requests.`,
+    };
+  }
+
+  const result = await VisitRescheduleRequest.updateMany(
+    { _id: { $in: validIds }, status: { $ne: 'pending' } },
+    { $set: { hiddenFromAdmin: true, hiddenFromAdminAt: new Date() } }
+  );
+
+  return {
+    deletedCount: result.modifiedCount || 0,
+    message: `Removed ${result.modifiedCount || 0} reschedule requests from view.`,
+  };
+};
+
+/**
+ * Clear all resolved reschedule requests (approved, rejected, cancelled) to reclaim storage
+ */
+export const clearResolvedRescheduleRequests = async (
+  permanent: boolean = true
+): Promise<{ deletedCount: number; message: string }> => {
+  if (permanent) {
+    const result = await VisitRescheduleRequest.deleteMany({
+      status: { $in: ['approved', 'rejected', 'cancelled'] },
+    });
+    return {
+      deletedCount: result.deletedCount || 0,
+      message: `Permanently purged ${result.deletedCount || 0} resolved reschedule requests from storage.`,
+    };
+  }
+
+  const result = await VisitRescheduleRequest.updateMany(
+    { status: { $in: ['approved', 'rejected', 'cancelled'] } },
+    { $set: { hiddenFromAdmin: true, hiddenFromAdminAt: new Date() } }
+  );
+
+  return {
+    deletedCount: result.modifiedCount || 0,
+    message: `Cleared ${result.modifiedCount || 0} resolved requests from view.`,
+  };
+};
+
+/**
+ * Delete reschedule requests in a date range ("this time to this time")
+ */
+export const deleteRescheduleRequestsByDateRange = async (
+  startDate: string,
+  endDate: string,
+  permanent: boolean = true
+): Promise<{ deletedCount: number; message: string }> => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new AppError('Invalid start or end date format', 400);
+  }
+  const startD = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0, 0, 0, 0);
+  const endD = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59, 999);
+
+  if (permanent) {
+    const result = await VisitRescheduleRequest.deleteMany({
+      createdAt: { $gte: startD, $lte: endD },
+      status: { $ne: 'pending' },
+    });
+    return {
+      deletedCount: result.deletedCount || 0,
+      message: `Permanently deleted ${result.deletedCount || 0} requests in date range.`,
+    };
+  }
+
+  const result = await VisitRescheduleRequest.updateMany(
+    { createdAt: { $gte: startD, $lte: endD }, status: { $ne: 'pending' } },
+    { $set: { hiddenFromAdmin: true, hiddenFromAdminAt: new Date() } }
+  );
+  return {
+    deletedCount: result.modifiedCount || 0,
+    message: `Cleared ${result.modifiedCount || 0} requests in date range from view.`,
+  };
+};
+

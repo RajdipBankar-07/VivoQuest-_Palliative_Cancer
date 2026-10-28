@@ -4,6 +4,8 @@ export type SubscriptionStatus = 'active' | 'paused' | 'suspended' | 'completed'
 
 export interface ICaregiverSubscription extends Document {
   subscriptionNumber: string;
+  invoiceNumber?: string;
+  invoiceGeneratedAt?: Date;
   patientId: mongoose.Types.ObjectId;
   patientName: string;
   patientPhone: string;
@@ -59,6 +61,14 @@ const CaregiverSubscriptionSchema = new Schema<ICaregiverSubscription>(
       trim: true,
       uppercase: true,
       index: true,
+    },
+    invoiceNumber: {
+      type: String,
+      sparse: true,
+      index: true,
+    },
+    invoiceGeneratedAt: {
+      type: Date,
     },
     patientId: {
       type: Schema.Types.ObjectId,
@@ -221,6 +231,8 @@ const CaregiverSubscriptionSchema = new Schema<ICaregiverSubscription>(
 
 CaregiverSubscriptionSchema.index({ patientId: 1, status: 1 });
 CaregiverSubscriptionSchema.index({ assignedCaregiverId: 1, status: 1 });
+CaregiverSubscriptionSchema.index({ patientPhone: 1, status: 1 });
+CaregiverSubscriptionSchema.index({ status: 1, isArchived: 1, createdAt: -1 });
 
 export const CaregiverSubscription: Model<ICaregiverSubscription> =
   mongoose.models.CaregiverSubscription ||

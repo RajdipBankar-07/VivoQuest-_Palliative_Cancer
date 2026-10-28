@@ -21,6 +21,15 @@ export interface IDepotStock {
   };
 }
 
+export interface IProductImage {
+  url: string;
+  altText?: string;
+  isPrimary?: boolean;
+}
+
+export type ProductStatus = 'active' | 'draft' | 'archived' | 'out_of_stock';
+export type ProductSourcingType = 'own_stock' | 'supplier_direct' | 'own' | 'supplier';
+
 export interface IMedicalProduct extends Document {
   sku: string;
   title: string;
@@ -28,6 +37,9 @@ export interface IMedicalProduct extends Document {
   badge?: string;
   description: string;
   price: number;
+  regularPrice: number;
+  sellingPrice: number;
+  discountPercentage: number;
   rentalPriceMonthly?: number;
   isRentalAvailable: boolean;
   requiresPrescription: boolean;
@@ -40,15 +52,34 @@ export interface IMedicalProduct extends Document {
   supplierName?: string;
   procurementCost: number;
   images: string[];
+  imageGallery: IProductImage[];
   specifications: Record<string, string>;
   hsnCode?: string;
-  gstRate: number; // e.g. 5, 12, 18
+  gstRate: number; // e.g. 0, 5, 12, 18, 28
+  status: ProductStatus;
+  fulfillmentMethod: 'vivoquest_depot' | 'supplier_direct';
+  shippingCharge: number;
+  estimatedDeliveryDays: string;
+  installationEligible: boolean;
+  installationServiceCharge: number;
+  installationDescription?: string;
+  averageRating: number;
+  reviewCount: number;
   depots: IDepotStock[];
   isActive: boolean;
   isDemo: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const ProductImageSchema = new Schema<IProductImage>(
+  {
+    url: { type: String, required: true },
+    altText: { type: String, trim: true },
+    isPrimary: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
 
 const DepotStockSchema = new Schema<IDepotStock>(
   {
@@ -116,6 +147,20 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
       required: true,
       min: 0,
     },
+    regularPrice: {
+      type: Number,
+      min: 0,
+    },
+    sellingPrice: {
+      type: Number,
+      min: 0,
+    },
+    discountPercentage: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 0,
+    },
     rentalPriceMonthly: {
       type: Number,
       min: 0,
@@ -151,7 +196,7 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
     },
     sourcingType: {
       type: String,
-      enum: ['own_stock', 'supplier_direct'],
+      enum: ['own_stock', 'supplier_direct', 'own', 'supplier'],
       default: 'own_stock',
       index: true,
     },
@@ -170,6 +215,7 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
       min: 0,
     },
     images: [{ type: String }],
+    imageGallery: [ProductImageSchema],
     specifications: {
       type: Map,
       of: String,
@@ -181,7 +227,53 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
     },
     gstRate: {
       type: Number,
-      default: 12, // 12% standard medical device GST in India
+      enum: [0, 5, 12, 18, 28],
+      default: 12, // Standard medical equipment GST in India
+    },
+    status: {
+      type: String,
+      enum: ['active', 'draft', 'archived', 'out_of_stock'],
+      default: 'active',
+      index: true,
+    },
+    fulfillmentMethod: {
+      type: String,
+      enum: ['vivoquest_depot', 'supplier_direct'],
+      default: 'vivoquest_depot',
+    },
+    shippingCharge: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    estimatedDeliveryDays: {
+      type: String,
+      default: '2-4 business days',
+    },
+    installationEligible: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    installationServiceCharge: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    installationDescription: {
+      type: String,
+      trim: true,
+    },
+    averageRating: {
+      type: Number,
+      default: 5.0,
+      min: 1.0,
+      max: 5.0,
+    },
+    reviewCount: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     depots: [DepotStockSchema],
     isActive: {
@@ -197,6 +289,7 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
   {
     timestamps: true,
     toJSON: {
+      virtuals: true,
       transform(_doc, ret: Record<string, any>) {
         ret.id = ret._id.toString();
         delete ret._id;
@@ -207,6 +300,71 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
   }
 );
 
+// Pre-save normalization and server-side pricing derivations
+MedicalProductSchema.pre<IMedicalProduct>('save', function (next) {
+  // 1. Sourcing type normalization
+  if ((this.sourcingType as any) === 'own') {
+    this.sourcingType = 'own_stock';
+  } else if ((this.sourcingType as any) === 'supplier') {
+    this.sourcingType = 'supplier_direct';
+  }
+
+  if (this.sourcingType === 'own_stock') {
+    this.fulfillmentMethod = 'vivoquest_depot';
+  } else if (this.sourcingType === 'supplier_direct') {
+    this.fulfillmentMethod = 'supplier_direct';
+  }
+
+  // 2. Regular price & Selling price validation & derivation
+  if (this.regularPrice == null || isNaN(this.regularPrice) || this.regularPrice <= 0) {
+    this.regularPrice = this.price || 0;
+  }
+
+  if (this.discountPercentage != null && this.discountPercentage > 0) {
+    // Derive selling price safely on backend
+    const discountFactor = (100 - Math.min(100, Math.max(0, this.discountPercentage))) / 100;
+    this.sellingPrice = Math.max(0, Math.round(this.regularPrice * discountFactor));
+  } else if (this.sellingPrice != null && this.sellingPrice > 0) {
+    if (this.sellingPrice > this.regularPrice) {
+      this.regularPrice = this.sellingPrice;
+      this.discountPercentage = 0;
+    } else {
+      this.discountPercentage = this.regularPrice > 0
+        ? Math.round(((this.regularPrice - this.sellingPrice) / this.regularPrice) * 100)
+        : 0;
+    }
+  } else {
+    this.sellingPrice = this.regularPrice;
+    this.discountPercentage = 0;
+  }
+
+  this.price = this.sellingPrice;
+
+  // 3. Image gallery synchronization
+  if (this.images && this.images.length > 0 && (!this.imageGallery || this.imageGallery.length === 0)) {
+    this.imageGallery = this.images.map((img, idx) => ({
+      url: img,
+      altText: `${this.title} - View ${idx + 1}`,
+      isPrimary: idx === 0,
+    }));
+  } else if (this.imageGallery && this.imageGallery.length > 0 && (!this.images || this.images.length === 0)) {
+    this.images = this.imageGallery.map((ig) => ig.url);
+  }
+
+  // 4. Status synchronization with stock and isActive
+  if (!this.isActive && this.status !== 'archived') {
+    this.status = 'archived';
+  } else if (this.isActive) {
+    if (this.stockQuantity <= 0 && this.status === 'active') {
+      this.status = 'out_of_stock';
+    } else if (this.stockQuantity > 0 && this.status === 'out_of_stock') {
+      this.status = 'active';
+    }
+  }
+
+  next();
+});
+
 // Compound text search index for title and description
 MedicalProductSchema.index({ title: 'text', description: 'text', sku: 'text' });
 MedicalProductSchema.index({ 'depots.location': '2dsphere' });
@@ -214,3 +372,4 @@ MedicalProductSchema.index({ 'depots.location': '2dsphere' });
 export const MedicalProduct: Model<IMedicalProduct> =
   mongoose.models.MedicalProduct ||
   mongoose.model<IMedicalProduct>('MedicalProduct', MedicalProductSchema);
+

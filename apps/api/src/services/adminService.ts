@@ -16,6 +16,8 @@ import { SupplierPurchaseOrder } from '../models/SupplierPurchaseOrder.js';
 import { CaregiverPlan } from '../models/CaregiverPlan.js';
 import { CaregiverSubscription } from '../models/CaregiverSubscription.js';
 import { VisitRescheduleRequest } from '../models/VisitRescheduleRequest.js';
+import { PatientProfile } from '../models/PatientProfile.js';
+import { FieldVisit } from '../models/FieldVisit.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { hashPassword } from './authService.js';
 import { seedServicesIfEmpty } from './serviceCatalogService.js';
@@ -119,7 +121,7 @@ export const seedAdminDemoData = async () => {
           phone: '9820099887',
           email: 'ramesh.iyer@example.com',
           role: 'professional',
-          passwordHash: '$2a$10$wK1W8GqjV1dE8qfS9I4PueZ.qBwT6Y1oF.5yWfB3p1Z5F9jG3.P3m',
+          passwordHash: '$2a$10$EFiLRGZLOGPDyjV9YcuOx.yo1E5TxdiMW5zRrJOIocWxgTkYDGg06', // Password123!
           isPhoneVerified: true,
           dpdpConsent: { accepted: true, consentedAt: new Date(), policyVersion: 'DPDP-2023-V1.0' },
         });
@@ -540,6 +542,146 @@ export const updateUserStatus = async (
     phone: user.phone,
     role: user.role,
     status: user.status,
+  };
+};
+
+/**
+ * Get comprehensive user profile details by ID for administrative inspection
+ */
+export const getUserDetails = async (userId: string) => {
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    throw new AppError('Invalid user ID', 400);
+  }
+
+  const user = await User.findById(userId).lean();
+  if (!user) {
+    throw new AppError('User not found', 404);
+  }
+
+  const baseUser = {
+    id: user._id.toString(),
+    _id: user._id.toString(),
+    fullName: user.fullName,
+    email: user.email,
+    phone: user.phone,
+    role: user.role,
+    status: user.status,
+    isPhoneVerified: user.isPhoneVerified,
+    isEmailVerified: user.isEmailVerified,
+    dpdpConsent: user.dpdpConsent,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    lastLoginAt: user.lastLoginAt,
+  };
+
+  let patientProfile = null;
+  let professionalProfile = null;
+  let subscriptions: any[] = [];
+  let credentials: any[] = [];
+  let visitsCount = 0;
+
+  if (user.role === 'patient') {
+    patientProfile = await PatientProfile.findOne({ userId: user._id }).lean();
+    subscriptions = await CaregiverSubscription.find({ patientId: user._id }).lean();
+    visitsCount = await FieldVisit.countDocuments({ patientId: user._id });
+  } else if (['caregiver', 'professional'].includes(user.role)) {
+    professionalProfile = await HealthcareProfessionalProfile.findOne({ userId: user._id }).lean();
+    credentials = await ProfessionalCredentials.find({
+      $or: [
+        { userId: user._id },
+        ...(professionalProfile ? [{ professionalId: professionalProfile._id }] : [])
+      ]
+    }).lean();
+    visitsCount = await FieldVisit.countDocuments({ providerId: user._id });
+  }
+
+  const auditHistory = await AuditLog.find({ targetId: user._id.toString() })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .lean();
+
+  return {
+    user: baseUser,
+    patientProfile,
+    professionalProfile,
+    subscriptions,
+    credentials,
+    visitsCount,
+    auditHistory,
+  };
+};
+
+/**
+ * Permanently delete a user account and reclaim database storage space.
+ * Enforces safeguards against deleting self or super_admins.
+ */
+export const deleteUserPermanently = async (userId: string, actorUser: IUser) => {
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    throw new AppError('Invalid user ID', 400);
+  }
+
+  if (actorUser._id.toString() === userId) {
+    throw new AppError('Forbidden: You cannot delete your own administrator account.', 400);
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new AppError('User not found', 404);
+  }
+
+  // Prevent non-super_admin from deleting super_admin
+  if (user.role === 'super_admin' && actorUser.role !== 'super_admin') {
+    throw new AppError('Forbidden: Only a Super Admin can delete a Super Admin account.', 403);
+  }
+
+  const targetRole = user.role;
+  const targetName = user.fullName;
+  const targetPhone = user.phone;
+
+  // 1. Delete associated profiles and records to prevent orphaned documents
+  const profProfiles = await HealthcareProfessionalProfile.find({ userId: user._id }).select('_id');
+  const profProfileIds = profProfiles.map((p) => p._id);
+
+  const [patientProfileResult, profProfileResult, credsResult] = await Promise.all([
+    PatientProfile.deleteMany({ userId: user._id }),
+    HealthcareProfessionalProfile.deleteMany({ userId: user._id }),
+    ProfessionalCredentials.deleteMany({
+      $or: [
+        { userId: user._id },
+        { professionalId: user._id },
+        { professionalId: { $in: profProfileIds } },
+      ],
+    }),
+  ]);
+
+  // 2. Delete primary user record
+  await User.findByIdAndDelete(userId);
+
+  // 3. Log sensitive deletion audit record
+  await logAdminAction({
+    action: 'user_deleted_permanently',
+    category: 'user_management',
+    actorId: actorUser._id.toString(),
+    actorName: actorUser.fullName,
+    actorRole: actorUser.role,
+    targetType: 'user',
+    targetId: userId,
+    details: {
+      deletedUserFullName: targetName,
+      deletedUserPhone: `******${targetPhone.slice(-4)}`,
+      deletedUserRole: targetRole,
+      patientProfilesRemoved: patientProfileResult.deletedCount,
+      professionalProfilesRemoved: profProfileResult.deletedCount,
+      credentialsRemoved: credsResult.deletedCount,
+      reason: 'Administrative permanent storage purge and account deletion',
+    },
+    severity: 'warning',
+  });
+
+  return {
+    success: true,
+    message: `User account '${targetName}' (${targetRole}) permanently deleted and storage reclaimed.`,
+    deletedUserId: userId,
   };
 };
 
@@ -1928,6 +2070,8 @@ export const listHealthcareProfessionalsAdmin = async (filters: {
   professionType?: string;
   verificationStatus?: string;
   search?: string;
+  minExperience?: number;
+  maxExperience?: number;
   page?: number;
   limit?: number;
 }) => {
@@ -1940,6 +2084,32 @@ export const listHealthcareProfessionalsAdmin = async (filters: {
   if (filters.verificationStatus && filters.verificationStatus !== 'all') {
     query.verificationStatus = filters.verificationStatus;
   }
+  if (filters.minExperience !== undefined || filters.maxExperience !== undefined) {
+    query.yearsOfExperience = {};
+    if (filters.minExperience !== undefined) query.yearsOfExperience.$gte = filters.minExperience;
+    if (filters.maxExperience !== undefined) query.yearsOfExperience.$lte = filters.maxExperience;
+  }
+
+  if (filters.search && filters.search.trim()) {
+    const term = filters.search.trim();
+    const matchingUsers = await User.find({
+      $or: [
+        { fullName: { $regex: term, $options: 'i' } },
+        { phone: { $regex: term, $options: 'i' } },
+        { email: { $regex: term, $options: 'i' } },
+      ],
+    }).select('_id');
+    const userIds = matchingUsers.map((u) => u._id);
+
+    query.$or = [
+      { userId: { $in: userIds } },
+      { highestQualification: { $regex: term, $options: 'i' } },
+      { institution: { $regex: term, $options: 'i' } },
+      { registrationNumber: { $regex: term, $options: 'i' } },
+      { specializations: { $in: [new RegExp(term, 'i')] } },
+      { skills: { $in: [new RegExp(term, 'i')] } },
+    ];
+  }
 
   const page = Math.max(1, filters.page || 1);
   const limit = Math.min(100, Math.max(1, filters.limit || 20));
@@ -1947,7 +2117,7 @@ export const listHealthcareProfessionalsAdmin = async (filters: {
 
   const [profiles, total] = await Promise.all([
     HealthcareProfessionalProfile.find(query)
-      .populate('userId', 'fullName phone email status')
+      .populate('userId', 'fullName phone email status lastLoginAt')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -1968,17 +2138,32 @@ export const listHealthcareProfessionalsAdmin = async (filters: {
       return {
         id: p._id.toString(),
         userId: p.userId?._id?.toString(),
-        fullName: p.userId?.fullName || 'Clinician',
+        user: p.userId
+          ? {
+              id: p.userId._id.toString(),
+              fullName: p.userId.fullName,
+              phone: p.userId.phone,
+              email: p.userId.email,
+              status: p.userId.status,
+              lastLoginAt: p.userId.lastLoginAt,
+            }
+          : undefined,
+        fullName: p.userId?.fullName || 'Care Professional',
         phone: p.userId?.phone,
         phoneMasked: p.userId?.phone ? `+91 ******${p.userId.phone.slice(-4)}` : undefined,
         email: p.userId?.email,
+        status: p.userId?.status || 'active',
         title: p.title,
         professionType: p.professionType,
-        specializations: p.specializations,
+        highestQualification: p.highestQualification,
+        institution: p.institution,
+        specializations: p.specializations || [],
         registrationNumber: p.registrationNumber,
         registrationCouncil: p.registrationCouncil,
         yearsOfExperience: p.yearsOfExperience,
-        serviceClusters: p.serviceClusters,
+        experienceSummary: p.experienceSummary,
+        skills: p.skills || [],
+        serviceClusters: p.serviceClusters || [],
         verificationStatus: p.verificationStatus,
         rating: p.rating,
         totalVisitsCompleted: p.totalVisitsCompleted,
@@ -1986,6 +2171,7 @@ export const listHealthcareProfessionalsAdmin = async (filters: {
         credentialsCount,
         pendingCredentialsCount,
         createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
       };
     })
   );
@@ -1995,10 +2181,10 @@ export const listHealthcareProfessionalsAdmin = async (filters: {
   return {
     professionals: validEnriched,
     pagination: {
-      total: validEnriched.length,
+      total,
       page,
       limit,
-      totalPages: Math.max(1, Math.ceil(validEnriched.length / limit)),
+      totalPages: Math.max(1, Math.ceil(total / limit)),
     },
   };
 };

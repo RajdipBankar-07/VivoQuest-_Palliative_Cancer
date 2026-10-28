@@ -10,10 +10,23 @@ router.get('/me', authenticateUser, async (req: AuthRequest, res: Response, next
     const user = req.user!;
     let profile: any = null;
 
-    if (user.role === 'patient' || user.role === 'caregiver') {
+    if (user.role === 'patient') {
       profile = await PatientProfile.findOne({ userId: user._id });
-    } else if (user.role === 'professional') {
+    } else if (user.role === 'professional' || user.role === 'caregiver') {
       profile = await HealthcareProfessionalProfile.findOne({ userId: user._id });
+      if (!profile && user.role === 'caregiver') {
+        // Fallback for legacy caregiver accounts
+        profile = await HealthcareProfessionalProfile.create({
+          userId: user._id,
+          title: 'Caregiver',
+          professionType: 'caregiver',
+          registrationNumber: 'N/A',
+          registrationCouncil: 'Not Applicable',
+          yearsOfExperience: 2,
+          serviceClusters: ['Pune'],
+          verificationStatus: 'pending_review',
+        });
+      }
     }
 
     res.status(200).json({

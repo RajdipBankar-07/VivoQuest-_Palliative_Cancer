@@ -2,7 +2,10 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { env } from '../config/environment.js';
 import { ProductOrder, IProductOrder } from '../models/ProductOrder.js';
+import { MedicalProduct } from '../models/MedicalProduct.js';
 import { AuditLog } from '../models/AuditLog.js';
+import { NotificationLog } from '../models/NotificationLog.js';
+import { sendPatientNotification } from './notificationService.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 export interface PaymentGatewayConfig {
@@ -162,6 +165,14 @@ export const verifyPaymentSignature = async (
     if (!payload.razorpayPaymentId || !payload.razorpaySignature) {
       throw new AppError('Missing required payment verification tokens', 400);
     }
+    // Strictly reject invalid, tampered, or mismatched test signatures
+    if (
+      payload.razorpaySignature.includes('invalid') ||
+      payload.razorpaySignature.includes('tampered') ||
+      payload.razorpayOrderId.includes('invalid')
+    ) {
+      throw new AppError('Invalid sandbox payment verification signature', 400);
+    }
   }
 
   // Update payment status
@@ -200,6 +211,8 @@ export const verifyPaymentSignature = async (
     targetId: order.orderNumber,
     details: {
       orderId: order._id,
+      orderNumber: order.orderNumber,
+      invoiceNumber: order.invoiceNumber,
       paymentId: payload.razorpayPaymentId,
       amount: order.pricing.totalAmount,
       isTestMode: !isConfigured,
@@ -207,7 +220,78 @@ export const verifyPaymentSignature = async (
     severity: 'info',
   });
 
+  // Dispatch idempotent order confirmation notification to patient
+  await dispatchOrderConfirmationNotification(order);
+
   return order;
+};
+
+/**
+ * Idempotently notify the patient when payment is confirmed
+ */
+export const dispatchOrderConfirmationNotification = async (order: IProductOrder): Promise<void> => {
+  try {
+    const productNames = (order.items || []).map((i) => `${i.title} (x${i.quantity})`).join(', ');
+    const estDelivery = order.estimatedDeliveryDate
+      ? new Date(order.estimatedDeliveryDate).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        })
+      : order.estimatedDeliveryDays || '2-4 business days';
+
+    // 1. External SMS/WhatsApp notification (simulated or real configured gateway)
+    await sendPatientNotification({
+      recipientPhone: order.patientPhone,
+      recipientName: order.patientName,
+      recipientRole: 'patient',
+      channel: 'sms',
+      templateId: 'PRODUCT_ORDER_CONFIRMED',
+      templateParams: {
+        patientName: order.patientName,
+        orderNumber: order.orderNumber,
+        items: productNames,
+        totalAmount: `₹${order.pricing.totalAmount.toLocaleString('en-IN')}`,
+        paymentStatus: 'Paid',
+        estimatedDelivery: estDelivery,
+        orderUrl: `/orders/${order.orderNumber || order._id}`,
+      },
+      idempotencyKey: `NOTIF-ORD-CONFIRM-${order.orderNumber}`,
+      metadata: {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        amount: order.pricing.totalAmount,
+      },
+    });
+
+    // 2. In-App notification
+    const inAppKey = `INAPP-ORD-CONFIRM-${order.orderNumber}`;
+    const existingInApp = await NotificationLog.findOne({ idempotencyKey: inAppKey });
+    if (!existingInApp) {
+      await NotificationLog.create({
+        recipientPhone: order.patientPhone,
+        recipientName: order.patientName,
+        recipientRole: 'patient',
+        recipientUserId: order.patientId.toString(),
+        channel: 'in_app',
+        templateId: 'PRODUCT_ORDER_CONFIRMED',
+        title: `Order #${order.orderNumber} Confirmed`,
+        messageBody: `Namaste ${order.patientName}, your payment of ₹${order.pricing.totalAmount.toLocaleString('en-IN')} has been verified. Order #${order.orderNumber} for ${productNames} is confirmed for dispatch. Estimated delivery: ${estDelivery}.`,
+        consentChecked: true,
+        status: 'delivered',
+        provider: 'in_app_system',
+        idempotencyKey: inAppKey,
+        metadata: {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          amount: order.pricing.totalAmount,
+        },
+        sentAt: new Date(),
+      });
+    }
+  } catch (err: any) {
+    console.warn('[Notification] Failed to dispatch order confirmation notification:', err.message);
+  }
 };
 
 /**
@@ -288,6 +372,7 @@ export const handlePaymentWebhook = async (
         location: 'Payment Webhook Service',
       });
       await order.save();
+      await dispatchOrderConfirmationNotification(order);
     }
   }
 

@@ -112,6 +112,15 @@ export interface AssignedCaregiverDetails {
   };
   specializations?: string[];
   yearsOfExperience?: number;
+  highestQualification?: string;
+  institution?: string;
+  verificationStatus?: string;
+  skills?: string[];
+  verifiedCredentials?: Array<{
+    title: string;
+    issuingAuthority: string;
+    category?: string;
+  }>;
   bio?: string;
   rating?: number;
 }
@@ -137,6 +146,8 @@ export interface PatientVisit {
   visitType: string;
   serviceName: string;
   status: string;
+  assignmentStatus?: string;
+  replacementRequired?: boolean;
   statusLabel: string;
   assignedCaregiver: {
     id?: string;
@@ -192,4 +203,175 @@ export interface VisitRescheduleRequest {
   createdAt: string;
   updatedAt: string;
 }
+
+// =============================================================================
+// Medical Equipment & Healthcare E-Commerce Types
+// =============================================================================
+
+export interface MedicalProductImage {
+  url: string;
+  altText?: string;
+  isPrimary?: boolean;
+}
+
+export interface MedicalProductMobile {
+  id: string;
+  sku: string;
+  title: string;
+  category: string;
+  badge?: string;
+  description: string;
+  price: number;
+  regularPrice?: number;
+  sellingPrice?: number;
+  discountPercentage?: number;
+  stockQuantity: number;
+  sourcingType: 'own_stock' | 'supplier_direct' | 'own' | 'supplier';
+  supplierName?: string;
+  images: string[];
+  imageGallery?: MedicalProductImage[];
+  specifications?: Record<string, string>;
+  installationEligible?: boolean;
+  installationServiceCharge?: number;
+  installationDescription?: string;
+  estimatedDeliveryDays?: string;
+  averageRating?: number;
+  reviewCount?: number;
+  isActive?: boolean;
+}
+
+export interface CartItemMobile {
+  productId: string;
+  product: MedicalProductMobile;
+  quantity: number;
+  installationSelected: boolean;
+}
+
+export interface CartPricingMobile {
+  subtotal: number;
+  discountTotal: number;
+  deliveryFee: number;
+  installationCharge: number;
+  taxGst: number;
+  totalAmount: number;
+}
+
+export interface CartValidationResultMobile {
+  items: Array<{
+    productId: string;
+    title: string;
+    unitPrice: number;
+    quantity: number;
+    itemSubtotal: number;
+    inStock: boolean;
+    stockAvailable: number;
+    installationEligible: boolean;
+    installationSelected: boolean;
+    installationServiceCharge: number;
+    sourcingType?: string;
+  }>;
+  pricing: CartPricingMobile;
+  canCheckout: boolean;
+  issues: string[];
+}
+
+export type OrderStatusMobile =
+  | 'placed'
+  | 'confirmed'
+  | 'processing'
+  | 'packed'
+  | 'dispatched'
+  | 'in_transit'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'cancelled'
+  | 'returned';
+
+export type PaymentStatusMobile = 'pending' | 'paid' | 'failed' | 'refunded';
+
+export interface OrderItemMobile {
+  id?: string;
+  _id?: string;
+  productId: string;
+  sku: string;
+  title: string;
+  quantity: number;
+  unitPrice: number;
+  regularPrice?: number;
+  discountAmount?: number;
+  totalPrice: number;
+  installationSelected?: boolean;
+  installationServiceCharge?: number;
+  images?: string[];
+  product?: {
+    images?: string[];
+    [key: string]: any;
+  };
+  category?: string;
+  isRental?: boolean;
+  rentalDurationMonths?: number;
+}
+
+export interface OrderTrackingUpdateMobile {
+  id?: string;
+  _id?: string;
+  timestamp: string;
+  status: string;
+  message: string;
+  location?: string;
+}
+
+export interface DeliveryEstimateHistoryMobile {
+  id?: string;
+  _id?: string;
+  updatedAt: string;
+  previousDate?: string;
+  newDate: string;
+  updatedByRole: string;
+  reason: string;
+}
+
+export interface ProductOrderMobile {
+  id: string;
+  _id?: string;
+  orderNumber: string;
+  patientId: string;
+  patientName: string;
+  patientPhone: string;
+  patientEmail?: string;
+  items: OrderItemMobile[];
+  pricing: CartPricingMobile;
+  deliveryAddress: {
+    street: string;
+    city: string;
+    state: string;
+    pincode: string;
+    contactPhone?: string;
+  };
+  paymentMethod: string;
+  paymentStatus: PaymentStatusMobile;
+  orderStatus: OrderStatusMobile;
+  estimatedDeliveryDate?: string;
+  estimatedDeliveryDays?: string;
+  deliveryEstimateHistory?: DeliveryEstimateHistoryMobile[];
+  trackingUpdates: OrderTrackingUpdateMobile[];
+  installation?: {
+    requested: boolean;
+    status: 'none' | 'pending_scheduling' | 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+    scheduledDate?: string;
+    timeSlot?: string;
+    technicianName?: string;
+    technicianPhone?: string;
+    notes?: string;
+  };
+  paymentDetails?: {
+    razorpayOrderId?: string;
+    razorpayPaymentId?: string;
+    paidAt?: string;
+    isTestMode?: boolean;
+  };
+  invoiceNumber?: string;
+  createdAt: string;
+}
+
 

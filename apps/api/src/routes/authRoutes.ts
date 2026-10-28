@@ -21,7 +21,31 @@ const registerSchema = z.object({
     message: 'DPDP Act compliance consent must be acknowledged',
   }),
   registrationNumber: z.string().optional(),
+  registrationCouncil: z.string().optional(),
   professionType: z.string().optional(),
+  highestQualification: z.string().optional(),
+  institution: z.string().optional(),
+  specialization: z.string().optional(),
+  specializations: z.array(z.string()).optional(),
+  yearsOfExperience: z.number().optional(),
+  experienceSummary: z.string().optional(),
+  skills: z.array(z.string()).optional(),
+  bio: z.string().optional(),
+  credentials: z
+    .array(
+      z.object({
+        documentType: z.string().optional(),
+        certificateTitle: z.string().optional(),
+        issuingAuthority: z.string().optional(),
+        issuingOrganization: z.string().optional(),
+        credentialCategory: z.string().optional(),
+        documentNumber: z.string().optional(),
+        issueDate: z.string().optional(),
+        expiryDate: z.string().optional(),
+        uploadedFileId: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 const loginSchema = z.object({

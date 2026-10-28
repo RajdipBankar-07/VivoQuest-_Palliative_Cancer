@@ -257,6 +257,10 @@ export const authApi = {
     return null;
   },
 
+  getCurrentUser() {
+    return this.getStoredUser();
+  },
+
   getToken() {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('vivo_token');
@@ -699,6 +703,19 @@ export const patientsApi = {
       data: any[];
     }>('/api/v1/patients/health-updates/me');
     return res.data;
+  },
+
+  async getCaregiverPlans(params?: { category?: string; planType?: string }) {
+    const query = new URLSearchParams();
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.planType && params.planType !== 'all') query.set('planType', params.planType);
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>(`/api/v1/patients/caregiver-plans${qs}`);
+    return res;
   },
 
   async getMySubscriptions() {
@@ -1153,6 +1170,33 @@ export const adminApi = {
     return res;
   },
 
+  async getUserDetails(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: {
+        user: any;
+        patientProfile?: any;
+        professionalProfile?: any;
+        subscriptions?: any[];
+        credentials?: any[];
+        visitsCount?: number;
+        auditHistory?: any[];
+      };
+    }>(`/api/v1/admin/users/${id}`);
+    return res;
+  },
+
+  async deleteUser(id: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/users/${id}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
   async getCredentials(params?: {
     status?: string;
     search?: string;
@@ -1450,6 +1494,7 @@ export const adminApi = {
     providerId?: string;
     hospitalId?: string;
     search?: string;
+    dateScope?: 'today' | 'upcoming' | 'past' | 'all';
     page?: number;
     limit?: number;
   }) {
@@ -1457,6 +1502,7 @@ export const adminApi = {
     if (params?.status && params.status !== 'all') query.set('status', params.status);
     if (params?.visitType && params.visitType !== 'all') query.set('visitType', params.visitType);
     if (params?.date) query.set('date', params.date);
+    if (params?.dateScope && params.dateScope !== 'all') query.set('dateScope', params.dateScope);
     if (params?.providerId) query.set('providerId', params.providerId);
     if (params?.hospitalId) query.set('hospitalId', params.hospitalId);
     if (params?.search) query.set('search', params.search);
@@ -1478,6 +1524,19 @@ export const adminApi = {
     return res;
   },
 
+  async deleteAdminFieldVisit(visitId: string, reason?: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      visitId: string;
+      visitNumber: string;
+    }>(`/api/v1/admin/field-visits/${visitId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
   async getAdminFieldVisitStats() {
     const res = await request<{
       success: boolean;
@@ -1486,15 +1545,34 @@ export const adminApi = {
         todayCount: number;
         inProgressCount: number;
         completedTodayCount: number;
+        completedCount?: number;
         overdueCount: number;
         exceptionsCount: number;
         pendingInstallationsCount: number;
         pendingAcceptanceCount?: number;
         acceptedCount?: number;
         rejectedCount?: number;
+        replacementRequiredCount?: number;
+        missedCount?: number;
       };
     }>('/api/v1/admin/field-visits/stats');
     return res.data;
+  },
+
+  async checkOverdueVisits(dryRun = false) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: {
+        totalEvaluated: number;
+        missedCount: number;
+        missedVisits: any[];
+      };
+    }>('/api/v1/admin/field-visits/check-missed', {
+      method: 'POST',
+      body: JSON.stringify({ dryRun }),
+    });
+    return res;
   },
 
   async reassignFieldVisit(
@@ -1517,6 +1595,16 @@ export const adminApi = {
       method: 'PATCH',
       body: JSON.stringify(params),
     });
+    return res;
+  },
+
+  async getEligibleCaregiversForVisit(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any[];
+      count: number;
+      message?: string;
+    }>(`/api/v1/admin/field-visits/${id}/eligible-caregivers`);
     return res;
   },
 
@@ -1560,15 +1648,27 @@ export const adminApi = {
     channel?: string;
     status?: string;
     isRead?: boolean;
+    unread?: boolean;
     search?: string;
+    dateScope?: 'today' | 'past' | 'all';
+    date?: string;
+    autoDeletePast?: boolean;
     page?: number;
     limit?: number;
+    inbox?: boolean;
+    includeCleared?: boolean;
   }) {
     const query = new URLSearchParams();
     if (params?.channel && params.channel !== 'all') query.set('channel', params.channel);
     if (params?.status && params.status !== 'all') query.set('status', params.status);
     if (typeof params?.isRead === 'boolean') query.set('isRead', params.isRead.toString());
+    if (params?.unread) query.set('unread', 'true');
     if (params?.search) query.set('search', params.search);
+    if (params?.dateScope) query.set('dateScope', params.dateScope);
+    if (params?.date) query.set('date', params.date);
+    if (params?.autoDeletePast) query.set('autoDeletePast', 'true');
+    if (params?.inbox) query.set('inbox', 'true');
+    if (params?.includeCleared) query.set('includeCleared', 'true');
     if (params?.page) query.set('page', params.page.toString());
     if (params?.limit) query.set('limit', params.limit.toString());
     const qs = query.toString() ? `?${query.toString()}` : '';
@@ -1579,6 +1679,14 @@ export const adminApi = {
       data: any[];
     }>(`/api/v1/admin/notifications${qs}`);
     return res;
+  },
+
+  async getNotificationDetails(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/admin/notifications/${id}`);
+    return res.data;
   },
 
   async getUnreadNotificationsCount() {
@@ -1600,6 +1708,62 @@ export const adminApi = {
     return res;
   },
 
+  async clearPastNotifications() {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { deletedCount: number };
+    }>('/api/v1/admin/notifications/clear-past', {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async clearAllNotifications() {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { clearedCount?: number; deletedCount?: number };
+    }>('/api/v1/admin/notifications/clear-all', {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async deleteNotification(id: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { id: string };
+    }>(`/api/v1/admin/notifications/${id}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async bulkDeleteNotifications(ids: string[]) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { deletedCount: number };
+    }>('/api/v1/admin/notifications/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+    return res;
+  },
+
+  async deleteNotificationsByDateRange(startDate: string, endDate: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { deletedCount: number };
+    }>(`/api/v1/admin/notifications/date-range?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
   async retryNotification(id: string) {
     const res = await request<{
       success: boolean;
@@ -1611,36 +1775,97 @@ export const adminApi = {
     return res;
   },
 
-  async getFinancialSummary() {
+  async getFinancialSummary(params: Record<string, any> = {}) {
+    const query = new URLSearchParams(params).toString();
+    const endpoint = `/api/v1/admin/finances/summary${query ? `?${query}` : ''}`;
     const res = await request<{
       success: boolean;
-      data: {
-        revenue: {
-          totalGrossSalesRevenue: number;
-          productSalesRevenue: number;
-          caregiverSubscriptionRevenue: number;
-        };
-        costsAndLiabilities: {
-          equipmentProcurementCost: number;
-          caregiverPayoutLiabilities: number;
-          supplierPayablesPending: number;
-          supplierPayablesSettled: number;
-          refundsProcessed: number;
-          paymentGatewayFees: number;
-        };
-        profitability: {
-          estimatedGrossProfit: number;
-          grossProfitMarginPct: number;
-        };
-        settlementBreakdown: {
-          onlinePaymentVolume: number;
-          paidOrderCount: number;
-          activeSubscriptionCount: number;
-          supplierPOCount: number;
-        };
-      };
-    }>('/api/v1/admin/finances/summary');
+      data: any;
+    }>(endpoint);
     return res.data;
+  },
+
+  async getOwnedProductsFinance(params: Record<string, any> = {}) {
+    const query = new URLSearchParams(params).toString();
+    const endpoint = `/api/v1/admin/finances/owned-products${query ? `?${query}` : ''}`;
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(endpoint);
+    return res.data;
+  },
+
+  async getMarketplaceFinance(params: Record<string, any> = {}) {
+    const query = new URLSearchParams(params).toString();
+    const endpoint = `/api/v1/admin/finances/marketplace${query ? `?${query}` : ''}`;
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(endpoint);
+    return res.data;
+  },
+
+  async getSubscriptionsFinance(params: Record<string, any> = {}) {
+    const query = new URLSearchParams(params).toString();
+    const endpoint = `/api/v1/admin/finances/subscriptions${query ? `?${query}` : ''}`;
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(endpoint);
+    return res.data;
+  },
+
+  async downloadFinanceReport(
+    format: 'pdf' | 'excel' | 'csv',
+    section: 'owned' | 'marketplace' | 'subscriptions' | 'combined',
+    params: Record<string, any> = {}
+  ) {
+    const queryObj: Record<string, string> = { section };
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') {
+        queryObj[k] = String(v);
+      }
+    });
+    const query = new URLSearchParams(queryObj).toString();
+    const token = authApi.getToken();
+    const endpoint = `/api/v1/admin/finances/export/${format}?${query}`;
+    const url = `${getApiBaseUrl()}${endpoint}`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Export failed with HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+    const ext = format === 'excel' ? 'xlsx' : format;
+    const filename = `VivoQuest_Finance_${section.toUpperCase()}_${new Date().toISOString().split('T')[0]}.${ext}`;
+
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(downloadUrl);
+  },
+
+  async deleteOrArchiveFinanceTransaction(orderId: string) {
+    const res = await request<{
+      success: boolean;
+      action: 'permanently_deleted' | 'archived';
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/finances/transactions/${orderId}`, {
+      method: 'DELETE',
+    });
+    return res;
   },
 
   async processOrderRefund(orderId: string, refundAmount: number, reason: string) {
@@ -1704,6 +1929,52 @@ export const adminApi = {
       data: any[];
       pagination: { total: number; page: number; limit: number; totalPages: number };
     }>(`/api/v1/admin/professionals${qs}`);
+    return res;
+  },
+
+  async getHealthcareProfessionalById(id: string) {
+    const res = await request<{
+      success: boolean;
+      data: {
+        profile: any;
+        credentials: any[];
+        completion: any;
+        assignments: any;
+        auditLogs: any[];
+      };
+    }>(`/api/v1/admin/professionals/${encodeURIComponent(id)}`);
+    return res;
+  },
+
+  async reviewProfessionalCredential(
+    professionalId: string,
+    credentialId: string,
+    body: {
+      status: 'verified' | 'approved' | 'rejected' | 'pending';
+      rejectionReason?: string;
+      reviewNotes?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/professionals/${encodeURIComponent(professionalId)}/credentials/${encodeURIComponent(credentialId)}/review`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    return res;
+  },
+
+  async updateHealthcareProfessional(professionalId: string, body: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/professionals/${encodeURIComponent(professionalId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
     return res;
   },
 
@@ -2086,6 +2357,51 @@ export const adminApi = {
     return res;
   },
 
+  async deleteRescheduleRequest(requestId: string, permanent: boolean = true) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/reschedule-requests/${requestId}?permanent=${permanent}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async bulkDeleteRescheduleRequests(ids: string[], permanent: boolean = true) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { deletedCount: number };
+    }>('/api/v1/admin/reschedule-requests/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({ ids, permanent }),
+    });
+    return res;
+  },
+
+  async clearResolvedRescheduleRequests(permanent: boolean = true) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { deletedCount: number };
+    }>(`/api/v1/admin/reschedule-requests/clear-resolved?permanent=${permanent}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async deleteRescheduleRequestsByDateRange(startDate: string, endDate: string, permanent: boolean = true) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: { deletedCount: number };
+    }>(`/api/v1/admin/reschedule-requests/date-range?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}&permanent=${permanent}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
   async hideRescheduleRequest(requestId: string, reason?: string) {
     const res = await request<{
       success: boolean;
@@ -2454,6 +2770,9 @@ export const productsApi = {
     search?: string;
     rentalOnly?: boolean;
     inStockOnly?: boolean;
+    sourcingType?: string;
+    installationOnly?: boolean;
+    status?: string;
     page?: number;
     limit?: number;
   }) {
@@ -2462,6 +2781,9 @@ export const productsApi = {
     if (params?.search) query.set('search', params.search);
     if (params?.rentalOnly) query.set('rentalOnly', 'true');
     if (params?.inStockOnly) query.set('inStockOnly', 'true');
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.installationOnly) query.set('installationOnly', 'true');
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
     if (params?.page) query.set('page', params.page.toString());
     if (params?.limit) query.set('limit', params.limit.toString());
 
@@ -2677,6 +2999,406 @@ export const productsApi = {
       message: string;
       data: any;
     }>(`/api/v1/products/orders/${orderIdOrNumber}/setup-schedule`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+
+  async getProductReviews(productId: string, params?: { page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/products/${productId}/reviews${qs}`);
+    return res;
+  },
+
+  async submitProductReview(productId: string, data: { orderId: string; rating: number; title: string; comment: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/products/${productId}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async submitOrderComplaint(orderIdOrNumber: string, data: { productId: string; category: string; description: string; refundRequested?: boolean }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}/complaints`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getMyComplaints() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/products/complaints/my');
+    return res.data;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Supplier Portal APIs
+// -----------------------------------------------------------------------------
+export const supplierPortalApi = {
+  async getProfile() {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>('/api/v1/supplier/profile');
+    return res.data;
+  },
+
+  async updateProfile(data: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/supplier/profile', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getProducts(params?: { search?: string; category?: string; status?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/supplier/products${qs}`);
+    return res;
+  },
+
+  async createProduct(data: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/supplier/products', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async updateProduct(id: string, data: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/supplier/products/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getOrders(params?: { status?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/supplier/orders${qs}`);
+    return res;
+  },
+
+  async acceptOrder(id: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/supplier/orders/${id}/accept`, {
+      method: 'POST',
+    });
+    return res;
+  },
+
+  async rejectOrder(id: string, reason: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/supplier/orders/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+    return res;
+  },
+
+  async dispatchOrder(id: string, data: { carrierName: string; trackingNumber: string; notes?: string }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/supplier/orders/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getSettlements() {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>('/api/v1/supplier/settlements');
+    return res.data;
+  },
+
+  async getComplaints() {
+    const res = await request<{
+      success: boolean;
+      count: number;
+      data: any[];
+    }>('/api/v1/supplier/complaints');
+    return res.data;
+  },
+
+  async respondToComplaint(id: string, response: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/supplier/complaints/${id}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ response }),
+    });
+    return res;
+  },
+};
+
+// -----------------------------------------------------------------------------
+// Admin Marketplace Management APIs
+// -----------------------------------------------------------------------------
+export const adminMarketplaceApi = {
+  async getMetrics() {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>('/api/v1/admin/marketplace/metrics');
+    return res.data;
+  },
+
+  async getProducts(params?: { search?: string; category?: string; sourcingType?: string; status?: string; lowStockOnly?: boolean; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.lowStockOnly) query.set('lowStockOnly', 'true');
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/marketplace/products${qs}`);
+    return res;
+  },
+
+  async createProduct(data: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>('/api/v1/admin/marketplace/products', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async updateProduct(id: string, data: any) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/marketplace/products/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async archiveProduct(id: string) {
+    const res = await request<{
+      success: boolean;
+      action?: string;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/marketplace/products/${id}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async deleteProduct(id: string) {
+    const res = await request<{
+      success: boolean;
+      action: 'permanently_deleted' | 'archived';
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/marketplace/products/${id}`, {
+      method: 'DELETE',
+    });
+    return res;
+  },
+
+  async getReviews(params?: { status?: string; productId?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.productId) query.set('productId', params.productId);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/marketplace/reviews${qs}`);
+    return res;
+  },
+
+  async moderateReview(id: string, status: 'published' | 'rejected', notes?: string) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/marketplace/reviews/${id}/moderate`, {
+      method: 'PUT',
+      body: JSON.stringify({ status, notes }),
+    });
+    return res;
+  },
+
+  async getComplaints(params?: { status?: string; category?: string; supplierId?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.supplierId) query.set('supplierId', params.supplierId);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/marketplace/complaints${qs}`);
+    return res;
+  },
+
+  async resolveComplaint(id: string, data: { resolutionNotes: string; refundApproved?: boolean; refundAmount?: number }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/marketplace/complaints/${id}/resolve`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getInstallations(params?: { setupStatus?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.setupStatus && params.setupStatus !== 'all') query.set('setupStatus', params.setupStatus);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/marketplace/installations${qs}`);
+    return res;
+  },
+
+  async assignInstallationSpecialist(orderId: string, payload: {
+    specialistId?: string;
+    specialistName: string;
+    setupDate?: string;
+    setupNotes?: string;
+    setupStatus?: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/marketplace/installations/${orderId}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+
+  async getOrders(params?: {
+    status?: string;
+    paymentStatus?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.paymentStatus && params.paymentStatus !== 'all') query.set('paymentStatus', params.paymentStatus);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    const res = await request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/admin/marketplace/orders${qs}`);
+    return res;
+  },
+
+  async updateDeliveryEstimate(orderId: string, payload: {
+    estimatedDeliveryDate: string;
+    reason: string;
+  }) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/admin/marketplace/orders/${orderId}/delivery-estimate`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     });

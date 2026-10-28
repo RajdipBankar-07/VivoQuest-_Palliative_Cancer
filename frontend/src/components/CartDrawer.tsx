@@ -16,9 +16,11 @@ import {
   Wrench,
   Truck,
   Sparkles,
+  Smartphone,
 } from 'lucide-react';
 import { useCart } from '@/context/CartContext';
 import { Button } from './Button';
+import { ProductImage } from './ProductImage';
 
 export const CartDrawer: React.FC = () => {
   const router = useRouter();
@@ -149,20 +151,14 @@ export const CartDrawer: React.FC = () => {
                 >
                   <div className="flex gap-3">
                     {/* Thumbnail */}
-                    <div className="w-18 h-18 rounded-lg bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center border border-slate-200">
-                      {item.images && item.images[0] ? (
-                        <img
-                          src={item.images[0]}
-                          alt={item.title}
-                          className="w-full h-full object-cover"
-                          onError={(e) => {
-                            // Fallback image placeholder
-                            (e.target as HTMLElement).style.display = 'none';
-                          }}
-                        />
-                      ) : (
-                        <ShoppingBag size={22} className="text-slate-400" />
-                      )}
+                    <div className="w-18 h-18 rounded-xl bg-slate-100 overflow-hidden shrink-0 flex items-center justify-center border border-slate-200">
+                      <ProductImage
+                        src={item.images && item.images[0] ? item.images[0] : undefined}
+                        alt={item.title}
+                        category={item.category}
+                        aspectRatio="aspect-square"
+                        className="w-full h-full object-contain p-1"
+                      />
                     </div>
 
                     {/* Details */}
@@ -305,9 +301,10 @@ export const CartDrawer: React.FC = () => {
                   className="w-full justify-center text-sm font-bold shadow-md"
                   onClick={handleCheckoutClick}
                   disabled={hasUnavailableItems}
+                  leftIcon={<Smartphone size={16} />}
                   rightIcon={<ArrowRight size={16} />}
                 >
-                  Proceed to Checkout (₹{pricing.totalAmount.toLocaleString('en-IN')})
+                  Order in Patient App (₹{pricing.totalAmount.toLocaleString('en-IN')})
                 </Button>
 
                 <div className="flex items-center justify-between text-xs pt-1 px-1">

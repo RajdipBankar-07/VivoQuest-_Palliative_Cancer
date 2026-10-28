@@ -8,6 +8,7 @@ export type ProfessionType =
   | 'phlebotomist'
   | 'dietitian'
   | 'chw'
+  | 'anm'
   | 'technician';
 
 export type ProfessionalVerificationStatus = 
@@ -20,10 +21,14 @@ export interface IHealthcareProfessionalProfile extends Document {
   userId: mongoose.Types.ObjectId;
   title: string;
   professionType: ProfessionType;
+  highestQualification?: string;
+  institution?: string;
   specializations: string[];
-  registrationNumber: string;
-  registrationCouncil: string;
+  registrationNumber?: string;
+  registrationCouncil?: string;
   yearsOfExperience: number;
+  experienceSummary?: string;
+  skills?: string[];
   serviceClusters: string[];
   verificationStatus: ProfessionalVerificationStatus;
   bio?: string;
@@ -48,25 +53,33 @@ const HealthcareProfessionalProfileSchema = new Schema<IHealthcareProfessionalPr
       type: String,
       required: true,
       trim: true,
-      default: 'Dr.',
+      default: 'Care Professional',
     },
     professionType: {
       type: String,
       required: true,
-      enum: ['physician', 'physiotherapist', 'nurse', 'caregiver', 'phlebotomist', 'dietitian', 'chw', 'technician'],
+      enum: ['physician', 'physiotherapist', 'nurse', 'caregiver', 'phlebotomist', 'dietitian', 'chw', 'anm', 'technician'],
       index: true,
+    },
+    highestQualification: {
+      type: String,
+      trim: true,
+    },
+    institution: {
+      type: String,
+      trim: true,
     },
     specializations: [{ type: String, trim: true }],
     registrationNumber: {
       type: String,
-      required: true,
       trim: true,
+      default: 'N/A',
       index: true,
     },
     registrationCouncil: {
       type: String,
-      required: true,
       trim: true,
+      default: 'Not Applicable',
     },
     yearsOfExperience: {
       type: Number,
@@ -74,6 +87,12 @@ const HealthcareProfessionalProfileSchema = new Schema<IHealthcareProfessionalPr
       min: 0,
       default: 1,
     },
+    experienceSummary: {
+      type: String,
+      trim: true,
+      maxlength: 2000,
+    },
+    skills: [{ type: String, trim: true }],
     serviceClusters: [{ type: String, trim: true }],
     verificationStatus: {
       type: String,

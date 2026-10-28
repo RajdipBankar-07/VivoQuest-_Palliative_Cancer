@@ -31,3 +31,5 @@ export * from './SupplierPurchaseOrder.js';
 export * from './CaregiverPlan.js';
 export * from './CaregiverSubscription.js';
 export * from './VisitRescheduleRequest.js';
+export * from './ProductReview.js';
+export * from './ProductComplaint.js';

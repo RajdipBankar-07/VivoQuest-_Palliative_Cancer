@@ -1,11 +1,25 @@
+import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/environment.js';
 import { User, IUser, UserRole } from '../models/User.js';
 import { PatientProfile } from '../models/PatientProfile.js';
-import { HealthcareProfessionalProfile } from '../models/HealthcareProfessionalProfile.js';
+import { HealthcareProfessionalProfile, ProfessionType } from '../models/HealthcareProfessionalProfile.js';
+import { ProfessionalCredentials, CredentialDocumentType } from '../models/ProfessionalCredentials.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuthenticatedUserPayload } from '../middleware/auth.js';
+
+export interface RegisterCredentialDTO {
+  documentType?: CredentialDocumentType;
+  certificateTitle?: string;
+  issuingAuthority?: string;
+  issuingOrganization?: string;
+  credentialCategory?: string;
+  documentNumber?: string;
+  issueDate?: string | Date;
+  expiryDate?: string | Date;
+  uploadedFileId?: string;
+}
 
 export interface RegisterDTO {
   fullName: string;
@@ -18,7 +32,17 @@ export interface RegisterDTO {
   cluster?: string;
   consentAccepted: boolean;
   registrationNumber?: string;
+  registrationCouncil?: string;
   professionType?: string;
+  highestQualification?: string;
+  institution?: string;
+  specialization?: string;
+  specializations?: string[];
+  yearsOfExperience?: number;
+  experienceSummary?: string;
+  skills?: string[];
+  bio?: string;
+  credentials?: RegisterCredentialDTO[];
 }
 
 export interface LoginDTO {
@@ -73,6 +97,7 @@ export const DESIGNATED_TEST_PHONES = new Set([
   '9876599003', // E2E Hospital
   '9876599004', // E2E Admin
   '9876599005', // E2E Super Admin
+  '9820099887', // Dr. Ramesh Iyer (Primary Bedside Caregiver)
 ]);
 
 export const hashPassword = async (plainText: string): Promise<string> => {
@@ -159,7 +184,7 @@ export const registerUser = async (data: RegisterDTO) => {
   const pincode = data.pincode || '411001';
   const cluster = data.cluster || city;
 
-  if (normalizedRole === 'patient' || normalizedRole === 'caregiver') {
+  if (normalizedRole === 'patient') {
     await PatientProfile.create({
       userId: user._id,
       address: {
@@ -172,18 +197,58 @@ export const registerUser = async (data: RegisterDTO) => {
       allergies: [],
       primaryLanguage: 'English',
     });
-  } else if (normalizedRole === 'professional') {
-    await HealthcareProfessionalProfile.create({
+  } else if (normalizedRole === 'caregiver' || normalizedRole === 'professional') {
+    // Determine professional role and title
+    let profType: ProfessionType = (data.professionType as any) || (normalizedRole === 'caregiver' ? 'caregiver' : 'physician');
+    let title = 'Care Professional';
+    if (profType === 'physician') title = 'Dr.';
+    else if (profType === 'nurse') title = 'Nurse';
+    else if (profType === 'caregiver') title = 'Caregiver';
+    else if (profType === 'anm' || profType === 'chw') title = 'ANM';
+    else if (profType === 'physiotherapist') title = 'PT';
+
+    const specializations = data.specializations || (data.specialization ? [data.specialization] : ['Palliative Care']);
+
+    const profProfile = await HealthcareProfessionalProfile.create({
       userId: user._id,
-      title: 'Dr.',
-      professionType: (data.professionType as any) || 'physician',
-      registrationNumber: data.registrationNumber || `MCI-PROV-${cleanPhone.slice(-6)}`,
-      registrationCouncil: 'Maharashtra Medical Council',
-      yearsOfExperience: 3,
+      title,
+      professionType: profType,
+      highestQualification: data.highestQualification?.trim() || '',
+      institution: data.institution?.trim() || '',
+      specializations,
+      registrationNumber: data.registrationNumber?.trim() || (profType === 'physician' ? `MCI-PROV-${cleanPhone.slice(-6)}` : 'N/A'),
+      registrationCouncil: data.registrationCouncil?.trim() || (profType === 'physician' ? 'Maharashtra Medical Council' : 'Not Applicable'),
+      yearsOfExperience: data.yearsOfExperience !== undefined ? Math.max(0, data.yearsOfExperience) : 2,
+      experienceSummary: data.experienceSummary?.trim() || '',
+      skills: data.skills || [],
       serviceClusters: [cluster],
       verificationStatus: 'pending_review',
-      bio: 'Healthcare specialist on the VivoQuest platform',
+      bio: data.bio?.trim() || 'Healthcare specialist on the VivoQuest platform',
+      isActiveForDispatch: true,
     });
+
+    // Optional Initial Credentials: do not block registration if empty or omitted
+    if (data.credentials && Array.isArray(data.credentials) && data.credentials.length > 0) {
+      for (const cred of data.credentials) {
+        if (cred.certificateTitle || cred.documentType) {
+          await ProfessionalCredentials.create({
+            professionalId: profProfile._id,
+            documentType: cred.documentType || 'other_certification',
+            certificateTitle: cred.certificateTitle?.trim() || 'Certificate',
+            issuingAuthority: cred.issuingAuthority?.trim() || cred.issuingOrganization?.trim() || 'Awarding Body',
+            issuingOrganization: cred.issuingOrganization?.trim(),
+            credentialCategory: cred.credentialCategory?.trim(),
+            documentNumber: cred.documentNumber?.trim() || 'N/A',
+            issueDate: cred.issueDate ? new Date(cred.issueDate) : undefined,
+            expiryDate: cred.expiryDate ? new Date(cred.expiryDate) : undefined,
+            uploadedFileId: cred.uploadedFileId && mongoose.Types.ObjectId.isValid(cred.uploadedFileId)
+              ? new mongoose.Types.ObjectId(cred.uploadedFileId)
+              : undefined,
+            verificationStatus: 'pending',
+          });
+        }
+      }
+    }
   }
 
   const token = generateAuthToken(user);
@@ -273,6 +338,27 @@ export const loginUser = async (data: LoginDTO) => {
 
   user.lastLoginAt = new Date();
   await user.save();
+
+  // Ensure healthcare professionals and caregivers have an initialized persistent profile (do not duplicate)
+  if (['professional', 'caregiver', 'doctor', 'nurse'].includes(user.role)) {
+    const existingProfProfile = await HealthcareProfessionalProfile.findOne({ userId: user._id });
+    if (!existingProfProfile) {
+      await HealthcareProfessionalProfile.create({
+        userId: user._id,
+        title: user.role === 'caregiver' ? 'Caregiver' : 'Dr.',
+        professionType: (user.role === 'caregiver' ? 'caregiver' : 'physician') as any,
+        highestQualification: '',
+        institution: '',
+        specializations: ['Palliative Care'],
+        registrationNumber: 'N/A',
+        registrationCouncil: 'Not Applicable',
+        yearsOfExperience: 2,
+        serviceClusters: ['Pune'],
+        verificationStatus: 'pending_review',
+        isActiveForDispatch: true,
+      });
+    }
+  }
 
   const token = generateAuthToken(user);
 

@@ -8,6 +8,7 @@ import { DailyHealthUpdate, IDailyHealthUpdate } from '../models/DailyHealthUpda
 import { AuditLog } from '../models/AuditLog.js';
 import { seedCaregiverPlansDemoData } from './caregiverPlanService.js';
 import { HealthcareProfessionalProfile } from '../models/HealthcareProfessionalProfile.js';
+import { ProfessionalCredentials } from '../models/ProfessionalCredentials.js';
 import { UploadedFile } from '../models/UploadedFile.js';
 import { VisitRescheduleRequest } from '../models/VisitRescheduleRequest.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -67,6 +68,7 @@ export interface AssignedCaregiverDetailsDTO {
   profilePhotoUrl?: string;
   assignmentStatus: 'active' | 'assigned';
   assignmentSource: 'subscription' | 'field_visit';
+  isConfirmed?: boolean;
   serviceInfo?: {
     planTitle?: string;
     shiftInfo?: string;
@@ -79,6 +81,15 @@ export interface AssignedCaregiverDetailsDTO {
   };
   specializations?: string[];
   yearsOfExperience?: number;
+  highestQualification?: string;
+  institution?: string;
+  verificationStatus?: string;
+  skills?: string[];
+  verifiedCredentials?: Array<{
+    title: string;
+    issuingAuthority: string;
+    category?: string;
+  }>;
   bio?: string;
   rating?: number;
 }
@@ -102,12 +113,15 @@ export interface PatientVisitDTO {
   visitType: string;
   serviceName: string;
   status: string;
+  assignmentStatus?: string;
+  replacementRequired?: boolean;
   statusLabel: string;
   assignedCaregiver: {
     id?: string;
     name: string;
     role: string;
     phone?: string;
+    isConfirmed?: boolean;
   } | null;
   rescheduleRequest?: RescheduleRequestSummaryDTO;
   instructions?: string;
@@ -1236,6 +1250,8 @@ export const formatVisitStatusLabel = (status: string): string => {
       return 'Cancelled';
     case 'failed':
       return 'Incomplete / Exception';
+    case 'missed':
+      return 'Missed Visit';
     default:
       return status;
   }
@@ -1279,15 +1295,21 @@ export const getPatientAssignedCaregiver = async (
   let fallbackName = '';
   let fallbackPhone = '';
   let fallbackRole = '';
+  let isCaregiverConfirmed = false;
 
   if (activeSub && activeSub.assignedCaregiverId) {
-    // Check if this caregiver recently rejected an upcoming visit for this patient
+    // Check if this caregiver recently rejected an upcoming visit or has a visit requiring replacement for this patient
     const rejectedUpcoming = await FieldVisit.findOne({
-      $or: subOr.map((c) => ({ ...c, providerId: activeSub.assignedCaregiverId, status: 'rejected' })),
+      $or: subOr.map((c) => ({
+        ...c,
+        providerId: activeSub.assignedCaregiverId,
+        $or: [{ status: 'rejected' }, { assignmentStatus: 'rejected' }, { replacementRequired: true }],
+      })),
     });
 
     if (!rejectedUpcoming) {
       caregiverId = activeSub.assignedCaregiverId as mongoose.Types.ObjectId;
+      isCaregiverConfirmed = true;
       fallbackName = activeSub.assignedCaregiverName || 'Assigned Caregiver';
       fallbackPhone = activeSub.assignedCaregiverPhone || '';
       fallbackRole = 'Primary Bedside Nurse';
@@ -1322,6 +1344,8 @@ export const getPatientAssignedCaregiver = async (
     const upcomingVisit = await FieldVisit.findOne({
       $or: visitOr,
       status: { $in: ['assigned', 'accepted', 'en_route', 'arrived', 'in_progress'] },
+      assignmentStatus: { $ne: 'rejected' },
+      replacementRequired: { $ne: true },
       scheduledDate: { $gte: todayStr },
       providerId: { $exists: true, $ne: null },
     })
@@ -1330,6 +1354,7 @@ export const getPatientAssignedCaregiver = async (
 
     if (upcomingVisit && upcomingVisit.providerId) {
       caregiverId = upcomingVisit.providerId as mongoose.Types.ObjectId;
+      isCaregiverConfirmed = upcomingVisit.assignmentStatus === 'accepted';
       assignmentStatus = 'assigned';
       assignmentSource = 'field_visit';
       fallbackName = upcomingVisit.providerName || 'Assigned Clinician';
@@ -1406,6 +1431,23 @@ export const getPatientAssignedCaregiver = async (
     }
   }
 
+  // Retrieve public verified credential summaries (no sensitive file download URLs or private identity numbers)
+  let verifiedCredentials: Array<{ title: string; issuingAuthority: string; category?: string }> = [];
+  if (profProfile?._id) {
+    const verifiedDocs = await ProfessionalCredentials.find({
+      professionalId: profProfile._id,
+      verificationStatus: { $in: ['verified', 'approved'] },
+    })
+      .select('certificateTitle documentType issuingAuthority issuingOrganization credentialCategory')
+      .lean();
+
+    verifiedCredentials = verifiedDocs.map((c: any) => ({
+      title: c.certificateTitle || c.documentType.replace(/_/g, ' ').toUpperCase(),
+      issuingAuthority: c.issuingOrganization || c.issuingAuthority || 'Authorized Body',
+      category: c.credentialCategory,
+    }));
+  }
+
   return {
     assignedCaregiver: {
       id: caregiverId.toString(),
@@ -1417,9 +1459,15 @@ export const getPatientAssignedCaregiver = async (
       profilePhotoUrl,
       assignmentStatus,
       assignmentSource,
+      isConfirmed: isCaregiverConfirmed,
       serviceInfo,
       specializations: profProfile?.specializations || [],
       yearsOfExperience: profProfile?.yearsOfExperience,
+      highestQualification: profProfile?.highestQualification,
+      institution: profProfile?.institution,
+      verificationStatus: profProfile?.verificationStatus || 'verified',
+      skills: profProfile?.skills || [],
+      verifiedCredentials,
       bio: profProfile?.bio,
       rating: profProfile?.rating,
     },
@@ -1497,15 +1545,18 @@ export const getPatientVisitSchedule = async (
       visitType: v.visitType,
       serviceName: formatVisitTypeName(v.visitType),
       status: v.status,
+      assignmentStatus: v.assignmentStatus,
+      replacementRequired: Boolean(v.replacementRequired),
       statusLabel: formatVisitStatusLabel(v.status),
       assignedCaregiver:
-        v.status === 'rejected' || v.assignmentStatus === 'rejected' || !v.providerId
+        v.status === 'rejected' || v.assignmentStatus === 'rejected' || v.replacementRequired || !v.providerId
           ? null
           : {
               id: v.providerId.toString(),
               name: v.providerName || 'Caregiver',
               role: v.providerRole || 'Clinical Specialist',
               phone: providerPhone || undefined,
+              isConfirmed: v.assignmentStatus === 'accepted',
             },
       rescheduleRequest,
       instructions: v.patientDetails?.instructions || v.installationVerification?.installationNotes || undefined,
@@ -1516,7 +1567,7 @@ export const getPatientVisitSchedule = async (
     };
   });
 
-  // Upcoming visits: NOT cancelled, NOT completed, NOT failed, scheduled for today or future
+  // Upcoming visits: NOT cancelled, NOT completed, NOT failed, NOT missed, scheduled for today or future
   // Or if currently active on site (en_route, arrived, in_progress)
   const upcoming = mappedVisits
     .filter(
@@ -1524,17 +1575,19 @@ export const getPatientVisitSchedule = async (
         v.status !== 'cancelled' &&
         v.status !== 'completed' &&
         v.status !== 'failed' &&
+        v.status !== 'missed' &&
         (v.scheduledDate >= todayStr || ['en_route', 'arrived', 'in_progress'].includes(v.status))
     )
     .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate) || a.timeSlot.localeCompare(b.timeSlot));
 
-  // Past visits: completed, cancelled, failed, or historical past dates
+  // Past visits: completed, cancelled, failed, missed, or historical past dates
   const past = mappedVisits
     .filter(
       (v) =>
         v.status === 'completed' ||
         v.status === 'cancelled' ||
         v.status === 'failed' ||
+        v.status === 'missed' ||
         (v.scheduledDate < todayStr && !['en_route', 'arrived', 'in_progress'].includes(v.status))
     )
     .sort((a, b) => b.scheduledDate.localeCompare(a.scheduledDate) || b.timeSlot.localeCompare(a.timeSlot));
@@ -1580,7 +1633,7 @@ export const hidePatientFieldVisit = async (
   }
 
   // 2. Enforce Eligibility: Only completed or past visits can be hidden
-  if (!['completed', 'cancelled', 'failed'].includes(visit.status)) {
+  if (!['completed', 'cancelled', 'failed', 'missed'].includes(visit.status)) {
     throw new AppError('Only completed or past visits can be hidden from history', 400);
   }
 

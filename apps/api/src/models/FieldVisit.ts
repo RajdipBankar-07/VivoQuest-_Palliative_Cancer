@@ -16,7 +16,8 @@ export type FieldVisitStatus =
   | 'in_progress'
   | 'completed'
   | 'cancelled'
-  | 'failed';
+  | 'failed'
+  | 'missed';
 
 export type VisitExceptionType =
   | 'patient_unavailable'
@@ -83,6 +84,7 @@ export interface IFieldVisit extends Document {
     startedAt?: Date;
     completedAt?: Date;
     cancelledAt?: Date;
+    missedAt?: Date;
   };
   subscriptionId?: mongoose.Types.ObjectId;
   subscriptionNumber?: string;
@@ -216,6 +218,7 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
         'completed',
         'cancelled',
         'failed',
+        'missed',
       ],
       default: 'assigned',
       index: true,
@@ -271,6 +274,7 @@ const FieldVisitSchema = new Schema<IFieldVisit>(
       startedAt: { type: Date },
       completedAt: { type: Date },
       cancelledAt: { type: Date },
+      missedAt: { type: Date },
     },
     subscriptionId: {
       type: Schema.Types.ObjectId,
@@ -412,6 +416,10 @@ FieldVisitSchema.index({ providerId: 1, scheduledDate: 1, status: 1 });
 FieldVisitSchema.index({ hospitalReferralId: 1, status: 1 });
 FieldVisitSchema.index({ productOrderId: 1, status: 1 });
 FieldVisitSchema.index({ subscriptionId: 1, status: 1 });
+FieldVisitSchema.index({ patientId: 1, scheduledDate: -1, status: 1 });
+FieldVisitSchema.index({ 'patientDetails.phone': 1, scheduledDate: -1 });
+FieldVisitSchema.index({ status: 1, scheduledDate: 1 });
+FieldVisitSchema.index({ replacementRequired: 1, status: 1 });
 
 export const FieldVisit: Model<IFieldVisit> =
   mongoose.models.FieldVisit || mongoose.model<IFieldVisit>('FieldVisit', FieldVisitSchema);
