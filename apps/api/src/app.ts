@@ -22,6 +22,7 @@ import { professionalRoutes } from './routes/professionalRoutes.js';
 import { supplierPortalRoutes } from './routes/supplierPortalRoutes.js';
 import { adminMarketplaceRoutes } from './routes/adminMarketplaceRoutes.js';
 import { financeRouter } from './routes/financeRoutes.js';
+import { operationsRoutes } from './routes/operationsRoutes.js';
 
 import { securityHeaders } from './middleware/securityHeaders.js';
 import { mongoSanitize } from './middleware/mongoSanitize.js';
@@ -86,9 +87,8 @@ export const createApp = (): Express => {
 
 
   // 3. Request Parsers & Input Sanitization
-  // Large files are uploaded directly to S3 via presigned URLs; small JSON limit protects against DoS
-  app.use(express.json({ limit: '1mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // Prevent NoSQL / MongoDB operator injection across body, query, and params
   app.use(mongoSanitize);
@@ -137,6 +137,7 @@ export const createApp = (): Express => {
   app.use('/api/v1/professionals', professionalRoutes);
   app.use('/api/v1/supplier', supplierPortalRoutes);
   app.use('/api/v1/admin/marketplace', adminMarketplaceRoutes);
+  app.use('/api/v1/operations', operationsRoutes);
 
   // 5. Mock Storage Handler (For local testing without AWS S3)
   app.put('/api/v1/mock-storage/upload/:fileId', express.raw({ type: '*/*', limit: '20mb' }), (req, res) => {

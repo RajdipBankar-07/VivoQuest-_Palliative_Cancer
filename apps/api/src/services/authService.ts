@@ -132,7 +132,32 @@ export const registerUser = async (data: RegisterDTO) => {
 
   // Normalize role
   const normalizedRole = (data.role || 'patient').toLowerCase() as UserRole;
-  const validRoles: UserRole[] = ['patient', 'caregiver', 'professional', 'hospital', 'supplier', 'admin', 'super_admin'];
+  const operationalRoles: UserRole[] = [
+    'operations_manager',
+    'delivery_staff',
+    'sales_manager',
+    'maintenance_staff',
+  ];
+  if (operationalRoles.includes(normalizedRole)) {
+    throw new AppError(
+      'Operational employee accounts cannot be self-registered. An administrator must create employee accounts.',
+      403
+    );
+  }
+
+  const validRoles: UserRole[] = [
+    'patient',
+    'caregiver',
+    'professional',
+    'hospital',
+    'supplier',
+    'admin',
+    'super_admin',
+    'operations_manager',
+    'delivery_staff',
+    'sales_manager',
+    'maintenance_staff',
+  ];
   if (!validRoles.includes(normalizedRole)) {
     throw new AppError(`Invalid role '${data.role}'. Supported roles: ${validRoles.join(', ')}`, 400);
   }

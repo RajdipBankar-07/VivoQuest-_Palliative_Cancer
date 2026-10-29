@@ -3,10 +3,16 @@ import mongoose, { Schema, Document, Model } from 'mongoose';
 export type OrderStatus =
   | 'placed'
   | 'confirmed'
+  | 'preparing'
+  | 'ready_for_dispatch'
   | 'dispatched'
+  | 'in_transit'
   | 'out_for_delivery'
   | 'delivered'
   | 'completed'
+  | 'delivery_attempt_failed'
+  | 'delivery_rescheduled'
+  | 'returned_to_origin'
   | 'cancelled';
 
 export type PaymentStatus = 'pending' | 'paid' | 'cod' | 'refunded';
@@ -51,6 +57,12 @@ export interface ITrackingEvent {
   status: OrderStatus;
   message: string;
   location?: string;
+  staffId?: mongoose.Types.ObjectId;
+  staffName?: string;
+  notes?: string;
+  proofUrl?: string;
+  failureReason?: string;
+  recipientConfirmed?: boolean;
 }
 
 export interface IDeliveryEstimateUpdate {
@@ -96,9 +108,22 @@ export interface IProductOrder extends Document {
     isSetupRequired: boolean;
     assignedSpecialistId?: mongoose.Types.ObjectId;
     assignedSpecialistName?: string;
-    setupStatus: 'pending' | 'scheduled' | 'completed' | 'not_required';
+    setupStatus: 'pending' | 'scheduled' | 'in_progress' | 'completed' | 'rescheduled' | 'failed' | 'not_required';
     setupDate?: Date;
+    timeSlot?: string;
     setupNotes?: string;
+    checklistResults?: Array<{ item: string; checked: boolean }>;
+    supportingDocUrl?: string;
+  };
+  deliveryAssignment?: {
+    assignedStaffId?: mongoose.Types.ObjectId;
+    assignedStaffName?: string;
+    assignedAt?: Date;
+    scheduledDeliveryDate?: Date;
+    deliveryNotes?: string;
+    proofOfDeliveryUrl?: string;
+    actualDeliveredAt?: Date;
+    failureReason?: string;
   };
   orderStatus: OrderStatus;
   paymentStatus: PaymentStatus;
@@ -197,6 +222,12 @@ const TrackingEventSchema = new Schema<ITrackingEvent>(
     status: { type: String, required: true },
     message: { type: String, required: true },
     location: { type: String },
+    staffId: { type: Schema.Types.ObjectId, ref: 'User' },
+    staffName: { type: String },
+    notes: { type: String },
+    proofUrl: { type: String },
+    failureReason: { type: String },
+    recipientConfirmed: { type: Boolean },
   },
   { _id: false }
 );
@@ -269,15 +300,47 @@ const ProductOrderSchema = new Schema<IProductOrder>(
       assignedSpecialistName: { type: String },
       setupStatus: {
         type: String,
-        enum: ['pending', 'scheduled', 'completed', 'not_required'],
+        enum: ['pending', 'scheduled', 'in_progress', 'completed', 'rescheduled', 'failed', 'not_required'],
         default: 'not_required',
       },
       setupDate: { type: Date },
+      timeSlot: { type: String },
       setupNotes: { type: String },
+      checklistResults: [
+        {
+          item: { type: String, required: true },
+          checked: { type: Boolean, default: false },
+        },
+      ],
+      supportingDocUrl: { type: String },
+    },
+    deliveryAssignment: {
+      assignedStaffId: { type: Schema.Types.ObjectId, ref: 'User' },
+      assignedStaffName: { type: String },
+      assignedAt: { type: Date },
+      scheduledDeliveryDate: { type: Date },
+      deliveryNotes: { type: String },
+      proofOfDeliveryUrl: { type: String },
+      actualDeliveredAt: { type: Date },
+      failureReason: { type: String },
     },
     orderStatus: {
       type: String,
-      enum: ['placed', 'confirmed', 'dispatched', 'out_for_delivery', 'delivered', 'completed', 'cancelled'],
+      enum: [
+        'placed',
+        'confirmed',
+        'preparing',
+        'ready_for_dispatch',
+        'dispatched',
+        'in_transit',
+        'out_for_delivery',
+        'delivered',
+        'completed',
+        'delivery_attempt_failed',
+        'delivery_rescheduled',
+        'returned_to_origin',
+        'cancelled',
+      ],
       default: 'placed',
       index: true,
     },

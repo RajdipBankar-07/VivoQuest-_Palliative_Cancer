@@ -64,10 +64,12 @@ import { DocumentExpiryAlertsView } from './components/DocumentExpiryAlertsView'
 import { HealthcareProfessionalsView } from './components/HealthcareProfessionalsView';
 import { AdminRescheduleRequestsView } from './components/AdminRescheduleRequestsView';
 import { ProductsMarketplaceView } from './components/ProductsMarketplaceView';
+import { OperationsGovernanceView } from './components/OperationsGovernanceView';
 
 type TabType =
   | 'overview'
   | 'products_marketplace'
+  | 'operations'
   | 'finances'
   | 'suppliers'
   | 'subscriptions'
@@ -1881,6 +1883,7 @@ export default function AdminDashboardPage() {
             subscriptions: 'subscriptions',
             services: 'subscriptions',
             products_marketplace: 'equipment',
+            operations: 'equipment',
             orders: 'equipment',
             suppliers: 'equipment',
             finances: 'finances',
@@ -1941,6 +1944,7 @@ export default function AdminDashboardPage() {
               badge: ordersPagination.total || undefined,
               subTabs: [
                 { id: 'products_marketplace', label: 'Products & Marketplace', icon: Package },
+                { id: 'operations', label: 'Sales & Delivery Operations', icon: Truck },
                 { id: 'orders', label: 'Orders & Deliveries', icon: Truck, badge: ordersPagination.total || undefined },
                 { id: 'suppliers', label: 'Suppliers & Vendors', icon: Building2 },
               ],
@@ -2067,6 +2071,7 @@ export default function AdminDashboardPage() {
 
         {/* Central Commerce, Products, Governance & Financial Tabs */}
         {activeTab === 'products_marketplace' && <ProductsMarketplaceView />}
+        {activeTab === 'operations' && <OperationsGovernanceView />}
         {activeTab === 'finances' && <FinancialSummaryView />}
         {activeTab === 'suppliers' && <SupplierManagementView />}
         {activeTab === 'subscriptions' && (

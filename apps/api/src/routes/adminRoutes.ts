@@ -1,6 +1,9 @@
 import { Router, Response } from 'express';
 import mongoose from 'mongoose';
+import { z } from 'zod';
 import { authenticateUser, requireRole, AuthRequest } from '../middleware/auth.js';
+import { validateRequest } from '../middleware/validate.js';
+import { hashPassword } from '../services/authService.js';
 import {
   getAdminDashboardOverview,
   listPlatformUsers,
@@ -33,6 +36,7 @@ import {
   getFinancialSummaryAdmin,
   processOrderRefundAdmin,
   listDocumentExpiryAlertsAdmin,
+  logAdminAction,
   reviewHospitalOrganizationVerification,
   listHealthcareProfessionalsAdmin,
 } from '../services/adminService.js';
@@ -447,7 +451,7 @@ adminRoutes.get(
  * Filterable security and administrative audit log
  */
 adminRoutes.get(
-  '/audit-logs',
+  ['/audit-logs', '/audits'],
   authenticateUser,
   requireRole(['admin', 'super_admin']),
   async (req: AuthRequest, res: Response, next) => {
@@ -2801,6 +2805,196 @@ adminRoutes.get(
         requiresClinicalDoc: true,
       });
       res.json({ success: true, ...result });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+// =============================================================================
+// PHASE 12 — OPERATIONS EMPLOYEE MANAGEMENT & GOVERNANCE
+// =============================================================================
+
+/**
+ * GET /api/v1/admin/employees
+ * List all operations employees with roles, status, and activity
+ */
+adminRoutes.get(
+  '/employees',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { role, status, search, page, limit } = req.query;
+      const query: any = {
+        role: { $in: ['operations_manager', 'delivery_staff', 'sales_manager', 'maintenance_staff'] },
+      };
+      if (role && role !== 'all') {
+        query.role = role;
+      }
+      if (status && status !== 'all') {
+        query.status = status;
+      }
+      if (search && typeof search === 'string' && search.trim()) {
+        const regex = new RegExp(search.trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'), 'i');
+        query.$or = [{ fullName: regex }, { phone: regex }, { email: regex }, { employeeId: regex }];
+      }
+
+      const pageNum = Math.max(1, Number(page) || 1);
+      const limitNum = Math.max(1, Math.min(100, Number(limit) || 20));
+      const skip = (pageNum - 1) * limitNum;
+
+      const [employees, total] = await Promise.all([
+        User.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+        User.countDocuments(query),
+      ]);
+
+      res.json({
+        success: true,
+        count: employees.length,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
+        data: employees,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/admin/employees
+ * Create a new operational employee account
+ */
+const createEmployeeSchema = z.object({
+  fullName: z.string().min(2, 'Full name is required'),
+  phone: z.string().min(10, 'Valid 10-digit mobile number is required'),
+  email: z.string().email().optional(),
+  password: z.string().min(6, 'Password must be at least 6 characters'),
+  role: z.enum(['operations_manager', 'delivery_staff', 'sales_manager', 'maintenance_staff']),
+  department: z.string().optional(),
+  assignedDepot: z.string().optional(),
+});
+
+adminRoutes.post(
+  '/employees',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  validateRequest({ body: createEmployeeSchema }),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { fullName, phone, email, password, role, department, assignedDepot } = req.body;
+      const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+
+      const existing = await User.findOne({ phone: cleanPhone });
+      if (existing) {
+        throw new AppError(`A user with phone number ${cleanPhone} already exists`, 409);
+      }
+
+      const passwordHash = await hashPassword(password);
+      const count = await User.countDocuments({
+        role: { $in: ['operations_manager', 'delivery_staff', 'sales_manager', 'maintenance_staff'] },
+      });
+      const prefix =
+        role === 'operations_manager'
+          ? 'OPS'
+          : role === 'delivery_staff'
+          ? 'DEL'
+          : role === 'sales_manager'
+          ? 'SLS'
+          : 'MNT';
+      const employeeId = `EMP-${prefix}-${String(count + 1).padStart(3, '0')}`;
+
+      const employee = await User.create({
+        fullName,
+        phone: cleanPhone,
+        email: email || undefined,
+        passwordHash,
+        role,
+        employeeId,
+        department: department || 'Operations',
+        assignedDepot: assignedDepot || 'Central Pune Depot',
+        status: 'active',
+        isPhoneVerified: true,
+        isEmailVerified: Boolean(email),
+        dpdpConsent: { accepted: true, consentedAt: new Date(), policyVersion: 'DPDP-2023-V1.0' },
+      });
+
+      // Audit log
+      await logAdminAction({
+        action: 'EMPLOYEE_ACCOUNT_CREATED',
+        category: 'user_management',
+        actorId: req.user!._id.toString(),
+        actorName: req.user!.fullName,
+        actorRole: req.user!.role,
+        targetType: 'User',
+        targetId: employee._id.toString(),
+        details: {
+          employeeId,
+          role,
+          phone: cleanPhone,
+          fullName,
+        },
+      });
+
+      res.status(201).json({
+        success: true,
+        message: `Employee account ${employeeId} created successfully`,
+        data: employee,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * PATCH /api/v1/admin/employees/:id/status
+ * Activate or deactivate an operations employee account
+ */
+adminRoutes.patch(
+  '/employees/:id/status',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: AuthRequest, res: Response, next) => {
+    try {
+      const { status } = req.body;
+      if (!['active', 'suspended'].includes(status)) {
+        throw new AppError("Invalid status. Allowed values: 'active', 'suspended'", 400);
+      }
+
+      const employee = await User.findById(req.params.id);
+      if (!employee) {
+        throw new AppError('Employee not found', 404);
+      }
+
+      employee.status = status;
+      await employee.save();
+
+      // Audit log
+      await logAdminAction({
+        action: 'EMPLOYEE_STATUS_UPDATED',
+        category: 'user_management',
+        actorId: req.user!._id.toString(),
+        actorName: req.user!.fullName,
+        actorRole: req.user!.role,
+        targetType: 'User',
+        targetId: employee._id.toString(),
+        details: {
+          employeeId: employee.employeeId,
+          newStatus: status,
+        },
+      });
+
+      res.json({
+        success: true,
+        message: `Employee status updated to '${status}'`,
+        data: employee,
+      });
     } catch (err) {
       next(err);
     }

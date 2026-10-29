@@ -108,6 +108,70 @@ export const seedAdminDemoData = async () => {
       console.log('[Seed] Admin account initialized (+91 98990 09900).');
     }
 
+    // 3. Seed Operations Employees for Phase 12 Portal
+    const opsManagerPhone = '9899110001';
+    let opsManager = await User.findOne({ phone: opsManagerPhone });
+    if (!opsManager) {
+      const passwordHash = await hashPassword('Ops#2026');
+      opsManager = await User.create({
+        fullName: 'Vikram Deshmukh (Ops Manager)',
+        phone: opsManagerPhone,
+        email: 'ops.manager@vivoquest.in',
+        role: 'operations_manager',
+        employeeId: 'EMP-OPS-001',
+        department: 'Operations & Dispatch',
+        assignedDepot: 'Central Pune Depot',
+        passwordHash,
+        isPhoneVerified: true,
+        isEmailVerified: true,
+        status: 'active',
+        dpdpConsent: { accepted: true, consentedAt: new Date(), policyVersion: 'DPDP-2023-V1.0' },
+      });
+      console.log('[Seed] Operations Manager initialized (+91 98991 10001).');
+    }
+
+    const deliveryStaffPhone = '9899110002';
+    let deliveryStaff = await User.findOne({ phone: deliveryStaffPhone });
+    if (!deliveryStaff) {
+      const passwordHash = await hashPassword('Ops#2026');
+      deliveryStaff = await User.create({
+        fullName: 'Raju Shinde (Delivery Specialist)',
+        phone: deliveryStaffPhone,
+        email: 'delivery.staff@vivoquest.in',
+        role: 'delivery_staff',
+        employeeId: 'EMP-DEL-002',
+        department: 'Last-Mile Delivery',
+        assignedDepot: 'Central Pune Depot',
+        passwordHash,
+        isPhoneVerified: true,
+        isEmailVerified: true,
+        status: 'active',
+        dpdpConsent: { accepted: true, consentedAt: new Date(), policyVersion: 'DPDP-2023-V1.0' },
+      });
+      console.log('[Seed] Delivery Specialist initialized (+91 98991 10002).');
+    }
+
+    const maintStaffPhone = '9899110003';
+    let maintStaff = await User.findOne({ phone: maintStaffPhone });
+    if (!maintStaff) {
+      const passwordHash = await hashPassword('Ops#2026');
+      maintStaff = await User.create({
+        fullName: 'Suresh More (Biomedical Technician)',
+        phone: maintStaffPhone,
+        email: 'tech.staff@vivoquest.in',
+        role: 'maintenance_staff',
+        employeeId: 'EMP-MNT-003',
+        department: 'Biomedical Maintenance & Setup',
+        assignedDepot: 'Central Pune Depot',
+        passwordHash,
+        isPhoneVerified: true,
+        isEmailVerified: true,
+        status: 'active',
+        dpdpConsent: { accepted: true, consentedAt: new Date(), policyVersion: 'DPDP-2023-V1.0' },
+      });
+      console.log('[Seed] Maintenance Staff initialized (+91 98991 10003).');
+    }
+
     // Ensure at least one HealthcareProfessionalProfile exists with a valid linked user
     const validUserIds = await User.distinct('_id');
     await HealthcareProfessionalProfile.deleteMany({ userId: { $nin: validUserIds } });
@@ -1465,11 +1529,17 @@ export const listSuperAdminEscalations = async () => {
 // STAFF ORDER FULFILLMENT & LIFECYCLE MANAGEMENT
 // =============================================================================
 
-const PERMITTED_ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+export const PERMITTED_ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   placed: ['confirmed', 'cancelled'],
-  confirmed: ['dispatched', 'cancelled'],
-  dispatched: ['out_for_delivery', 'cancelled'],
-  out_for_delivery: ['delivered', 'cancelled'],
+  confirmed: ['preparing', 'ready_for_dispatch', 'dispatched', 'cancelled'],
+  preparing: ['ready_for_dispatch', 'dispatched', 'cancelled'],
+  ready_for_dispatch: ['dispatched', 'cancelled'],
+  dispatched: ['in_transit', 'out_for_delivery', 'delivery_attempt_failed', 'delivery_rescheduled', 'returned_to_origin', 'cancelled'],
+  in_transit: ['out_for_delivery', 'delivery_attempt_failed', 'delivery_rescheduled', 'returned_to_origin', 'cancelled'],
+  out_for_delivery: ['delivered', 'delivery_attempt_failed', 'delivery_rescheduled', 'returned_to_origin', 'cancelled'],
+  delivery_attempt_failed: ['out_for_delivery', 'delivery_rescheduled', 'returned_to_origin', 'cancelled'],
+  delivery_rescheduled: ['in_transit', 'out_for_delivery', 'returned_to_origin', 'cancelled'],
+  returned_to_origin: ['cancelled'],
   delivered: ['completed'],
   completed: [],
   cancelled: [],
@@ -1630,10 +1700,16 @@ export const updateOrderStatusAdmin = async (
   const defaultMessages: Record<OrderStatus, string> = {
     placed: 'Order placed and logged in central fulfillment registry.',
     confirmed: 'Order confirmed by operations team. Items allocated from depot.',
+    preparing: 'Order is being packed and prepared for dispatch.',
+    ready_for_dispatch: 'Equipment is packed and ready for carrier pickup.',
     dispatched: 'Equipment dispatched from regional DME logistics depot.',
+    in_transit: 'Shipment is in transit between fulfillment hubs.',
     out_for_delivery: 'Out for final delivery to patient home address.',
     delivered: 'Equipment successfully delivered to patient residence.',
     completed: 'Order and closed-loop clinical installation fully completed.',
+    delivery_attempt_failed: 'Delivery attempt could not be completed. Will be rescheduled.',
+    delivery_rescheduled: 'Delivery appointment has been rescheduled.',
+    returned_to_origin: 'Shipment could not be delivered and has been returned to origin depot.',
     cancelled: `Order cancelled by operations staff: ${trackingMessage || 'Staff action'}`,
   };
 

@@ -7,7 +7,11 @@ export type UserRole =
   | 'hospital'
   | 'supplier'
   | 'admin'
-  | 'super_admin';
+  | 'super_admin'
+  | 'operations_manager'
+  | 'delivery_staff'
+  | 'sales_manager'
+  | 'maintenance_staff';
 
 export interface IDpdpConsent {
   accepted: boolean;
@@ -27,6 +31,9 @@ export interface IUser extends Document {
   status: 'active' | 'pending_verification' | 'suspended';
   dpdpConsent: IDpdpConsent;
   profilePictureFileId?: mongoose.Types.ObjectId;
+  employeeId?: string;
+  department?: string;
+  assignedDepot?: string;
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -76,12 +83,37 @@ const UserSchema = new Schema<IUser>(
       type: String,
       required: [true, 'User role is required'],
       enum: {
-        values: ['patient', 'caregiver', 'professional', 'hospital', 'supplier', 'admin', 'super_admin'],
+        values: [
+          'patient',
+          'caregiver',
+          'professional',
+          'hospital',
+          'supplier',
+          'admin',
+          'super_admin',
+          'operations_manager',
+          'delivery_staff',
+          'sales_manager',
+          'maintenance_staff',
+        ],
         message: '{VALUE} is not a valid VivoQuest role',
       },
       lowercase: true,
       default: 'patient',
       index: true,
+    },
+    employeeId: {
+      type: String,
+      trim: true,
+      sparse: true,
+    },
+    department: {
+      type: String,
+      trim: true,
+    },
+    assignedDepot: {
+      type: String,
+      trim: true,
     },
     isPhoneVerified: {
       type: Boolean,

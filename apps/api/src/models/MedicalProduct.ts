@@ -66,6 +66,10 @@ export interface IMedicalProduct extends Document {
   averageRating: number;
   reviewCount: number;
   depots: IDepotStock[];
+  equipmentCondition?: 'healthy' | 'damaged' | 'under_maintenance' | 'returned_for_inspection';
+  conditionNotes?: string;
+  lastModifiedBy?: { id: mongoose.Types.ObjectId; name: string; role: string; at: Date };
+  createdByStaff?: { id: mongoose.Types.ObjectId; name: string; role: string; at: Date };
   isActive: boolean;
   isDemo: boolean;
   createdAt: Date;
@@ -276,6 +280,28 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
       min: 0,
     },
     depots: [DepotStockSchema],
+    equipmentCondition: {
+      type: String,
+      enum: ['healthy', 'damaged', 'under_maintenance', 'returned_for_inspection'],
+      default: 'healthy',
+      index: true,
+    },
+    conditionNotes: {
+      type: String,
+      trim: true,
+    },
+    lastModifiedBy: {
+      id: { type: Schema.Types.ObjectId, ref: 'User' },
+      name: { type: String },
+      role: { type: String },
+      at: { type: Date },
+    },
+    createdByStaff: {
+      id: { type: Schema.Types.ObjectId, ref: 'User' },
+      name: { type: String },
+      role: { type: String },
+      at: { type: Date },
+    },
     isActive: {
       type: Boolean,
       default: true,

@@ -2453,6 +2453,39 @@ export const adminApi = {
     });
     return res;
   },
+
+  async getEmployees(params?: { role?: string; status?: string; search?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.role && params.role !== 'all') query.set('role', params.role);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{ success: boolean; count: number; pagination: any; data: any[] }>(`/api/v1/admin/employees${qStr}`);
+  },
+
+  async createEmployee(payload: {
+    fullName: string;
+    phone: string;
+    email?: string;
+    password: string;
+    role: string;
+    department?: string;
+    assignedDepot?: string;
+  }) {
+    return request<{ success: boolean; message: string; data: any }>('/api/v1/admin/employees', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateEmployeeStatus(id: string, status: 'active' | 'suspended') {
+    return request<{ success: boolean; message: string; data: any }>(`/api/v1/admin/employees/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  },
 };
 
 
@@ -2750,6 +2783,39 @@ export const superAdminApi = {
       body: JSON.stringify({ reason }),
     });
     return res;
+  },
+
+  async getEmployees(params?: { role?: string; status?: string; search?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.role && params.role !== 'all') query.set('role', params.role);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{ success: boolean; count: number; pagination: any; data: any[] }>(`/api/v1/admin/employees${qStr}`);
+  },
+
+  async createEmployee(payload: {
+    fullName: string;
+    phone: string;
+    email?: string;
+    password: string;
+    role: string;
+    department?: string;
+    assignedDepot?: string;
+  }) {
+    return request<{ success: boolean; message: string; data: any }>('/api/v1/admin/employees', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateEmployeeStatus(id: string, status: 'active' | 'suspended') {
+    return request<{ success: boolean; message: string; data: any }>(`/api/v1/admin/employees/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
   },
 };
 
@@ -3404,6 +3470,38 @@ export const adminMarketplaceApi = {
     });
     return res;
   },
+  async getEmployees(params?: { role?: string; status?: string; search?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.role && params.role !== 'all') query.set('role', params.role);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{ success: boolean; count: number; pagination: any; data: any[] }>(`/api/v1/admin/employees${qStr}`);
+  },
+
+  async createEmployee(payload: {
+    fullName: string;
+    phone: string;
+    email?: string;
+    password: string;
+    role: string;
+    department?: string;
+    assignedDepot?: string;
+  }) {
+    return request<{ success: boolean; message: string; data: any }>('/api/v1/admin/employees', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateEmployeeStatus(id: string, status: 'active' | 'suspended') {
+    return request<{ success: boolean; message: string; data: any }>(`/api/v1/admin/employees/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  },
 };
 
 // -----------------------------------------------------------------------------
@@ -3596,6 +3694,282 @@ export const fieldVisitsApi = {
   },
 };
 
+// -----------------------------------------------------------------------------
+// Operations Portal APIs (Phase 12)
+// -----------------------------------------------------------------------------
+export const operationsApi = {
+  async getMe() {
+    return request<{ success: boolean; data: any }>('/api/v1/operations/me');
+  },
 
+  async getMetrics() {
+    return request<{
+      success: boolean;
+      data: {
+        newOrders: number;
+        awaitingDispatch: number;
+        scheduledToday: number;
+        inTransit: number;
+        delivered: number;
+        delayedOrFailed: number;
+        installationsPending: number;
+        maintenancePending: number;
+        supplierOrdersPending: number;
+      };
+    }>('/api/v1/operations/metrics');
+  },
 
+  async getOrders(params?: {
+    status?: string;
+    sourcingType?: string;
+    search?: string;
+    assignedStaffId?: string;
+    setupRequired?: boolean;
+    failedOnly?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.search) query.set('search', params.search);
+    if (params?.assignedStaffId) query.set('assignedStaffId', params.assignedStaffId);
+    if (params?.setupRequired) query.set('setupRequired', 'true');
+    if (params?.failedOnly) query.set('failedOnly', 'true');
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/operations/orders${qStr}`);
+  },
+
+  async getOrderById(id: string) {
+    return request<{ success: boolean; data: any }>(`/api/v1/operations/orders/${id}`);
+  },
+
+  async updateDeliveryStatus(
+    id: string,
+    payload: {
+      newStatus: string;
+      notes?: string;
+      location?: string;
+      failureReason?: string;
+      proofUrl?: string;
+      recipientConfirmed?: boolean;
+      scheduledDeliveryDate?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${id}/delivery-status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async assignDelivery(
+    id: string,
+    payload: {
+      staffId: string;
+      scheduledDeliveryDate?: string;
+      deliveryNotes?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${id}/assign-delivery`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async updateInstallation(
+    id: string,
+    payload: {
+      assignedSpecialistId?: string;
+      setupStatus?: string;
+      setupDate?: string;
+      timeSlot?: string;
+      setupNotes?: string;
+      checklistResults?: Array<{ item: string; checked: boolean }>;
+      supportingDocUrl?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${id}/installation`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async getStaff() {
+    return request<{ success: boolean; data: any[] }>('/api/v1/operations/staff');
+  },
+
+  async getProducts(params?: { sourcingType?: string; condition?: string; search?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.condition && params.condition !== 'all') query.set('condition', params.condition);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/operations/products${qStr}`);
+  },
+
+  async createProduct(payload: any) {
+    return request<{ success: boolean; message: string; data: any }>('/api/v1/operations/products', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateProduct(id: string, payload: any) {
+    return request<{ success: boolean; message: string; data: any }>(`/api/v1/operations/products/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateProductCondition(id: string, payload: { condition: string; conditionNotes?: string }) {
+    return request<{ success: boolean; message: string; data: any }>(`/api/v1/operations/products/${id}/condition`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async uploadImage(payload: { image: string; filename?: string }) {
+    return request<{ success: boolean; message: string; url: string }>('/api/v1/operations/upload-image', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getMaintenanceRequests(params?: { status?: string; urgency?: string; search?: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.urgency && params.urgency !== 'all') query.set('urgency', params.urgency);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      data: any[];
+    }>(`/api/v1/operations/maintenance${qStr}`);
+  },
+
+  async createMaintenanceRequest(payload: {
+    productId: string;
+    orderId?: string;
+    patientId?: string;
+    patientName?: string;
+    patientPhone?: string;
+    reportedIssue: string;
+    urgency?: string;
+    scheduledDate?: string;
+    flagProductCondition?: boolean;
+  }) {
+    return request<{ success: boolean; message: string; data: any }>('/api/v1/operations/maintenance', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async updateMaintenanceRequest(
+    id: string,
+    payload: {
+      status?: string;
+      assignedStaffId?: string;
+      scheduledDate?: string;
+      diagnosis?: string;
+      actionTaken?: string;
+      partsUsed?: Array<{ partName: string; quantity: number; cost?: number }>;
+      resolutionNotes?: string;
+      notes?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(`/api/v1/operations/maintenance/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Convenience Aliases for Operations Workflows
+  async getDeliveryStaff() {
+    return this.getStaff();
+  },
+
+  async updateOrderStatus(
+    id: string,
+    payload: {
+      targetStatus: string;
+      notes?: string;
+      hubLocation?: string;
+      reason?: string;
+      proofOfDeliveryUrl?: string;
+      rescheduledDate?: string;
+    }
+  ) {
+    return this.updateDeliveryStatus(id, {
+      newStatus: payload.targetStatus,
+      notes: payload.notes,
+      location: payload.hubLocation,
+      failureReason: payload.reason,
+      proofUrl: payload.proofOfDeliveryUrl,
+      scheduledDeliveryDate: payload.rescheduledDate,
+    });
+  },
+
+  async assignDeliveryStaff(
+    id: string,
+    payload: {
+      staffId: string;
+      staffName?: string;
+      scheduledDeliveryDate?: string;
+      assignmentNotes?: string;
+    }
+  ) {
+    return this.assignDelivery(id, {
+      staffId: payload.staffId,
+      scheduledDeliveryDate: payload.scheduledDeliveryDate,
+      deliveryNotes: payload.assignmentNotes,
+    });
+  },
+
+  async scheduleClinicalSetup(
+    id: string,
+    payload: {
+      assignedSpecialistId?: string;
+      assignedSpecialistName?: string;
+      scheduledDate?: string;
+      slot?: string;
+      setupStatus?: string;
+      setupNotes?: string;
+    }
+  ) {
+    return this.updateInstallation(id, {
+      assignedSpecialistId: payload.assignedSpecialistId,
+      setupDate: payload.scheduledDate,
+      timeSlot: payload.slot,
+      setupStatus: payload.setupStatus,
+      setupNotes: payload.setupNotes,
+    });
+  },
+};
 
