@@ -25,6 +25,10 @@ export interface IProductReview extends Document {
   moderatedAt?: Date;
   moderationNotes?: string;
   supplierResponse?: ISupplierResponse;
+  hasIssueReported?: boolean;
+  issueCategory?: string;
+  issueDetails?: string;
+  complaintId?: mongoose.Types.ObjectId;
   isDemo: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -122,6 +126,22 @@ const ProductReviewSchema = new Schema<IProductReview>(
     },
     supplierResponse: {
       type: SupplierResponseSchema,
+    },
+    hasIssueReported: {
+      type: Boolean,
+      default: false,
+    },
+    issueCategory: {
+      type: String,
+      trim: true,
+    },
+    issueDetails: {
+      type: String,
+      trim: true,
+    },
+    complaintId: {
+      type: Schema.Types.ObjectId,
+      ref: 'ProductComplaint',
     },
     isDemo: {
       type: Boolean,

@@ -30,6 +30,7 @@ export interface IProductComplaint extends Document {
   supplierId?: mongoose.Types.ObjectId;
   supplierName?: string;
   category: ComplaintCategory;
+  complaintType?: string;
   description: string;
   status: ComplaintStatus;
   resolutionNotes?: string;
@@ -38,6 +39,7 @@ export interface IProductComplaint extends Document {
   refundRequested: boolean;
   refundApproved: boolean;
   refundAmount?: number;
+  evidencePhotos?: string[];
   supplierResponse?: {
     response: string;
     respondedAt: Date;
@@ -128,6 +130,10 @@ const ProductComplaintSchema = new Schema<IProductComplaint>(
       ],
       index: true,
     },
+    complaintType: {
+      type: String,
+      trim: true,
+    },
     description: {
       type: String,
       required: [true, 'Complaint description is required'],
@@ -163,6 +169,10 @@ const ProductComplaintSchema = new Schema<IProductComplaint>(
       type: Number,
       min: 0,
       default: 0,
+    },
+    evidencePhotos: {
+      type: [String],
+      default: [],
     },
     supplierResponse: {
       response: { type: String, trim: true },

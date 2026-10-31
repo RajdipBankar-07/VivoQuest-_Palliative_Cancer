@@ -3,6 +3,7 @@ import { ProductOrder, IProductOrder, OrderStatus } from '../models/ProductOrder
 import { ShoppingCart, IShoppingCart } from '../models/ShoppingCart.js';
 import { ProductReview, IProductReview } from '../models/ProductReview.js';
 import { ProductComplaint, IProductComplaint } from '../models/ProductComplaint.js';
+import { DeliveryRating, IDeliveryRating } from '../models/DeliveryRating.js';
 import { Supplier } from '../models/Supplier.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { NotificationLog } from '../models/NotificationLog.js';
@@ -656,10 +657,24 @@ export const listMedicalProducts = async (filters: {
     sortOption = { createdAt: -1 };
   }
 
-  const [products, total] = await Promise.all([
+  const [rawProducts, total] = await Promise.all([
     MedicalProduct.find(query).sort(sortOption).skip(skip).limit(limit).lean(),
     MedicalProduct.countDocuments(query),
   ]);
+
+  const products = rawProducts.map((p: any) => {
+    const onHand = Number(p.stockQuantity) || 0;
+    const reserved = Number(p.reservedQuantity) || 0;
+    const availableToSell = Math.max(0, onHand - reserved);
+    const { procurementCost, ...publicData } = p;
+    return {
+      ...publicData,
+      id: p._id?.toString(),
+      availableToSell,
+      stockQuantity: onHand,
+      reservedQuantity: reserved,
+    };
+  });
 
   return {
     products,
@@ -675,20 +690,26 @@ export const listMedicalProducts = async (filters: {
 /**
  * Fetch a single product by ID or SKU.
  */
-export const getMedicalProductById = async (idOrSku: string): Promise<IMedicalProduct> => {
+export const getMedicalProductById = async (idOrSku: string): Promise<any> => {
   await seedMedicalProductsIfEmpty();
 
-  let product: IMedicalProduct | null = null;
+  let product: any = null;
   if (mongoose.Types.ObjectId.isValid(idOrSku)) {
-    product = await MedicalProduct.findById(idOrSku);
+    product = await MedicalProduct.findById(idOrSku).lean();
   }
   if (!product) {
-    product = await MedicalProduct.findOne({ sku: idOrSku.toUpperCase() });
+    product = await MedicalProduct.findOne({ sku: idOrSku.toUpperCase() }).lean();
   }
 
   if (!product) {
     throw new AppError('Medical product or equipment not found', 404);
   }
+
+  const onHand = Number(product.stockQuantity) || 0;
+  const reserved = Number(product.reservedQuantity) || 0;
+  product.availableToSell = Math.max(0, onHand - reserved);
+  product.id = product._id?.toString();
+  delete product.procurementCost;
 
   return product;
 };
@@ -1098,12 +1119,19 @@ export const createProductOrder = async (
       {
         _id: item.productId,
         isActive: true,
-        stockQuantity: { $gte: item.qty },
+        $expr: {
+          $gte: [
+            { $subtract: ['$stockQuantity', { $ifNull: ['$reservedQuantity', 0] }] },
+            item.qty,
+          ],
+        },
       },
       {
         $inc: {
-          stockQuantity: -item.qty,
           reservedQuantity: item.qty,
+        },
+        $set: {
+          lastStockUpdateAt: new Date(),
         },
       },
       { new: true }
@@ -1114,7 +1142,6 @@ export const createProductOrder = async (
       for (const prior of reservedItems) {
         await MedicalProduct.findByIdAndUpdate(prior.productId, {
           $inc: {
-            stockQuantity: prior.qty,
             reservedQuantity: -prior.qty,
           },
         });
@@ -1256,7 +1283,7 @@ export const createProductOrder = async (
   // Clear patient cart upon successful order placement
   await clearPatientCart(userId);
 
-  // Dispatch in-app operational alert to Admin Desk
+  // Dispatch in-app operational alert to Operations & Admin Desk
   try {
     const adminOrderKey = `notif_admin_order_${order._id}`;
     await NotificationLog.create({
@@ -1267,8 +1294,8 @@ export const createProductOrder = async (
       templateId: 'PRODUCT_ORDER_PLACED',
       type: 'PRODUCT_ORDER_PLACED',
       relatedEntityType: 'ProductOrder',
-      title: 'New Medical Equipment Order',
-      messageBody: `New Order Placed: Order #${order.orderNumber} for patient ${order.patientName} (+91 ${order.patientPhone}). Total: ₹${order.pricing.totalAmount}. Delivery: ${order.deliveryAddress.city}.`,
+      title: 'New Medical Equipment Order Requiring Dispatch Allocation',
+      messageBody: `New Order Placed: #${order.orderNumber} for patient ${order.patientName} (+91 ${order.patientPhone}). Total: ₹${order.pricing.totalAmount}. Destination: ${order.deliveryAddress.city}. Click to review dispatch queue.`,
       consentChecked: true,
       status: 'delivered',
       provider: 'in_app_system',
@@ -1282,6 +1309,32 @@ export const createProductOrder = async (
         patientPhone: order.patientPhone,
         city: order.deliveryAddress.city,
         totalAmount: order.pricing.totalAmount,
+        actionUrl: `/operations/dashboard?orderId=${order._id.toString()}`,
+      },
+    });
+
+    // Also dispatch to operations manager inbox with idempotency key
+    const opsOrderKey = `notif_ops_order_${order._id}`;
+    await NotificationLog.create({
+      recipientPhone: 'OPERATIONS_DESK',
+      recipientName: 'Central Operations Dispatch',
+      recipientRole: 'operations_manager',
+      channel: 'in_app',
+      templateId: 'PRODUCT_ORDER_PLACED',
+      type: 'PRODUCT_ORDER_PLACED',
+      relatedEntityType: 'ProductOrder',
+      title: 'New Order Requiring Dispatch Allocation',
+      messageBody: `Order #${order.orderNumber} placed for ${order.patientName}. Items: ${order.items.length}. Destination: ${order.deliveryAddress.city}. Click to assign delivery.`,
+      consentChecked: true,
+      status: 'delivered',
+      provider: 'in_app_system',
+      idempotencyKey: opsOrderKey,
+      isRead: false,
+      isCleared: false,
+      metadata: {
+        orderId: order._id.toString(),
+        orderNumber: order.orderNumber,
+        actionUrl: `/operations/dashboard?orderId=${order._id.toString()}`,
       },
     });
   } catch (notifErr: any) {
@@ -1382,18 +1435,21 @@ export const cancelPatientOrder = async (
     );
   }
 
-  // Atomically restore inventory and release reservedQuantity
+  // Atomically release reservedQuantity (or return physical stock if already fulfilled)
   for (const item of updatedOrder.items) {
-    await MedicalProduct.findByIdAndUpdate(item.productId, {
-      $inc: {
-        stockQuantity: item.quantity,
-        reservedQuantity: -item.quantity,
-      },
-    });
-    await MedicalProduct.findOneAndUpdate(
-      { _id: item.productId, 'depots.0': { $exists: true } },
-      { $inc: { 'depots.0.inStockCount': item.quantity } }
-    );
+    if (updatedOrder.isStockDeducted) {
+      await MedicalProduct.findByIdAndUpdate(item.productId, {
+        $inc: { stockQuantity: item.quantity },
+        $set: { lastStockUpdateAt: new Date() },
+      });
+    } else {
+      const prod = await MedicalProduct.findById(item.productId);
+      if (prod) {
+        prod.reservedQuantity = Math.max(0, (prod.reservedQuantity || 0) - item.quantity);
+        prod.lastStockUpdateAt = new Date();
+        await prod.save();
+      }
+    }
   }
 
   // Audit record
@@ -1487,6 +1543,73 @@ export const requestOrderReturn = async (
 };
 
 /**
+ * Patient request to reschedule delivery date/slot
+ */
+export const requestOrderDeliveryReschedule = async (
+  orderIdOrNumber: string,
+  userId: string,
+  data: {
+    requestedDate: string;
+    timeSlot?: string;
+    reason: string;
+  }
+): Promise<IProductOrder> => {
+  let query: any = { orderNumber: orderIdOrNumber };
+  if (mongoose.Types.ObjectId.isValid(orderIdOrNumber)) {
+    query = { _id: orderIdOrNumber };
+  }
+
+  const order = await ProductOrder.findOne(query);
+  if (!order) {
+    throw new AppError('Order not found', 404);
+  }
+
+  if (order.patientId.toString() !== userId) {
+    throw new AppError('Access denied: You cannot reschedule another patient\'s order', 403);
+  }
+
+  const disallowedStatuses: OrderStatus[] = ['delivered', 'completed', 'cancelled', 'returned_to_origin'];
+  if (disallowedStatuses.includes(order.orderStatus)) {
+    throw new AppError(`Cannot reschedule delivery for an order that is already ${order.orderStatus}`, 400);
+  }
+
+  if (!data.requestedDate || !data.reason) {
+    throw new AppError('Requested date and reason are required to request a delivery reschedule', 400);
+  }
+
+  const parsedDate = new Date(data.requestedDate);
+  if (isNaN(parsedDate.getTime()) || parsedDate < new Date()) {
+    throw new AppError('Requested delivery date must be a valid future date', 400);
+  }
+
+  if (!order.rescheduleRequests) {
+    order.rescheduleRequests = [];
+  }
+
+  const newRequestId = `REQ-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+  order.rescheduleRequests.push({
+    requestId: newRequestId,
+    requestedDate: parsedDate,
+    timeSlot: data.timeSlot || 'Morning 09:00 - 13:00',
+    reason: data.reason.trim(),
+    status: 'pending',
+    requestedAt: new Date(),
+    requestedByPatientId: new mongoose.Types.ObjectId(userId),
+  });
+
+  order.trackingUpdates.push({
+    timestamp: new Date(),
+    status: order.orderStatus,
+    message: `Delivery reschedule requested by recipient for ${parsedDate.toLocaleDateString('en-IN')}${data.timeSlot ? ` (${data.timeSlot})` : ''}: ${data.reason.trim()}`,
+    location: 'Patient Application',
+  });
+
+  await order.save();
+  return order;
+};
+
+/**
  * Schedule or update clinician setup visit for order
  */
 export const scheduleOrderSetup = async (
@@ -1557,6 +1680,9 @@ export const submitProductReview = async (
     rating: number;
     title: string;
     comment: string;
+    hasIssueReported?: boolean;
+    issueCategory?: string;
+    issueDetails?: string;
   }
 ): Promise<IProductReview> => {
   if (!data.rating || data.rating < 1 || data.rating > 5) {
@@ -1605,6 +1731,46 @@ export const submitProductReview = async (
     throw new AppError('You have already submitted a review for this purchase', 409);
   }
 
+  let complaintId: mongoose.Types.ObjectId | undefined;
+  // If an issue/damage is reported, create a complaint ticket for staff follow-up without modifying the review
+  if (data.hasIssueReported && data.issueDetails?.trim()) {
+    const complaintNumber = `CMP-${Date.now().toString().slice(-6)}`;
+    const validCategories = [
+      'damaged_item',
+      'wrong_item',
+      'missing_item',
+      'installation_issue',
+      'quality_defect',
+      'late_delivery',
+      'other',
+    ];
+    let mappedCategory = 'quality_defect';
+    if (data.issueCategory && validCategories.includes(data.issueCategory)) {
+      mappedCategory = data.issueCategory;
+    }
+
+    const complaint = await ProductComplaint.create({
+      complaintNumber,
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      userId: new mongoose.Types.ObjectId(userId),
+      userName: userName || order.patientName || 'Customer',
+      userPhone: order.patientPhone || '9800000000',
+      productId: product._id,
+      productSku: product.sku,
+      productTitle: product.title,
+      category: mappedCategory as any,
+      complaintType: data.issueCategory || 'defective_device',
+      description: data.issueDetails.trim(),
+      status: 'open',
+      refundRequested: false,
+      refundApproved: false,
+      isDemo: false,
+      resolutionNotes: 'Automatically initiated from customer review product report',
+    });
+    complaintId = complaint._id;
+  }
+
   const review = await ProductReview.create({
     productId: product._id,
     productSku: product.sku,
@@ -1618,6 +1784,10 @@ export const submitProductReview = async (
     comment: data.comment.trim(),
     isVerifiedPurchase: true,
     status: 'published',
+    hasIssueReported: Boolean(data.hasIssueReported),
+    issueCategory: data.issueCategory,
+    issueDetails: data.issueDetails,
+    complaintId,
   });
 
   // Recalculate average rating for product
@@ -1631,6 +1801,165 @@ export const submitProductReview = async (
   }
 
   return review;
+};
+
+/**
+ * Submit verified delivery experience rating
+ */
+export const submitDeliveryRating = async (
+  userId: string,
+  userName: string,
+  orderIdOrNumber: string,
+  data: {
+    rating: number;
+    punctualityRating?: number;
+    communicationRating?: number;
+    handlingRating?: number;
+    feedback?: string;
+  }
+): Promise<IDeliveryRating> => {
+  if (!data.rating || data.rating < 1 || data.rating > 5) {
+    throw new AppError('Delivery rating must be an integer between 1 and 5 stars', 400);
+  }
+
+  let orderQuery: any = { _id: orderIdOrNumber, patientId: userId };
+  if (!mongoose.Types.ObjectId.isValid(orderIdOrNumber)) {
+    orderQuery = { orderNumber: orderIdOrNumber, patientId: userId };
+  }
+
+  const order = await ProductOrder.findOne(orderQuery);
+  if (!order) {
+    throw new AppError('Order not found or access denied', 404);
+  }
+
+  // Must be delivered
+  if (!['delivered', 'completed'].includes(order.orderStatus)) {
+    throw new AppError('Delivery experience can only be rated after successful order delivery', 400);
+  }
+
+  // Duplicate check
+  const existing = await DeliveryRating.findOne({ orderId: order._id, patientId: userId });
+  if (existing) {
+    throw new AppError('You have already rated the delivery experience for this order', 409);
+  }
+
+  const staffId = order.deliveryAssignment?.assignedStaffId || order.deliveryAssignment?.otpVerification?.verifiedByStaffId || new mongoose.Types.ObjectId('000000000000000000000001');
+  const staffName = order.deliveryAssignment?.assignedStaffName || order.deliveryAssignment?.otpVerification?.verifiedByStaffName || 'VivoQuest Delivery Executive';
+
+  const deliveryRating = await DeliveryRating.create({
+    orderId: order._id,
+    orderNumber: order.orderNumber,
+    patientId: userId,
+    patientName: userName || order.patientName,
+    deliveryStaffId: staffId,
+    deliveryStaffName: staffName,
+    rating: Math.round(data.rating),
+    punctualityRating: data.punctualityRating ? Math.round(data.punctualityRating) : undefined,
+    communicationRating: data.communicationRating ? Math.round(data.communicationRating) : undefined,
+    handlingRating: data.handlingRating ? Math.round(data.handlingRating) : undefined,
+    feedback: data.feedback?.trim(),
+  });
+
+  // Store denormalized summary on order for quick display
+  order.deliveryRating = {
+    rating: deliveryRating.rating,
+    punctualityRating: deliveryRating.punctualityRating,
+    communicationRating: deliveryRating.communicationRating,
+    handlingRating: deliveryRating.handlingRating,
+    feedback: deliveryRating.feedback,
+    ratedAt: new Date(),
+  };
+  await order.save();
+
+  // Audit log
+  await AuditLog.create({
+    action: 'DELIVERY_EXPERIENCE_RATED',
+    category: 'order_fulfillment',
+    actorId: mongoose.Types.ObjectId.isValid(userId) ? new mongoose.Types.ObjectId(userId) : undefined,
+    actorName: userName || order.patientName,
+    actorRole: 'patient',
+    targetType: 'ProductOrder',
+    targetId: order.orderNumber,
+    details: {
+      orderId: order._id.toString(),
+      rating: deliveryRating.rating,
+      staffId: staffId.toString(),
+    },
+  });
+
+  return deliveryRating;
+};
+
+/**
+ * Get aggregate delivery rating statistics for operations managers
+ */
+export const getDeliveryRatingsSummary = async () => {
+  const allRatings = await DeliveryRating.find().lean();
+  const totalRatings = allRatings.length;
+  if (totalRatings === 0) {
+    return {
+      totalRatings: 0,
+      averageRating: 5.0,
+      punctualityAvg: 5.0,
+      communicationAvg: 5.0,
+      handlingAvg: 5.0,
+      starBreakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+      recentFeedback: [],
+    };
+  }
+
+  let sumRating = 0;
+  let sumPunctuality = 0;
+  let punctualityCount = 0;
+  let sumComm = 0;
+  let commCount = 0;
+  let sumHandling = 0;
+  let handlingCount = 0;
+
+  const starBreakdown: Record<number, number> = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+
+  for (const r of allRatings) {
+    sumRating += r.rating;
+    if (starBreakdown[r.rating] !== undefined) starBreakdown[r.rating]++;
+    if (r.punctualityRating) {
+      sumPunctuality += r.punctualityRating;
+      punctualityCount++;
+    }
+    if (r.communicationRating) {
+      sumComm += r.communicationRating;
+      commCount++;
+    }
+    if (r.handlingRating) {
+      sumHandling += r.handlingRating;
+      handlingCount++;
+    }
+  }
+
+  const averageRating = Math.round((sumRating / totalRatings) * 10) / 10;
+  const punctualityAvg = punctualityCount > 0 ? Math.round((sumPunctuality / punctualityCount) * 10) / 10 : averageRating;
+  const communicationAvg = commCount > 0 ? Math.round((sumComm / commCount) * 10) / 10 : averageRating;
+  const handlingAvg = handlingCount > 0 ? Math.round((sumHandling / handlingCount) * 10) / 10 : averageRating;
+
+  const recentFeedback = allRatings
+    .filter((r) => r.feedback && r.feedback.trim().length > 0)
+    .slice(-10)
+    .map((r) => ({
+      orderNumber: r.orderNumber,
+      deliveryStaffName: r.deliveryStaffName,
+      rating: r.rating,
+      feedback: r.feedback,
+      createdAt: r.createdAt,
+    }));
+
+  return {
+    totalRatings,
+    averageRating,
+    punctualityAvg,
+    communicationAvg,
+    handlingAvg,
+    starBreakdown,
+    recentFeedback,
+  };
 };
 
 /**

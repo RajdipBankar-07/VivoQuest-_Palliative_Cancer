@@ -73,9 +73,23 @@ export default function OrderTrackingDetailPage() {
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewTitle, setReviewTitle] = useState('');
   const [reviewComment, setReviewComment] = useState('');
+  const [reviewHasIssue, setReviewHasIssue] = useState(false);
+  const [reviewIssueCategory, setReviewIssueCategory] = useState('defective_device');
+  const [reviewIssueDetails, setReviewIssueDetails] = useState('');
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [reviewSuccessMsg, setReviewSuccessMsg] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+
+  // Delivery Experience Rating Modal State
+  const [isDeliveryRatingModalOpen, setIsDeliveryRatingModalOpen] = useState(false);
+  const [deliveryRating, setDeliveryRating] = useState(5);
+  const [punctualityRating, setPunctualityRating] = useState(5);
+  const [communicationRating, setCommunicationRating] = useState(5);
+  const [handlingRating, setHandlingRating] = useState(5);
+  const [deliveryFeedback, setDeliveryFeedback] = useState('');
+  const [isSubmittingDeliveryRating, setIsSubmittingDeliveryRating] = useState(false);
+  const [deliveryRatingSuccessMsg, setDeliveryRatingSuccessMsg] = useState<string | null>(null);
+  const [deliveryRatingError, setDeliveryRatingError] = useState<string | null>(null);
 
   // Complaint Modal State
   const [isComplaintModalOpen, setIsComplaintModalOpen] = useState(false);
@@ -86,6 +100,15 @@ export default function OrderTrackingDetailPage() {
   const [isSubmittingComplaint, setIsSubmittingComplaint] = useState(false);
   const [complaintSuccessMsg, setComplaintSuccessMsg] = useState<string | null>(null);
   const [complaintError, setComplaintError] = useState<string | null>(null);
+
+  // Delivery Reschedule Modal State
+  const [isDeliveryRescheduleModalOpen, setIsDeliveryRescheduleModalOpen] = useState(false);
+  const [deliveryRescheduleDate, setDeliveryRescheduleDate] = useState('');
+  const [deliveryRescheduleSlot, setDeliveryRescheduleSlot] = useState('Morning 09:00 - 13:00');
+  const [deliveryRescheduleReason, setDeliveryRescheduleReason] = useState('Family member available only on requested date');
+  const [isSubmittingDeliveryReschedule, setIsSubmittingDeliveryReschedule] = useState(false);
+  const [deliveryRescheduleSuccessMsg, setDeliveryRescheduleSuccessMsg] = useState<string | null>(null);
+  const [deliveryRescheduleError, setDeliveryRescheduleError] = useState<string | null>(null);
 
   const fetchOrder = async () => {
     try {
@@ -212,6 +235,9 @@ export default function OrderTrackingDetailPage() {
         rating: reviewRating,
         title: reviewTitle.trim() || 'Verified Purchase Review',
         comment: reviewComment.trim(),
+        hasIssueReported: reviewHasIssue,
+        issueCategory: reviewHasIssue ? reviewIssueCategory : undefined,
+        issueDetails: reviewHasIssue ? reviewIssueDetails.trim() : undefined,
       });
       setReviewSuccessMsg('Thank you! Your verified purchase review has been submitted for moderation.');
       setTimeout(() => {
@@ -224,6 +250,44 @@ export default function OrderTrackingDetailPage() {
       setReviewError(err.message || 'Failed to submit review. Reviews can only be submitted for delivered purchases.');
     } finally {
       setIsSubmittingReview(false);
+    }
+  };
+
+  // Submit Delivery Experience Rating
+  const handleSubmitDeliveryRating = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setIsSubmittingDeliveryRating(true);
+      setDeliveryRatingError(null);
+      const res = await productsApi.submitDeliveryRating(order._id || order.orderNumber, {
+        rating: deliveryRating,
+        punctualityRating,
+        communicationRating,
+        handlingRating,
+        feedback: deliveryFeedback.trim(),
+      });
+      if (res && res.data) {
+        setDeliveryRatingSuccessMsg('Thank you! Your delivery experience rating has been recorded.');
+        setOrder((prev: any) => ({
+          ...prev,
+          deliveryRating: {
+            rating: deliveryRating,
+            punctualityRating,
+            communicationRating,
+            handlingRating,
+            feedback: deliveryFeedback.trim(),
+            ratedAt: new Date().toISOString(),
+          },
+        }));
+        setTimeout(() => {
+          setIsDeliveryRatingModalOpen(false);
+          setDeliveryRatingSuccessMsg(null);
+        }, 1800);
+      }
+    } catch (err: any) {
+      setDeliveryRatingError(err.message || 'Failed to submit delivery rating.');
+    } finally {
+      setIsSubmittingDeliveryRating(false);
     }
   };
 
@@ -253,6 +317,33 @@ export default function OrderTrackingDetailPage() {
     }
   };
 
+  // Submit Patient Delivery Reschedule Request
+  const handleDeliveryRescheduleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deliveryRescheduleDate || !deliveryRescheduleReason.trim()) return;
+    try {
+      setIsSubmittingDeliveryReschedule(true);
+      setDeliveryRescheduleError(null);
+      await productsApi.requestDeliveryReschedule(order._id || order.orderNumber, {
+        requestedDate: deliveryRescheduleDate,
+        timeSlot: deliveryRescheduleSlot,
+        reason: deliveryRescheduleReason.trim(),
+      });
+      setDeliveryRescheduleSuccessMsg(
+        'Delivery reschedule request submitted. The operations dispatch team will review and confirm your new slot.'
+      );
+      setTimeout(() => {
+        setIsDeliveryRescheduleModalOpen(false);
+        setDeliveryRescheduleSuccessMsg(null);
+        fetchOrder();
+      }, 2000);
+    } catch (err: any) {
+      setDeliveryRescheduleError(err.message || 'Failed to submit reschedule request.');
+    } finally {
+      setIsSubmittingDeliveryReschedule(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -262,7 +353,107 @@ export default function OrderTrackingDetailPage() {
           <div className="w-full h-48 bg-slate-200 rounded-2xl" />
           <div className="w-full h-64 bg-slate-200 rounded-2xl" />
         </main>
-        <Footer />
+        {/* Delivery Reschedule Modal */}
+      {isDeliveryRescheduleModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-navy flex items-center gap-2">
+                <Calendar size={18} className="text-teal-600" />
+                Reschedule Delivery Date
+              </h3>
+              <button
+                onClick={() => setIsDeliveryRescheduleModalOpen(false)}
+                className="text-slate-400 hover:text-navy"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Choose your preferred date and time slot for medical equipment delivery. Our operations team will align dispatch to match your schedule.
+            </p>
+
+            {deliveryRescheduleSuccessMsg && (
+              <div className="p-3 bg-emerald-50 text-emerald-800 text-xs rounded-xl border border-emerald-200">
+                {deliveryRescheduleSuccessMsg}
+              </div>
+            )}
+
+            {deliveryRescheduleError && (
+              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl border border-red-200">
+                {deliveryRescheduleError}
+              </div>
+            )}
+
+            <form onSubmit={handleDeliveryRescheduleSubmit} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-navy mb-1">Preferred Delivery Date</label>
+                <input
+                  type="date"
+                  required
+                  min={new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}
+                  value={deliveryRescheduleDate}
+                  onChange={(e) => setDeliveryRescheduleDate(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600 font-semibold text-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Preferred Time Window</label>
+                <select
+                  value={deliveryRescheduleSlot}
+                  onChange={(e) => setDeliveryRescheduleSlot(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600 font-semibold text-slate-700"
+                >
+                  <option value="Morning 09:00 - 13:00">Morning (09:00 AM - 01:00 PM)</option>
+                  <option value="Afternoon 13:00 - 17:00">Afternoon (01:00 PM - 05:00 PM)</option>
+                  <option value="Evening 17:00 - 21:00">Evening (05:00 PM - 09:00 PM)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Reason for Rescheduling</label>
+                <input
+                  type="text"
+                  required
+                  value={deliveryRescheduleReason}
+                  onChange={(e) => setDeliveryRescheduleReason(e.target.value)}
+                  placeholder="e.g. Attending doctor consultation on original date"
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="md"
+                  className="flex-1 justify-center"
+                  onClick={() => setIsDeliveryRescheduleModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="flex-1 justify-center bg-teal-600 hover:bg-teal-700 text-white font-bold"
+                  disabled={isSubmittingDeliveryReschedule}
+                >
+                  {isSubmittingDeliveryReschedule ? 'Submitting...' : 'Confirm Request'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <Footer />
       </div>
     );
   }
@@ -281,7 +472,107 @@ export default function OrderTrackingDetailPage() {
             Back to My Orders
           </Button>
         </main>
-        <Footer />
+        {/* Delivery Reschedule Modal */}
+      {isDeliveryRescheduleModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-navy flex items-center gap-2">
+                <Calendar size={18} className="text-teal-600" />
+                Reschedule Delivery Date
+              </h3>
+              <button
+                onClick={() => setIsDeliveryRescheduleModalOpen(false)}
+                className="text-slate-400 hover:text-navy"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Choose your preferred date and time slot for medical equipment delivery. Our operations team will align dispatch to match your schedule.
+            </p>
+
+            {deliveryRescheduleSuccessMsg && (
+              <div className="p-3 bg-emerald-50 text-emerald-800 text-xs rounded-xl border border-emerald-200">
+                {deliveryRescheduleSuccessMsg}
+              </div>
+            )}
+
+            {deliveryRescheduleError && (
+              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl border border-red-200">
+                {deliveryRescheduleError}
+              </div>
+            )}
+
+            <form onSubmit={handleDeliveryRescheduleSubmit} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-navy mb-1">Preferred Delivery Date</label>
+                <input
+                  type="date"
+                  required
+                  min={new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}
+                  value={deliveryRescheduleDate}
+                  onChange={(e) => setDeliveryRescheduleDate(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600 font-semibold text-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Preferred Time Window</label>
+                <select
+                  value={deliveryRescheduleSlot}
+                  onChange={(e) => setDeliveryRescheduleSlot(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600 font-semibold text-slate-700"
+                >
+                  <option value="Morning 09:00 - 13:00">Morning (09:00 AM - 01:00 PM)</option>
+                  <option value="Afternoon 13:00 - 17:00">Afternoon (01:00 PM - 05:00 PM)</option>
+                  <option value="Evening 17:00 - 21:00">Evening (05:00 PM - 09:00 PM)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Reason for Rescheduling</label>
+                <input
+                  type="text"
+                  required
+                  value={deliveryRescheduleReason}
+                  onChange={(e) => setDeliveryRescheduleReason(e.target.value)}
+                  placeholder="e.g. Attending doctor consultation on original date"
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="md"
+                  className="flex-1 justify-center"
+                  onClick={() => setIsDeliveryRescheduleModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="flex-1 justify-center bg-teal-600 hover:bg-teal-700 text-white font-bold"
+                  disabled={isSubmittingDeliveryReschedule}
+                >
+                  {isSubmittingDeliveryReschedule ? 'Submitting...' : 'Confirm Request'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <Footer />
       </div>
     );
   }
@@ -292,6 +583,10 @@ export default function OrderTrackingDetailPage() {
     order.orderStatus
   );
   const isReturnable = order.orderStatus === 'delivered' && !order.returnDetails?.isReturnRequested;
+  const isDeliveryReschedulable =
+    ['placed', 'confirmed', 'preparing', 'ready_for_dispatch', 'dispatched', 'in_transit', 'delivery_rescheduled'].includes(
+      order.orderStatus
+    ) && order.orderStatus !== 'cancelled';
   const requiresSetup = order.clinicalSetup?.isSetupRequired;
 
   // Timeline Steps
@@ -384,6 +679,40 @@ export default function OrderTrackingDetailPage() {
                 </Button>
               )}
 
+              {['placed', 'confirmed', 'preparing', 'ready_for_dispatch', 'dispatched', 'in_transit', 'delivery_rescheduled'].includes(order.orderStatus) && order.orderStatus !== 'cancelled' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-teal-700 border-teal-200 hover:bg-teal-50"
+                  onClick={() => {
+                    setDeliveryRescheduleDate(
+                      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+                    );
+                    setIsDeliveryRescheduleModalOpen(true);
+                  }}
+                  leftIcon={<Calendar size={14} />}
+                >
+                  Reschedule Delivery
+                </Button>
+              )}
+
+              {isDeliveryReschedulable && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-teal-700 border-teal-200 hover:bg-teal-50"
+                  onClick={() => {
+                    setDeliveryRescheduleDate(
+                      new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+                    );
+                    setIsDeliveryRescheduleModalOpen(true);
+                  }}
+                  leftIcon={<Calendar size={14} />}
+                >
+                  Reschedule Delivery
+                </Button>
+              )}
+
               {(order.orderStatus === 'delivered' || order.orderStatus === 'completed') && (
                 <>
                   <Button
@@ -414,6 +743,99 @@ export default function OrderTrackingDetailPage() {
               )}
             </div>
           </div>
+
+          {/* Flipkart-Style Verified Order Delivered Completion Card */}
+          {(order.orderStatus === 'delivered' || order.orderStatus === 'completed') && (
+            <div className="bg-white rounded-3xl border-2 border-emerald-500/30 p-6 sm:p-8 shadow-sm relative overflow-hidden bg-gradient-to-br from-emerald-50/50 via-white to-teal-50/30">
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-emerald-600/20">
+                    <CheckCircle2 size={32} />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h2 className="text-xl sm:text-2xl font-black text-navy tracking-tight">
+                        Order Delivered Successfully
+                      </h2>
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-extrabold text-[11px] uppercase tracking-wider flex items-center gap-1">
+                        <ShieldCheck size={13} />
+                        {order.deliveryAssignment?.otpVerification?.verificationMethod === 'manager_override'
+                          ? 'Support Verified'
+                          : 'OTP Verified'}
+                      </span>
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-600 font-medium">
+                      Delivered on{' '}
+                      <span className="font-bold text-navy">
+                        {new Date(
+                          order.deliveryAssignment?.actualDeliveredAt ||
+                          order.deliveryAssignment?.otpVerification?.verifiedAt ||
+                          order.updatedAt
+                        ).toLocaleDateString('en-IN', {
+                          weekday: 'short',
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                      {order.deliveryAssignment?.otpVerification?.recipientName && (
+                        <>
+                          {' '}• Handed over to{' '}
+                          <span className="font-bold text-navy">
+                            {order.deliveryAssignment.otpVerification.recipientName}
+                            {order.deliveryAssignment.otpVerification.recipientRelationship
+                              ? ` (${order.deliveryAssignment.otpVerification.recipientRelationship})`
+                              : ''}
+                          </span>
+                        </>
+                      )}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-slate-500">
+                      <span>
+                        Package Condition:{' '}
+                        <strong className="text-emerald-700 capitalize">
+                          {(order.deliveryAssignment?.otpVerification?.deliveryCondition || 'good_condition').replace('_', ' ')}
+                        </strong>
+                      </span>
+                      {order.clinicalSetup?.isSetupRequired && (
+                        <span>
+                          • Clinical Setup:{' '}
+                          <strong className="text-teal-700 capitalize">
+                            {(order.clinicalSetup.setupStatus || 'pending').replace('_', ' ')}
+                          </strong>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full md:w-auto">
+                  <button
+                    onClick={() => setIsDeliveryRatingModalOpen(true)}
+                    className="px-4 py-2.5 rounded-xl font-bold text-xs bg-amber-500 hover:bg-amber-600 text-white shadow-sm flex items-center justify-center gap-2 transition cursor-pointer"
+                  >
+                    <Star size={16} className="fill-white" />
+                    <span>
+                      {order.deliveryRating ? `Delivery Rated (${order.deliveryRating.rating}★)` : 'Rate Delivery Experience'}
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (order.items?.[0]) setReviewProductId(order.items[0].productId || order.items[0]._id);
+                      setIsReviewModalOpen(true);
+                    }}
+                    className="px-4 py-2.5 rounded-xl font-bold text-xs bg-navy hover:bg-navy-dark text-white shadow-sm flex items-center justify-center gap-2 transition cursor-pointer"
+                  >
+                    <Sparkles size={16} />
+                    <span>Rate Purchased Product</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Cancellation Policy Banner when Direct Cancel is locked */}
           {isDispatchedOrDelivered && order.orderStatus !== 'cancelled' && (
@@ -1208,13 +1630,55 @@ export default function OrderTrackingDetailPage() {
               <div>
                 <label className="block font-bold text-navy mb-1">Review Details</label>
                 <textarea
-                  rows={4}
+                  rows={3}
                   required
                   placeholder="Share details about durability, comfort, caregiver handling, or packaging..."
                   value={reviewComment}
                   onChange={(e) => setReviewComment(e.target.value)}
                   className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-primary"
                 />
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer font-bold text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={reviewHasIssue}
+                    onChange={(e) => setReviewHasIssue(e.target.checked)}
+                    className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+                  />
+                  <span>Report a Product Issue or Defect with this Review</span>
+                </label>
+                {reviewHasIssue && (
+                  <div className="space-y-2 pt-2 border-t border-slate-200">
+                    <div>
+                      <label className="block font-semibold text-slate-700 text-[11px] mb-1">Issue Category</label>
+                      <select
+                        value={reviewIssueCategory}
+                        onChange={(e) => setReviewIssueCategory(e.target.value)}
+                        className="w-full p-2 rounded-xl border border-border text-xs outline-none focus:border-amber-600"
+                      >
+                        <option value="defective_device">Defective or Malfunctioning Device</option>
+                        <option value="shipping_damage">Damaged in Transit / Dented</option>
+                        <option value="missing_accessories">Missing Components or Cable</option>
+                        <option value="wrong_item">Wrong Specification Delivered</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 text-[11px] mb-1">Issue Description</label>
+                      <textarea
+                        rows={2}
+                        placeholder="Briefly describe the defect for operations team review..."
+                        value={reviewIssueDetails}
+                        onChange={(e) => setReviewIssueDetails(e.target.value)}
+                        className="w-full p-2 rounded-xl border border-border text-xs outline-none focus:border-amber-600"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-500">
+                      An operations support ticket will automatically be created so staff can follow up without altering your honest public review.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2 pt-2">
@@ -1235,6 +1699,148 @@ export default function OrderTrackingDetailPage() {
                   disabled={isSubmittingReview}
                 >
                   {isSubmittingReview ? 'Submitting...' : 'Post Review'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delivery Experience Rating Modal */}
+      {isDeliveryRatingModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-navy flex items-center gap-2">
+                <Truck size={18} className="text-amber-500" />
+                Rate Your Delivery Experience
+              </h3>
+              <button
+                onClick={() => setIsDeliveryRatingModalOpen(false)}
+                className="text-slate-400 hover:text-navy cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Help us evaluate our last-mile medical equipment delivery executive for Order #{order.orderNumber}.
+            </p>
+
+            {deliveryRatingSuccessMsg && (
+              <div className="p-3 bg-emerald-50 text-emerald-800 text-xs rounded-xl border border-emerald-200">
+                {deliveryRatingSuccessMsg}
+              </div>
+            )}
+
+            {deliveryRatingError && (
+              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl border border-red-200">
+                {deliveryRatingError}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitDeliveryRating} className="space-y-4 text-xs">
+              {/* Overall Star Rating */}
+              <div>
+                <label className="block font-bold text-navy mb-1.5">Overall Delivery Rating</label>
+                <div className="flex items-center gap-2">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setDeliveryRating(star)}
+                      className="p-1 hover:scale-110 transition cursor-pointer"
+                    >
+                      <Star
+                        size={24}
+                        className={
+                          star <= deliveryRating
+                            ? 'fill-amber-400 text-amber-500'
+                            : 'text-slate-300'
+                        }
+                      />
+                    </button>
+                  ))}
+                  <span className="font-extrabold text-navy text-sm ml-2">{deliveryRating} / 5</span>
+                </div>
+              </div>
+
+              {/* Punctuality Rating */}
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100">
+                <div>
+                  <label className="block font-semibold text-slate-700 text-[11px] mb-1">Punctuality</label>
+                  <select
+                    value={punctualityRating}
+                    onChange={(e) => setPunctualityRating(Number(e.target.value))}
+                    className="w-full p-2 rounded-xl border border-border text-xs outline-none focus:border-amber-500"
+                  >
+                    {[5, 4, 3, 2, 1].map((s) => (
+                      <option key={s} value={s}>{s} Stars</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 text-[11px] mb-1">Communication</label>
+                  <select
+                    value={communicationRating}
+                    onChange={(e) => setCommunicationRating(Number(e.target.value))}
+                    className="w-full p-2 rounded-xl border border-border text-xs outline-none focus:border-amber-500"
+                  >
+                    {[5, 4, 3, 2, 1].map((s) => (
+                      <option key={s} value={s}>{s} Stars</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 text-[11px] mb-1">Package Handling</label>
+                  <select
+                    value={handlingRating}
+                    onChange={(e) => setHandlingRating(Number(e.target.value))}
+                    className="w-full p-2 rounded-xl border border-border text-xs outline-none focus:border-amber-500"
+                  >
+                    {[5, 4, 3, 2, 1].map((s) => (
+                      <option key={s} value={s}>{s} Stars</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Feedback text */}
+              <div>
+                <label className="block font-bold text-navy mb-1">Feedback Comments (Optional)</label>
+                <textarea
+                  rows={3}
+                  placeholder="Share details on promptness, polite behavior, or delivery handling..."
+                  value={deliveryFeedback}
+                  onChange={(e) => setDeliveryFeedback(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border outline-none focus:border-amber-500 text-xs text-slate-700"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="md"
+                  className="flex-1 justify-center"
+                  onClick={() => setIsDeliveryRatingModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="flex-1 justify-center bg-amber-500 hover:bg-amber-600 text-white font-bold"
+                  disabled={isSubmittingDeliveryRating}
+                >
+                  {isSubmittingDeliveryRating ? 'Submitting...' : 'Submit Rating'}
                 </Button>
               </div>
             </form>
@@ -1356,7 +1962,108 @@ export default function OrderTrackingDetailPage() {
         </div>
       )}
 
+      {/* Delivery Reschedule Modal */}
+      {isDeliveryRescheduleModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/60 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-border space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-navy flex items-center gap-2">
+                <Calendar size={18} className="text-teal-600" />
+                Reschedule Delivery Date
+              </h3>
+              <button
+                onClick={() => setIsDeliveryRescheduleModalOpen(false)}
+                className="text-slate-400 hover:text-navy"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Choose your preferred date and time slot for medical equipment delivery. Our operations team will align dispatch to match your schedule.
+            </p>
+
+            {deliveryRescheduleSuccessMsg && (
+              <div className="p-3 bg-emerald-50 text-emerald-800 text-xs rounded-xl border border-emerald-200">
+                {deliveryRescheduleSuccessMsg}
+              </div>
+            )}
+
+            {deliveryRescheduleError && (
+              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-xl border border-red-200">
+                {deliveryRescheduleError}
+              </div>
+            )}
+
+            <form onSubmit={handleDeliveryRescheduleSubmit} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-navy mb-1">Preferred Delivery Date</label>
+                <input
+                  type="date"
+                  required
+                  min={new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}
+                  value={deliveryRescheduleDate}
+                  onChange={(e) => setDeliveryRescheduleDate(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600 font-semibold text-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Preferred Time Window</label>
+                <select
+                  value={deliveryRescheduleSlot}
+                  onChange={(e) => setDeliveryRescheduleSlot(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600 font-semibold text-slate-700"
+                >
+                  <option value="Morning 09:00 - 13:00">Morning (09:00 AM - 01:00 PM)</option>
+                  <option value="Afternoon 13:00 - 17:00">Afternoon (01:00 PM - 05:00 PM)</option>
+                  <option value="Evening 17:00 - 21:00">Evening (05:00 PM - 09:00 PM)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-navy mb-1">Reason for Rescheduling</label>
+                <input
+                  type="text"
+                  required
+                  value={deliveryRescheduleReason}
+                  onChange={(e) => setDeliveryRescheduleReason(e.target.value)}
+                  placeholder="e.g. Attending doctor consultation on original date"
+                  className="w-full p-2.5 rounded-xl border border-border text-xs outline-none focus:border-teal-600"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="md"
+                  className="flex-1 justify-center"
+                  onClick={() => setIsDeliveryRescheduleModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="md"
+                  className="flex-1 justify-center bg-teal-600 hover:bg-teal-700 text-white font-bold"
+                  disabled={isSubmittingDeliveryReschedule}
+                >
+                  {isSubmittingDeliveryReschedule ? 'Submitting...' : 'Confirm Request'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <Footer />
     </div>
   );
 }
+

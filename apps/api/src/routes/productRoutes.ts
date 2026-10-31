@@ -12,13 +12,16 @@ import {
   clearPatientCart,
   cancelPatientOrder,
   requestOrderReturn,
+  requestOrderDeliveryReschedule,
   scheduleOrderSetup,
   submitProductReview,
   listProductReviews,
   submitProductComplaint,
   listPatientComplaints,
   updateOrderDeliveryEstimate,
+  submitDeliveryRating,
 } from '../services/productCatalogService.js';
+import { DeliveryRating } from '../models/DeliveryRating.js';
 import {
   getPaymentGatewayConfig,
   createPaymentIntent,
@@ -411,6 +414,33 @@ productRoutes.post(
 );
 
 /**
+ * POST /api/v1/products/orders/:idOrNumber/reschedule-request
+ * Request delivery rescheduling for an in-progress order
+ */
+productRoutes.post(
+  '/orders/:idOrNumber/reschedule-request',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { requestedDate, timeSlot, reason } = req.body;
+      const order = await requestOrderDeliveryReschedule(
+        req.params.idOrNumber,
+        req.userPayload!.userId,
+        { requestedDate, timeSlot, reason }
+      );
+
+      res.json({
+        success: true,
+        message: 'Delivery reschedule request submitted for operations review',
+        data: order,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * PATCH /api/v1/products/orders/:idOrNumber/setup-schedule
  * Schedule or update clinician setup visit for equipment requiring installation
  */
@@ -551,25 +581,77 @@ productRoutes.get('/:id/reviews', async (req: Request, res: Response, next: Next
 
 /**
  * POST /api/v1/products/:id/reviews
- * Submit verified product review for delivered order
+ * Submit verified product review for delivered order with optional issue reporting
  */
 productRoutes.post(
   '/:id/reviews',
   authenticateUser,
   async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-      const { orderId, rating, title, comment } = req.body;
+      const { orderId, rating, title, comment, hasIssueReported, issueCategory, issueDetails } = req.body;
       const review = await submitProductReview(
         req.userPayload!.userId,
         req.user?.fullName || '',
         req.params.id,
-        { orderId, rating, title, comment }
+        { orderId, rating, title, comment, hasIssueReported, issueCategory, issueDetails }
       );
 
       res.status(201).json({
         success: true,
         message: 'Review submitted successfully',
         data: review,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/products/orders/:idOrNumber/delivery-rating
+ * Submit verified delivery experience rating (1 to 5 stars)
+ */
+productRoutes.post(
+  '/orders/:idOrNumber/delivery-rating',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { rating, punctualityRating, communicationRating, handlingRating, feedback } = req.body;
+      const deliveryRating = await submitDeliveryRating(
+        req.userPayload!.userId,
+        req.user?.fullName || '',
+        req.params.idOrNumber,
+        { rating, punctualityRating, communicationRating, handlingRating, feedback }
+      );
+
+      res.status(201).json({
+        success: true,
+        message: 'Delivery experience rated successfully',
+        data: deliveryRating,
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/v1/products/orders/:idOrNumber/delivery-rating
+ * Get delivery rating for an order
+ */
+productRoutes.get(
+  '/orders/:idOrNumber/delivery-rating',
+  authenticateUser,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const rating = await DeliveryRating.findOne({
+        $or: [{ orderId: req.params.idOrNumber }, { orderNumber: req.params.idOrNumber }],
+        patientId: req.userPayload!.userId,
+      }).lean();
+
+      res.json({
+        success: true,
+        data: rating,
       });
     } catch (err) {
       next(err);

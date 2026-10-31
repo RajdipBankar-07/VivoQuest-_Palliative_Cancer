@@ -141,6 +141,12 @@ export const formatNotificationMessage = (templateId: NotificationTemplateId, pa
     case 'PRODUCT_ORDER_DELIVERY_UPDATED':
       return `Namaste ${params.patientName || 'Patient'}, the estimated delivery date for your VivoQuest Order #${params.orderNumber || ''} has been updated to ${params.newEstimate || 'a revised date'}${params.reason ? ` (Reason: ${params.reason})` : ''}. Previous estimate: ${params.previousEstimate || 'Original'}. Track at ${params.orderUrl || 'your account'}.`;
 
+    case 'DELIVERY_OTP_REQUESTED':
+      return `Namaste ${params.patientName || 'Customer'}, your VivoQuest delivery verification OTP for Order #${params.orderNumber || ''} is ${params.otp}. Valid for 10 minutes. Please share this OTP with your delivery executive only after receiving and inspecting the package.`;
+
+    case 'DELIVERY_COMPLETED_RATING_REQUEST':
+      return `Namaste ${params.patientName || 'Customer'}, your VivoQuest Order #${params.orderNumber || ''} has been delivered successfully. Please rate your delivery experience and share feedback at ${params.orderUrl || 'your account'}.`;
+
     case 'OPERATIONAL_ALERT':
       return `Operational Alert: ${params.message || 'Action required on field visit operations.'}`;
 

@@ -58,6 +58,10 @@ export const Navbar: React.FC = () => {
     { label: 'Medical Equipment', href: '/products' },
     { label: 'Subscriptions', href: '/subscriptions' },
     {
+      label: 'Operations Portal',
+      href: '/operations/dashboard',
+    },
+    {
       label: 'Admin Portal',
       href: hasAdminSession ? '/admin/dashboard' : '/admin/login?returnUrl=/admin/dashboard',
     },
@@ -67,6 +71,7 @@ export const Navbar: React.FC = () => {
     const baseHref = href.split('?')[0];
     if (baseHref === '/') return pathname === '/';
     if (baseHref.startsWith('/#')) return false;
+    if (baseHref.startsWith('/operations')) return pathname.startsWith('/operations');
     if (baseHref.startsWith('/admin')) return pathname.startsWith('/admin');
     if (baseHref === '/subscriptions') return pathname.startsWith('/subscriptions') || pathname.startsWith('/caregiver-plans');
     return pathname.startsWith(baseHref);
@@ -143,11 +148,13 @@ export const Navbar: React.FC = () => {
               <div className="flex items-center gap-2">
                 <Link
                   href={
-                    ['admin', 'super_admin'].includes(currentUser.role?.toLowerCase())
+                    ['operations', 'operations_manager', 'product_manager'].includes(currentUser.role?.toLowerCase())
+                      ? '/operations/dashboard'
+                      : ['admin', 'super_admin'].includes(currentUser.role?.toLowerCase())
                       ? '/admin/dashboard'
                       : '/orders'
                   }
-                  title="My Orders & Patient Account"
+                  title="My Operations Account & Portal"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-100 text-navy hover:bg-slate-200/80 transition-colors border border-border"
                 >
                   <User size={14} className="text-primary" />
@@ -259,7 +266,9 @@ export const Navbar: React.FC = () => {
                 <div className="p-3 rounded-xl bg-slate-50 border border-border flex items-center justify-between">
                   <Link
                     href={
-                      ['admin', 'super_admin'].includes(currentUser.role?.toLowerCase())
+                      ['operations', 'operations_manager', 'product_manager'].includes(currentUser.role?.toLowerCase())
+                        ? '/operations/dashboard'
+                        : ['admin', 'super_admin'].includes(currentUser.role?.toLowerCase())
                         ? '/admin/dashboard'
                         : '/orders'
                     }

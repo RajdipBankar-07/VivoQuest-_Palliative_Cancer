@@ -33,3 +33,6 @@ export * from './CaregiverSubscription.js';
 export * from './VisitRescheduleRequest.js';
 export * from './ProductReview.js';
 export * from './ProductComplaint.js';
+export * from './DeliveryRating.js';
+export * from './StockMovement.js';
+export * from './DeliveryProvider.js';

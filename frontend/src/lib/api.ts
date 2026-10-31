@@ -1785,6 +1785,16 @@ export const adminApi = {
     return res.data;
   },
 
+  async getProfitLossAnalytics(params: Record<string, any> = {}) {
+    const query = new URLSearchParams(params).toString();
+    const endpoint = `/api/v1/admin/finances/analytics${query ? `?${query}` : ''}`;
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(endpoint);
+    return res.data;
+  },
+
   async getOwnedProductsFinance(params: Record<string, any> = {}) {
     const query = new URLSearchParams(params).toString();
     const endpoint = `/api/v1/admin/finances/owned-products${query ? `?${query}` : ''}`;
@@ -3055,6 +3065,21 @@ export const productsApi = {
     return res;
   },
 
+  async requestDeliveryReschedule(
+    orderIdOrNumber: string,
+    payload: { requestedDate: string; timeSlot?: string; reason: string }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}/reschedule-request`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return res;
+  },
+
   async scheduleClinicianSetup(orderIdOrNumber: string, payload: {
     setupDate: string;
     setupSlot?: string;
@@ -3085,7 +3110,18 @@ export const productsApi = {
     return res;
   },
 
-  async submitProductReview(productId: string, data: { orderId: string; rating: number; title: string; comment: string }) {
+  async submitProductReview(
+    productId: string,
+    data: {
+      orderId: string;
+      rating: number;
+      title: string;
+      comment: string;
+      hasIssueReported?: boolean;
+      issueCategory?: string;
+      issueDetails?: string;
+    }
+  ) {
     const res = await request<{
       success: boolean;
       message: string;
@@ -3094,6 +3130,35 @@ export const productsApi = {
       method: 'POST',
       body: JSON.stringify(data),
     });
+    return res;
+  },
+
+  async submitDeliveryRating(
+    orderIdOrNumber: string,
+    data: {
+      rating: number;
+      punctualityRating?: number;
+      communicationRating?: number;
+      handlingRating?: number;
+      feedback?: string;
+    }
+  ) {
+    const res = await request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}/delivery-rating`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res;
+  },
+
+  async getDeliveryRating(orderIdOrNumber: string) {
+    const res = await request<{
+      success: boolean;
+      data: any;
+    }>(`/api/v1/products/orders/${orderIdOrNumber}/delivery-rating`);
     return res;
   },
 
@@ -3726,6 +3791,11 @@ export const operationsApi = {
     assignedStaffId?: string;
     setupRequired?: boolean;
     failedOnly?: boolean;
+    dateRange?: string;
+    startDate?: string;
+    endDate?: string;
+    riskFilter?: string;
+    sortBy?: string;
     page?: number;
     limit?: number;
   }) {
@@ -3736,6 +3806,11 @@ export const operationsApi = {
     if (params?.assignedStaffId) query.set('assignedStaffId', params.assignedStaffId);
     if (params?.setupRequired) query.set('setupRequired', 'true');
     if (params?.failedOnly) query.set('failedOnly', 'true');
+    if (params?.dateRange && params.dateRange !== 'all') query.set('dateRange', params.dateRange);
+    if (params?.startDate) query.set('startDate', params.startDate);
+    if (params?.endDate) query.set('endDate', params.endDate);
+    if (params?.riskFilter && params.riskFilter !== 'all') query.set('riskFilter', params.riskFilter);
+    if (params?.sortBy) query.set('sortBy', params.sortBy);
     if (params?.page) query.set('page', params.page.toString());
     if (params?.limit) query.set('limit', params.limit.toString());
     const qStr = query.toString() ? `?${query.toString()}` : '';
@@ -3743,8 +3818,229 @@ export const operationsApi = {
       success: boolean;
       count: number;
       pagination: { total: number; page: number; limit: number; totalPages: number };
+      plannerSummary?: {
+        dateRange: string;
+        timezone: string;
+        kpis: {
+          newOrConfirmed: number;
+          awaitingDispatch: number;
+          inTransit: number;
+          delivered: number;
+          overdue: number;
+          rescheduleRequests: number;
+        };
+        alerts: {
+          dueToday: number;
+          dueSoon: number;
+          atRisk: number;
+          overdue: number;
+          delivered: number;
+        };
+      };
       data: any[];
     }>(`/api/v1/operations/orders${qStr}`);
+  },
+
+  async getDeliveryPlanner(params?: {
+    dateRange?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: string;
+    sourcingType?: string;
+    riskFilter?: string;
+    sortBy?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.dateRange && params.dateRange !== 'all') query.set('dateRange', params.dateRange);
+    if (params?.startDate) query.set('startDate', params.startDate);
+    if (params?.endDate) query.set('endDate', params.endDate);
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.riskFilter && params.riskFilter !== 'all') query.set('riskFilter', params.riskFilter);
+    if (params?.sortBy) query.set('sortBy', params.sortBy);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{
+      success: boolean;
+      data: {
+        summary: {
+          dateRange: string;
+          timezone: string;
+          kpis: {
+            newOrConfirmed: number;
+            awaitingDispatch: number;
+            inTransit: number;
+            delivered: number;
+            overdue: number;
+            rescheduleRequests: number;
+          };
+          alerts: {
+            dueToday: number;
+            dueSoon: number;
+            atRisk: number;
+            overdue: number;
+            delivered: number;
+          };
+        };
+        orders: any[];
+        pagination: { total: number; page: number; limit: number; totalPages: number };
+      };
+    }>(`/api/v1/operations/delivery-planner${qStr}`);
+  },
+
+  async getNotifications(params?: { unreadOnly?: boolean; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.unreadOnly) query.set('unreadOnly', 'true');
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{
+      success: boolean;
+      unreadCount: number;
+      data: Array<{
+        _id: string;
+        channel: string;
+        recipient: string;
+        subject?: string;
+        content: string;
+        metadata?: any;
+        status: string;
+        readAt?: string;
+        createdAt: string;
+      }>;
+    }>(`/api/v1/operations/notifications${qStr}`);
+  },
+
+  async markNotificationRead(id: string) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/notifications/${id}/read`,
+      { method: 'PATCH' }
+    );
+  },
+
+  async markAllNotificationsRead() {
+    return request<{ success: boolean; message: string }>(
+      '/api/v1/operations/notifications/mark-all-read',
+      { method: 'POST' }
+    );
+  },
+
+  async requestDeliveryOtp(id: string) {
+    return request<{
+      success: boolean;
+      message: string;
+      data: {
+        orderId: string;
+        orderNumber: string;
+        phoneMasked: string;
+        expiresAt: string;
+        cooldownSeconds: number;
+      };
+    }>(`/api/v1/operations/orders/${id}/request-delivery-otp`, {
+      method: 'POST',
+    });
+  },
+
+  async verifyDeliveryOtp(
+    id: string,
+    payload: {
+      otp: string;
+      recipientName?: string;
+      recipientRelationship?: string;
+      deliveryCondition?: string;
+      customerAcknowledgement?: boolean;
+      proofUrl?: string;
+      notes?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${id}/verify-delivery-otp`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async managerDeliveryOverride(
+    id: string,
+    payload: {
+      overrideReason: string;
+      identityDocType: string;
+      identityDocLast4?: string;
+      recipientName: string;
+      recipientRelationship?: string;
+      deliveryCondition?: string;
+      proofUrl?: string;
+      notes?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${id}/manager-delivery-override`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async getCompletedDeliveries(params?: {
+    dateRange?: string;
+    startDate?: string;
+    endDate?: string;
+    deliveryStaffId?: string;
+    sourcingType?: string;
+    ratingStatus?: string;
+    verificationMethod?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.dateRange && params.dateRange !== 'all') query.set('dateRange', params.dateRange);
+    if (params?.startDate) query.set('startDate', params.startDate);
+    if (params?.endDate) query.set('endDate', params.endDate);
+    if (params?.deliveryStaffId && params.deliveryStaffId !== 'all') query.set('deliveryStaffId', params.deliveryStaffId);
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.ratingStatus && params.ratingStatus !== 'all') query.set('ratingStatus', params.ratingStatus);
+    if (params?.verificationMethod && params.verificationMethod !== 'all') query.set('verificationMethod', params.verificationMethod);
+    if (params?.search) query.set('search', params.search);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+
+    return request<{
+      success: boolean;
+      count: number;
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+      summary: {
+        totalDelivered: number;
+        otpVerifiedCount: number;
+        managerOverrideCount: number;
+        ratedCount: number;
+        avgDeliveryRating: number;
+      };
+      data: any[];
+    }>(`/api/v1/operations/completed-deliveries${qStr}`);
+  },
+
+  async getDeliveryRatingsSummary() {
+    return request<{
+      success: boolean;
+      data: {
+        totalRatings: number;
+        averageRating: number;
+        punctualityAvg: number;
+        communicationAvg: number;
+        handlingAvg: number;
+        starBreakdown: Record<number, number>;
+        recentFeedback: any[];
+      };
+    }>('/api/v1/operations/delivery-ratings/summary');
   },
 
   async getOrderById(id: string) {
@@ -3799,6 +4095,13 @@ export const operationsApi = {
       setupNotes?: string;
       checklistResults?: Array<{ item: string; checked: boolean }>;
       supportingDocUrl?: string;
+      costBreakdown?: {
+        labourCost?: number;
+        transportCost?: number;
+        partsCost?: number;
+        otherApprovedCharges?: number;
+      };
+      customerConfirmationConfirmed?: boolean;
     }
   ) {
     return request<{ success: boolean; message: string; data: any }>(
@@ -3842,6 +4145,13 @@ export const operationsApi = {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
+  },
+
+  async manageInventory(payload: any) {
+    if (payload.productId) {
+      return this.updateProduct(payload.productId, payload);
+    }
+    return this.createProduct(payload);
   },
 
   async updateProductCondition(id: string, payload: { condition: string; conditionNotes?: string }) {
@@ -3970,6 +4280,381 @@ export const operationsApi = {
       setupStatus: payload.setupStatus,
       setupNotes: payload.setupNotes,
     });
+  },
+
+  async reserveStock(orderId: string) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/reserve-stock`,
+      { method: 'POST' }
+    );
+  },
+
+  async requestSupplierConfirmation(orderId: string, supplierId?: string) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/supplier-confirmation`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ supplierId }),
+      }
+    );
+  },
+
+  async flagDelay(
+    orderId: string,
+    payload: { delayReason: string; revisedEstimatedDate: string; notes?: string }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/flag-delay`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async getSlaAlerts() {
+    return request<{ success: boolean; data: any }>('/api/v1/operations/sla-alerts');
+  },
+
+  async getRescheduleRequests(status?: string) {
+    const qStr = status && status !== 'all' ? `?status=${encodeURIComponent(status)}` : '';
+    return request<{ success: boolean; data: any[] }>(`/api/v1/operations/reschedule-requests${qStr}`);
+  },
+
+  async reviewReschedule(
+    orderId: string,
+    payload: {
+      requestId: string;
+      action: 'approve' | 'reject' | 'propose_alternative';
+      reason?: string;
+      alternativeDate?: string;
+      alternativeSlot?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/reschedule-review`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async getOrderProfitability(orderId: string) {
+    return request<{ success: boolean; data: any }>(`/api/v1/operations/orders/${orderId}/profitability`);
+  },
+
+  async getReturns(params?: { returnStatus?: string; search?: string }) {
+    const query = new URLSearchParams();
+    if (params?.returnStatus && params.returnStatus !== 'all') query.set('returnStatus', params.returnStatus);
+    if (params?.search) query.set('search', params.search);
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{ success: boolean; data: any[] }>(`/api/v1/operations/returns${qStr}`);
+  },
+
+  async reviewReturn(orderId: string, payload: { action: 'approve' | 'reject'; rejectionReason?: string }) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/returns/review`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async scheduleReturnPickup(
+    orderId: string,
+    payload: { scheduledDate: string; assignedStaffId: string; notes?: string }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/returns/schedule-pickup`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async recordPickupOutcome(
+    orderId: string,
+    payload: {
+      pickupStatus: 'completed' | 'attempt_failed';
+      failureReason?: string;
+      pickupProofUrl?: string;
+      itemConditionChecklist?: Array<{ item: string; passed: boolean }>;
+      customerHandoverConfirmed?: boolean;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/returns/pickup-outcome`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async recordReturnInspection(
+    orderId: string,
+    payload: {
+      result: string;
+      notes?: string;
+      photos?: string[];
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/returns/inspection`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async finalizeReturnResolution(
+    orderId: string,
+    payload: {
+      type: string;
+      refundAmount?: number;
+      notes?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/returns/resolution`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async getComplaints(params?: { status?: string; category?: string; search?: string }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.search) query.set('search', params.search);
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{ success: boolean; data: any[] }>(`/api/v1/operations/complaints${qStr}`);
+  },
+
+  async resolveComplaint(
+    complaintId: string,
+    payload: { status: 'resolved' | 'rejected' | 'under_review'; resolutionNotes: string; refundAmount?: number }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/complaints/${complaintId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async getReviews(params?: { status?: string; search?: string }) {
+    const query = new URLSearchParams();
+    if (params?.status && params.status !== 'all') query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{ success: boolean; data: any[] }>(`/api/v1/operations/reviews${qStr}`);
+  },
+
+  // ===========================================================================
+  // INVENTORY & STOCK MANAGEMENT APIS (Phase 16)
+  // ===========================================================================
+
+  async getInventorySummary() {
+    return request<{
+      success: boolean;
+      data: {
+        totalActiveSkus: number;
+        totalOnHandUnits: number;
+        totalReservedUnits: number;
+        totalAvailableUnits: number;
+        lowStockCount: number;
+        outOfStockCount: number;
+        incomingUnitsFromPOs: number;
+        supplierConfirmationRequiredCount: number;
+      };
+    }>('/api/v1/operations/inventory/summary');
+  },
+
+  async getInventoryProducts(params?: {
+    search?: string;
+    category?: string;
+    sourcingType?: string;
+    stockStatus?: string;
+    page?: number;
+    limit?: number;
+    sortBy?: string;
+  }) {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.category && params.category !== 'all') query.set('category', params.category);
+    if (params?.sourcingType && params.sourcingType !== 'all') query.set('sourcingType', params.sourcingType);
+    if (params?.stockStatus && params.stockStatus !== 'all') query.set('stockStatus', params.stockStatus);
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    if (params?.sortBy) query.set('sortBy', params.sortBy);
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{
+      success: boolean;
+      data: any[];
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+    }>(`/api/v1/operations/inventory/products${qStr}`);
+  },
+
+  async adjustStock(
+    productId: string,
+    payload: {
+      newQuantity: number;
+      reason: string;
+      movementType?: string;
+      notes?: string;
+    }
+  ) {
+    return request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/operations/inventory/products/${productId}/adjust-stock`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async confirmSupplierAvailability(
+    productId: string,
+    payload: {
+      status?: string;
+      leadTimeDays?: number;
+      notes?: string;
+    }
+  ) {
+    return request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/operations/inventory/products/${productId}/confirm-supplier`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async createRestockPO(
+    productId: string,
+    payload: {
+      quantity?: number;
+      unitCost?: number;
+      supplierId?: string;
+      notes?: string;
+    }
+  ) {
+    return request<{
+      success: boolean;
+      message: string;
+      data: any;
+    }>(`/api/v1/operations/inventory/products/${productId}/create-reorder-po`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getStockMovements(productId: string, params?: { page?: number; limit?: number }) {
+    const query = new URLSearchParams();
+    if (params?.page) query.set('page', params.page.toString());
+    if (params?.limit) query.set('limit', params.limit.toString());
+    const qStr = query.toString() ? `?${query.toString()}` : '';
+    return request<{
+      success: boolean;
+      data: any[];
+      pagination: { total: number; page: number; limit: number; totalPages: number };
+    }>(`/api/v1/operations/inventory/products/${productId}/movements${qStr}`);
+  },
+
+  // ===========================================================================
+  // PROVIDER-BASED DELIVERY & WHATSAPP COORDINATION APIS
+  // ===========================================================================
+
+  async getDeliveryProviders(search?: string) {
+    const qStr = search ? `?search=${encodeURIComponent(search)}` : '';
+    return request<{ success: boolean; data: any[] }>(`/api/v1/operations/delivery-providers${qStr}`);
+  },
+
+  async saveDeliveryProvider(payload: {
+    id?: string;
+    name: string;
+    providerCode?: string;
+    contactPerson?: string;
+    phone: string;
+    email?: string;
+    serviceArea?: string;
+    deliveryInstructions?: string;
+    status?: string;
+    isDefault?: boolean;
+    notes?: string;
+  }) {
+    return request<{ success: boolean; message: string; data: any }>('/api/v1/operations/delivery-providers', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async coordinateOrderProvider(
+    orderId: string,
+    payload: {
+      providerId?: string;
+      providerName: string;
+      deliveryPersonName?: string;
+      contactPhone: string;
+      email?: string;
+      serviceArea?: string;
+      deliveryInstructions?: string;
+      scheduledDeliveryDate?: string;
+      coordinationStatus?: string;
+      saveToLibrary?: boolean;
+      notes?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/coordinate-provider`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  },
+
+  async previewWhatsAppDelivery(orderId: string) {
+    return request<{
+      success: boolean;
+      data: {
+        orderNumber: string;
+        providerName: string;
+        providerPhone: string;
+        message: string;
+        waDirectUrl: string;
+        coordinationStatus: string;
+        whatsappStatus: string;
+      };
+    }>(`/api/v1/operations/orders/${orderId}/whatsapp-preview`, {
+      method: 'POST',
+    });
+  },
+
+  async recordWhatsAppAction(
+    orderId: string,
+    payload: {
+      action: 'opened_in_whatsapp' | 'sent_confirmed' | 'provider_acknowledged';
+      notes?: string;
+    }
+  ) {
+    return request<{ success: boolean; message: string; data: any }>(
+      `/api/v1/operations/orders/${orderId}/whatsapp-action`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
   },
 };
 

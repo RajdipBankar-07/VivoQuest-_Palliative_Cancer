@@ -35,6 +35,8 @@ export type NotificationTemplateId =
   | 'PRODUCT_ORDER_DELIVERY_UPDATED'
   | 'PRODUCT_ORDER_DISPATCHED'
   | 'PRODUCT_ORDER_DELIVERED'
+  | 'DELIVERY_OTP_REQUESTED'
+  | 'DELIVERY_COMPLETED_RATING_REQUEST'
   | 'PRODUCT_ORDER_CANCELLED'
   | 'PAYMENT_RECEIVED'
   | 'PAYMENT_FAILED'
@@ -47,7 +49,7 @@ export type NotificationStatus = 'sent' | 'delivered' | 'failed' | 'simulated';
 export interface INotificationLog extends Document {
   recipientPhone: string;
   recipientName: string;
-  recipientRole: 'patient' | 'caregiver' | 'professional' | 'hospital' | 'admin' | 'super_admin';
+  recipientRole: 'patient' | 'caregiver' | 'professional' | 'hospital' | 'admin' | 'super_admin' | 'operations' | 'operations_manager';
   recipientUserId?: string;
   channel: NotificationChannel;
   templateId: NotificationTemplateId;
@@ -110,7 +112,7 @@ const NotificationLogSchema = new Schema<INotificationLog>(
     },
     recipientRole: {
       type: String,
-      enum: ['patient', 'caregiver', 'professional', 'hospital', 'admin', 'super_admin'],
+      enum: ['patient', 'caregiver', 'professional', 'hospital', 'admin', 'super_admin', 'operations', 'operations_manager'],
       default: 'patient',
       index: true,
     },
@@ -160,6 +162,8 @@ const NotificationLogSchema = new Schema<INotificationLog>(
         'PRODUCT_ORDER_DELIVERY_UPDATED',
         'PRODUCT_ORDER_DISPATCHED',
         'PRODUCT_ORDER_DELIVERED',
+        'DELIVERY_OTP_REQUESTED',
+        'DELIVERY_COMPLETED_RATING_REQUEST',
         'PRODUCT_ORDER_CANCELLED',
         'PAYMENT_RECEIVED',
         'PAYMENT_FAILED',

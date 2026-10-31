@@ -35,8 +35,14 @@ import {
   AlertTriangle,
   HelpCircle,
   Check,
+  Activity,
+  Wallet,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { adminApi } from '@/lib/api';
+import { ProfitLossAnalyticsGraph } from './ProfitLossAnalyticsGraph';
 
 type FinanceTab = 'overview' | 'owned' | 'marketplace' | 'subscriptions';
 type DatePreset = 'all' | 'today' | 'yesterday' | 'last_7_days' | 'this_month' | 'previous_month' | 'custom';
@@ -57,6 +63,13 @@ export function FinancialSummaryView() {
   const [ownedPage, setOwnedPage] = useState(1);
   const [marketplacePage, setMarketplacePage] = useState(1);
   const [subscriptionsPage, setSubscriptionsPage] = useState(1);
+
+  // Overview Unified Transactions & Secondary Sections
+  const [overviewTxPage, setOverviewTxPage] = useState(1);
+  const [overviewCategoryFilter, setOverviewCategoryFilter] = useState('all');
+  const [overviewStatusFilter, setOverviewStatusFilter] = useState('all');
+  const [overviewTxSearch, setOverviewTxSearch] = useState('');
+  const [showSecondaryTaxRecords, setShowSecondaryTaxRecords] = useState(false);
 
   // Tab-specific data
   const [overviewData, setOverviewData] = useState<any>(null);
@@ -80,6 +93,7 @@ export function FinancialSummaryView() {
     setOwnedPage(1);
     setMarketplacePage(1);
     setSubscriptionsPage(1);
+    setOverviewTxPage(1);
   }, [datePreset, customStart, customEnd, searchQuery, statusFilter]);
 
   const getFilterParams = (pageOverride?: number) => {
@@ -192,16 +206,78 @@ export function FinancialSummaryView() {
     return marketplaceData.transactions.slice(startIdx, startIdx + RECORDS_PER_PAGE);
   }, [marketplaceData, marketplacePage]);
 
+  // Overview Tab Unified Transactions filtering & pagination
+  const filteredOverviewTransactions = useMemo(() => {
+    const list: any[] = overviewData?.unifiedTransactions || [];
+    return list.filter((tx) => {
+      // Category filter
+      if (overviewCategoryFilter !== 'all') {
+        if (overviewCategoryFilter === 'owned' && tx.category !== 'Owned Product') return false;
+        if (overviewCategoryFilter === 'marketplace' && tx.category !== 'Marketplace Partner') return false;
+        if (overviewCategoryFilter === 'subscription' && !tx.category.includes('Subscription')) return false;
+        if (overviewCategoryFilter === 'package' && !tx.category.includes('Package')) return false;
+      }
+      // Status filter
+      if (overviewStatusFilter !== 'all') {
+        if (overviewStatusFilter === 'successful' && tx.paymentStatus !== 'Successful') return false;
+        if (overviewStatusFilter === 'pending' && tx.paymentStatus !== 'Pending') return false;
+        if (overviewStatusFilter === 'failed' && tx.paymentStatus !== 'Failed') return false;
+        if (overviewStatusFilter === 'refunded' && tx.paymentStatus !== 'Refunded') return false;
+      }
+      // Search query
+      if (overviewTxSearch.trim()) {
+        const q = overviewTxSearch.toLowerCase();
+        const matchesRef = (tx.reference || '').toLowerCase().includes(q);
+        const matchesPatient = (tx.patientName || '').toLowerCase().includes(q);
+        const matchesSummary = (tx.itemsSummary || '').toLowerCase().includes(q);
+        const matchesReason = (tx.cancellationReason || '').toLowerCase().includes(q);
+        if (!matchesRef && !matchesPatient && !matchesSummary && !matchesReason) return false;
+      }
+      return true;
+    });
+  }, [overviewData, overviewCategoryFilter, overviewStatusFilter, overviewTxSearch]);
+
+  const totalOverviewTxCount = filteredOverviewTransactions.length;
+  const totalOverviewTxPages = Math.ceil(totalOverviewTxCount / RECORDS_PER_PAGE) || 1;
+  const paginatedOverviewTransactions = useMemo(() => {
+    const startIdx = (overviewTxPage - 1) * RECORDS_PER_PAGE;
+    return filteredOverviewTransactions.slice(startIdx, startIdx + RECORDS_PER_PAGE);
+  }, [filteredOverviewTransactions, overviewTxPage]);
+
   const totalOwnedCount = ownedData?.pagination?.total ?? ownedData?.transactions?.length ?? 0;
   const totalOwnedPages = Math.ceil(totalOwnedCount / RECORDS_PER_PAGE) || 1;
 
   const totalMarketplaceCount = marketplaceData?.pagination?.total ?? marketplaceData?.transactions?.length ?? 0;
   const totalMarketplacePages = Math.ceil(totalMarketplaceCount / RECORDS_PER_PAGE) || 1;
 
-  // Overview Executive Calculations
+  // Overview Executive & Simplified Calculations
   const exec = overviewData?.executiveSummary || {};
-  const isProfit = (exec.netProfitOrLoss ?? exec.estimatedContributionMargin ?? 0) >= 0;
-  const netProfitOrLossValue = Math.abs(exec.netProfitOrLoss ?? exec.estimatedContributionMargin ?? 0);
+  const primaryKpis = overviewData?.primaryKpis || {
+    totalMoneyReceived: exec.totalCustomerCollections ?? exec.grossMerchandiseValue ?? 0,
+    productSalesRevenue: overviewData?.sectionSummaries?.ownedProducts?.grossSales ?? 0,
+    marketplaceSales: {
+      gmv: overviewData?.sectionSummaries?.marketplace?.gmv ?? 0,
+      vivoquestRevenue: overviewData?.sectionSummaries?.marketplace?.earnedCommission ?? 0,
+      supplierPayable: exec.pendingSupplierPayments ?? 0,
+    },
+    subscriptionRevenue: overviewData?.sectionSummaries?.subscriptions?.collections ?? 0,
+    activeSubscriptions: overviewData?.sectionSummaries?.subscriptions?.activeCount ?? 0,
+    refundsAndCancellations: {
+      completedRefundsAmount: exec.completedRefunds ?? 0,
+      refundedOrdersCount: 0,
+      cancelledOrdersCount: 0,
+      cancelledSubscriptionsCount: 0,
+    },
+    netOperatingResult: {
+      amount: exec.netProfitOrLoss ?? exec.estimatedContributionMargin ?? 0,
+      isProfit: (exec.netProfitOrLoss ?? exec.estimatedContributionMargin ?? 0) >= 0,
+      marginPct: exec.contributionMarginPct ?? 0,
+      costDataStatus: exec.costDataStatus ?? 'complete',
+    },
+  };
+  const pnl = overviewData?.profitAndLoss || {};
+  const isProfit = (primaryKpis.netOperatingResult?.amount ?? exec.netProfitOrLoss ?? 0) >= 0;
+  const netProfitOrLossValue = Math.abs(primaryKpis.netOperatingResult?.amount ?? exec.netProfitOrLoss ?? 0);
 
   return (
     <div className="space-y-6">
@@ -439,7 +515,7 @@ export function FinancialSummaryView() {
       )}
 
       {/* ===================================================================== */}
-      {/* SECTION 1: OVERALL FINANCIAL SUMMARY (FOR NON-TECHNICAL ADMINS) */}
+      {/* SECTION 1: SIMPLIFIED OVERALL FINANCIAL SUMMARY (FOR NON-TECHNICAL ADMINS) */}
       {/* ===================================================================== */}
       {!isLoading && !error && activeSubTab === 'overview' && overviewData && (
         <div className="space-y-6 animate-in fade-in">
@@ -468,6 +544,9 @@ export function FinancialSummaryView() {
                   >
                     {isProfit ? '▲ Net Operating Profit' : '▼ Net Operating Loss'}
                   </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-white text-slate-700 border border-slate-200">
+                    {primaryKpis.netOperatingResult?.costDataStatus === 'complete' ? 'Reconciled Data' : 'Estimated Data'}
+                  </span>
                   <span className="text-xs font-semibold text-slate-500">
                     Period: {overviewData.periodLabel}
                   </span>
@@ -477,288 +556,551 @@ export function FinancialSummaryView() {
                 </h3>
                 <p className="text-xs text-slate-600 mt-1 max-w-2xl leading-relaxed">
                   <strong>How this was calculated:</strong>{' '}
-                  {exec.calculationExplanation ||
+                  {pnl.explanation || exec.calculationExplanation ||
                     'Customer Collections minus Direct Equipment Procurement Costs, Caregiver Bedside Payouts, Payment Gateway Fees, and Customer Refunds.'}
                 </p>
               </div>
             </div>
 
-            <div className="bg-white/80 backdrop-blur-sm p-4 rounded-2xl border border-slate-200/80 text-xs space-y-1.5 shrink-0 w-full lg:w-72">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Quick Formula</div>
+            <div className="bg-white/90 backdrop-blur-sm p-4 rounded-2xl border border-slate-200/80 text-xs space-y-1.5 shrink-0 w-full lg:w-80 shadow-sm">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Core Principle</div>
               <div className="font-semibold text-slate-800">
-                Sales − Refunds − Direct Costs = Estimated Net
+                Recognized Revenue − Direct Costs = Net Operating Margin
               </div>
-              <p className="text-[11px] text-slate-500">
-                Taxes are held separately in trust and are never counted as business profit.
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Third-party supplier GMV and statutory GST are held in trust and never counted as platform profit.
               </p>
             </div>
           </div>
 
-          {/* 8 Primary Financial Summary Cards (Section 1A) */}
+          {/* 7 PRIMARY FINANCIAL KPI CARDS (Responsive: ~4 cards per row) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* 1. Total Customer Collections */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            {/* 1. Total Money Received */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-teal-300 transition">
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Total Customer Collections</span>
+                  <span className="text-xs font-bold text-slate-500">1. Total Money Received</span>
                   <span className="p-2 rounded-xl bg-teal-50 text-teal-700">
-                    <DollarSign size={16} />
+                    <Wallet size={16} />
                   </span>
                 </div>
                 <p className="text-2xl font-black text-slate-900 mt-2">
-                  ₹{(exec.totalCustomerCollections ?? exec.grossMerchandiseValue ?? 0).toLocaleString('en-IN')}
+                  ₹{(primaryKpis.totalMoneyReceived || 0).toLocaleString('en-IN')}
                 </p>
               </div>
               <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>Realized money collected from customer payments across all services</span>
+                <span>Successful, verified customer collections for selected period</span>
               </div>
             </div>
 
-            {/* 2. Total Direct Expenses */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            {/* 2. Product Sales Revenue */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-blue-300 transition">
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Total Direct Expenses</span>
-                  <span className="p-2 rounded-xl bg-amber-50 text-amber-700">
-                    <Truck size={16} />
-                  </span>
-                </div>
-                <p className="text-2xl font-black text-slate-900 mt-2">
-                  ₹{(exec.totalExpenses ?? ((exec.directCOGS || 0) + (exec.laborLiabilities || 0) + (exec.gatewayFees || 0))).toLocaleString('en-IN')}
-                </p>
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>Equipment purchasing costs + Caregiver shift payouts + Gateway fees</span>
-              </div>
-            </div>
-
-            {/* 3. Pending Customer Payments */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Pending Customer Payments</span>
+                  <span className="text-xs font-bold text-slate-500">2. Product Sales Revenue</span>
                   <span className="p-2 rounded-xl bg-blue-50 text-blue-700">
-                    <Clock size={16} />
+                    <ShoppingBag size={16} />
                   </span>
                 </div>
-                <p className="text-2xl font-black text-blue-700 mt-2">
-                  ₹{(exec.pendingCustomerPayments ?? 0).toLocaleString('en-IN')}
+                <p className="text-2xl font-black text-slate-900 mt-2">
+                  ₹{(primaryKpis.productSalesRevenue || 0).toLocaleString('en-IN')}
                 </p>
               </div>
               <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>Orders pending payment verification or awaiting doorstep cash on delivery</span>
+                <span>VivoQuest-owned medical equipment retail sales</span>
               </div>
             </div>
 
-            {/* 4. Pending Supplier Payments */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            {/* 3. Marketplace Sales */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-amber-300 transition">
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Pending Supplier Payments</span>
-                  <span className="p-2 rounded-xl bg-orange-50 text-orange-700">
+                  <span className="text-xs font-bold text-slate-500">3. Marketplace Sales</span>
+                  <span className="p-2 rounded-xl bg-amber-50 text-amber-700">
                     <Building2 size={16} />
                   </span>
                 </div>
-                <p className="text-2xl font-black text-orange-700 mt-2">
-                  ₹{(exec.pendingSupplierPayments ?? exec.supplierLiabilitiesPending ?? 0).toLocaleString('en-IN')}
+                <p className="text-2xl font-black text-slate-900 mt-2">
+                  ₹{(primaryKpis.marketplaceSales?.gmv || 0).toLocaleString('en-IN')}
                 </p>
               </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>Trade liability: Money still owed to third-party equipment suppliers</span>
+              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500 flex items-center justify-between">
+                <span>Third-party GMV</span>
+                <span className="font-bold text-amber-800">Own Share: ₹{(primaryKpis.marketplaceSales?.vivoquestRevenue || 0).toLocaleString('en-IN')}</span>
               </div>
             </div>
 
-            {/* 5. Completed Customer Refunds */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            {/* 4. Subscription Revenue */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-indigo-300 transition">
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Completed Refunds</span>
+                  <span className="text-xs font-bold text-slate-500">4. Subscription Revenue</span>
+                  <span className="p-2 rounded-xl bg-indigo-50 text-indigo-700">
+                    <HeartPulse size={16} />
+                  </span>
+                </div>
+                <p className="text-2xl font-black text-slate-900 mt-2">
+                  ₹{(primaryKpis.subscriptionRevenue || 0).toLocaleString('en-IN')}
+                </p>
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
+                <span>Caregiver subscriptions and visit package payments</span>
+              </div>
+            </div>
+
+            {/* 5. Active Subscriptions */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-emerald-300 transition">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">5. Active Subscriptions</span>
+                  <span className="p-2 rounded-xl bg-teal-50 text-teal-700">
+                    <Activity size={16} />
+                  </span>
+                </div>
+                <p className="text-2xl font-black text-slate-900 mt-2">
+                  {primaryKpis.activeSubscriptions || 0}
+                </p>
+              </div>
+              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
+                <span>Active caregiver plans as of selected date (not payment count)</span>
+              </div>
+            </div>
+
+            {/* 6. Refunds & Cancellations */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-rose-300 transition">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">6. Refunds &amp; Cancellations</span>
                   <span className="p-2 rounded-xl bg-rose-50 text-rose-700">
                     <RotateCcw size={16} />
                   </span>
                 </div>
                 <p className="text-2xl font-black text-rose-700 mt-2">
-                  ₹{(exec.completedRefunds ?? exec.refundsTotal ?? 0).toLocaleString('en-IN')}
+                  ₹{(primaryKpis.refundsAndCancellations?.completedRefundsAmount || 0).toLocaleString('en-IN')}
                 </p>
               </div>
               <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>Completed returns and order cancellations returned to patient bank accounts</span>
+                <span>{primaryKpis.refundsAndCancellations?.refundedOrdersCount || 0} refunded orders • {primaryKpis.refundsAndCancellations?.cancelledSubscriptionsCount || 0} cancelled plans</span>
               </div>
             </div>
 
-            {/* 6. Statutory Taxes Collected (GST) */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            {/* 7. Net Operating Result (Spans 2 columns on desktop) */}
+            <div
+              className={`p-5 rounded-2xl border shadow-sm flex flex-col justify-between sm:col-span-2 ${
+                isProfit
+                  ? 'bg-emerald-50/50 border-emerald-200'
+                  : 'bg-rose-50/50 border-rose-200'
+              }`}
+            >
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Taxes Collected (GST)</span>
-                  <span className="p-2 rounded-xl bg-purple-50 text-purple-700">
-                    <Receipt size={16} />
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-slate-600">
+                    7. Net Operating Result
+                  </span>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                      isProfit ? 'bg-emerald-200 text-emerald-900' : 'bg-rose-200 text-rose-900'
+                    }`}
+                  >
+                    {isProfit ? 'Estimated Profit' : 'Operating Loss'} ({primaryKpis.netOperatingResult?.costDataStatus === 'complete' ? 'Reconciled' : 'Estimated'})
                   </span>
                 </div>
-                <p className="text-2xl font-black text-purple-800 mt-2">
-                  ₹{(exec.taxesCollected ?? 0).toLocaleString('en-IN')}
-                </p>
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>12% DME &amp; 18% Healthcare GST held in trust (not operating profit)</span>
-              </div>
-            </div>
-
-            {/* 7. Payment Gateway Fees */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Payment Gateway Fees</span>
-                  <span className="p-2 rounded-xl bg-indigo-50 text-indigo-700">
-                    <CreditCard size={16} />
+                <div className="flex items-baseline gap-3 mt-2">
+                  <p className={`text-2xl font-black ${isProfit ? 'text-emerald-900' : 'text-rose-900'}`}>
+                    {isProfit ? '+' : '-'}₹{netProfitOrLossValue.toLocaleString('en-IN')}
+                  </p>
+                  <span className="text-xs font-bold text-slate-500">
+                    Margin: {primaryKpis.netOperatingResult?.marginPct || 0}%
                   </span>
                 </div>
-                <p className="text-2xl font-black text-slate-900 mt-2">
-                  ₹{(exec.paymentGatewayFees ?? exec.gatewayFees ?? 0).toLocaleString('en-IN')}
-                </p>
               </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>Razorpay transaction processing charges (~2% per online payment)</span>
-              </div>
-            </div>
-
-            {/* 8. Net Recognized Margin */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Operating Margin %</span>
-                  <span className="p-2 rounded-xl bg-emerald-50 text-emerald-700">
-                    <Percent size={16} />
-                  </span>
-                </div>
-                <p className="text-2xl font-black text-emerald-800 mt-2">
-                  {exec.contributionMarginPct ?? 0}%
-                </p>
-              </div>
-              <div className="mt-3 pt-2.5 border-t border-slate-100 text-[11px] text-slate-500">
-                <span>Percentage of recognized revenue retained after all direct operating costs</span>
+              <div className="mt-3 pt-2.5 border-t border-slate-200/60 text-[11px] text-slate-600">
+                <span>Recognized revenue minus wholesale equipment procurement, caregiver shift payouts, and payment processing fees</span>
               </div>
             </div>
           </div>
 
-          {/* Simple Visual Cash Inflow vs Outflow Comparison Bar */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
+          {/* UNDERSTANDABLE PROFIT AND LOSS BREAKDOWN */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
               <div>
-                <h4 className="text-sm font-bold text-slate-900">Revenue &amp; Cost Distribution</h4>
-                <p className="text-xs text-slate-500 mt-0.5">Visual decomposition of collected inflows and direct liabilities.</p>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Profit &amp; Loss Financial Breakdown
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Clear step-by-step reconciliation from customer collections to net operating profit.
+                </p>
               </div>
-              <span className="text-xs font-bold text-slate-600">Total Volume: ₹{(exec.grossMerchandiseValue || 0).toLocaleString('en-IN')}</span>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-xl bg-slate-100 text-slate-700">
+                Period: {overviewData.periodLabel}
+              </span>
             </div>
 
-            <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden flex">
+            <div className="space-y-2.5 text-xs">
+              {/* Row 1: Money Received */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-50/60 border border-emerald-100">
+                <div className="flex items-center gap-2 text-slate-800 font-semibold">
+                  <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                  <span>Money received from successful payments</span>
+                </div>
+                <span className="font-extrabold text-emerald-800 text-sm">
+                  +₹{(pnl.moneyReceived || primaryKpis.totalMoneyReceived || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              {/* Row 2: Completed Refunds */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center gap-2 text-slate-700">
+                  <span className="w-4 text-center font-bold text-rose-500">−</span>
+                  <span>Less: Completed customer refunds</span>
+                </div>
+                <span className="font-bold text-rose-700 text-sm">
+                  −₹{(pnl.completedRefunds || primaryKpis.refundsAndCancellations?.completedRefundsAmount || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              {/* Row 3: Product Procurement Costs */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center gap-2 text-slate-700">
+                  <span className="w-4 text-center font-bold text-amber-600">−</span>
+                  <span>Less: Direct product procurement costs (Owned Equipment)</span>
+                </div>
+                <span className="font-bold text-amber-800 text-sm">
+                  −₹{(pnl.directCOGS || exec.directCOGS || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              {/* Row 4: Caregiver Payouts */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center gap-2 text-slate-700">
+                  <span className="w-4 text-center font-bold text-amber-600">−</span>
+                  <span>Less: Recorded caregiver &amp; clinical service payouts</span>
+                </div>
+                <span className="font-bold text-amber-800 text-sm">
+                  −₹{(pnl.caregiverPayouts || exec.laborLiabilities || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              {/* Row 5: Payment Gateway Fees */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center gap-2 text-slate-700">
+                  <span className="w-4 text-center font-bold text-slate-500">−</span>
+                  <span>Less: Recorded payment gateway fees (Razorpay ~2%)</span>
+                </div>
+                <span className="font-bold text-slate-700 text-sm">
+                  −₹{(pnl.paymentGatewayFees || exec.paymentGatewayFees || 0).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              {/* Summary / Result Row */}
               <div
-                style={{ width: `${Math.min(100, Math.max(10, ((overviewData.sectionSummaries?.ownedProducts?.grossSales || 0) / (exec.grossMerchandiseValue || 1)) * 100))}%` }}
-                className="bg-teal-600"
-                title={`Owned Equipment: ₹${overviewData.sectionSummaries?.ownedProducts?.grossSales || 0}`}
-              />
-              <div
-                style={{ width: `${Math.min(100, Math.max(10, ((overviewData.sectionSummaries?.marketplace?.gmv || 0) / (exec.grossMerchandiseValue || 1)) * 100))}%` }}
-                className="bg-amber-500"
-                title={`Marketplace GMV: ₹${overviewData.sectionSummaries?.marketplace?.gmv || 0}`}
-              />
-              <div
-                style={{ width: `${Math.min(100, Math.max(10, ((overviewData.sectionSummaries?.subscriptions?.collections || 0) / (exec.grossMerchandiseValue || 1)) * 100))}%` }}
-                className="bg-indigo-600"
-                title={`Caregiver Plans: ₹${overviewData.sectionSummaries?.subscriptions?.collections || 0}`}
-              />
+                className={`flex items-center justify-between p-4 rounded-2xl border-2 font-bold ${
+                  isProfit
+                    ? 'bg-emerald-100/60 border-emerald-300 text-emerald-950'
+                    : 'bg-rose-100/60 border-rose-300 text-rose-950'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="text-base font-black">=</span>
+                  <div>
+                    <span className="text-sm font-black">Estimated Operating Result</span>
+                    <span className="ml-2 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-white text-slate-700 border border-slate-200">
+                      {primaryKpis.netOperatingResult?.costDataStatus === 'complete' ? 'Reconciled Operational Margin' : 'Estimated Result'}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-lg font-black tracking-tight">
+                  {isProfit ? '+' : '-'}₹{netProfitOrLossValue.toLocaleString('en-IN')}
+                </span>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-2">
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-teal-600 shrink-0" />
-                <span className="text-slate-600">Owned Products: <strong>₹{(overviewData.sectionSummaries?.ownedProducts?.grossSales || 0).toLocaleString('en-IN')}</strong></span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-amber-500 shrink-0" />
-                <span className="text-slate-600">Marketplace GMV: <strong>₹{(overviewData.sectionSummaries?.marketplace?.gmv || 0).toLocaleString('en-IN')}</strong></span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-full bg-indigo-600 shrink-0" />
-                <span className="text-slate-600">Caregiver Plans: <strong>₹{(overviewData.sectionSummaries?.subscriptions?.collections || 0).toLocaleString('en-IN')}</strong></span>
-              </div>
-            </div>
-          </div>
-
-          {/* Net Profit Reconciliation Ledger Table */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Net Profit Reconciliation Ledger</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Authoritative audit ledger reconciling customer inflow and supplier/labor outflow.</p>
-              </div>
-              <div className="flex items-center gap-2 text-xs text-slate-500">
+            {/* Plain-Language Admin Explanation */}
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 text-xs text-slate-600 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-slate-800">
                 <Info size={14} className="text-teal-600" />
-                <span>Period: {overviewData.periodLabel}</span>
+                <span>How This Breakdown Works for Administrators</span>
+              </div>
+              <p className="leading-relaxed">
+                {pnl.explanation || exec.calculationExplanation}
+              </p>
+              <p className="text-[11px] text-slate-500 italic mt-1">
+                Note: Third-party marketplace collections (₹{(primaryKpis.marketplaceSales?.gmv || 0).toLocaleString('en-IN')}) are collected on behalf of external suppliers and are not treated as VivoQuest revenue. GST amounts are held in statutory escrow and are excluded from operating profit.
+              </p>
+            </div>
+          </div>
+
+          {/* PROFIT & LOSS ANALYTICS GRAPH (HIGHCHARTS) */}
+          <ProfitLossAnalyticsGraph
+            initialData={overviewData?.profitLossAnalytics}
+            activeTab={activeSubTab}
+            onRefreshParent={fetchCurrentTabData}
+          />
+
+          {/* UNIFIED TRANSACTIONS AND CANCELLATION HISTORY */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Recent Financial Transactions &amp; Cancellation History
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Unified audit log with plain-language status labels and cancellation preservation.
+                </p>
+              </div>
+
+              {/* Filters */}
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={overviewCategoryFilter}
+                  onChange={(e) => {
+                    setOverviewCategoryFilter(e.target.value);
+                    setOverviewTxPage(1);
+                  }}
+                  className="bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
+                >
+                  <option value="all">All Categories</option>
+                  <option value="owned">Owned Equipment</option>
+                  <option value="marketplace">Marketplace Partners</option>
+                  <option value="subscription">Subscriptions</option>
+                  <option value="package">Visit Packages</option>
+                </select>
+
+                <select
+                  value={overviewStatusFilter}
+                  onChange={(e) => {
+                    setOverviewStatusFilter(e.target.value);
+                    setOverviewTxPage(1);
+                  }}
+                  className="bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-teal-500 font-medium"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="successful">Successful</option>
+                  <option value="pending">Pending</option>
+                  <option value="failed">Failed</option>
+                  <option value="refunded">Refunded / Cancelled</option>
+                </select>
+
+                <div className="relative">
+                  <Search size={13} className="absolute left-2.5 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={overviewTxSearch}
+                    onChange={(e) => {
+                      setOverviewTxSearch(e.target.value);
+                      setOverviewTxPage(1);
+                    }}
+                    placeholder="Search Reference, Patient..."
+                    className="pl-7 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 w-44"
+                  />
+                </div>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-700 uppercase tracking-wider font-semibold border-b border-slate-100">
-                  <tr>
-                    <th className="py-3.5 px-6">Ledger Account</th>
-                    <th className="py-3.5 px-6">Classification</th>
-                    <th className="py-3.5 px-6">Accounting Treatment</th>
-                    <th className="py-3.5 px-6 text-right">Amount (₹)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {(overviewData.reconciliationLedger || []).map((row: any, idx: number) => {
-                    const isTotal = row.type === 'total';
-                    const isAdd = row.type === 'add';
+            {/* Transactions Table */}
+            {paginatedOverviewTransactions.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                <p className="text-sm font-bold text-slate-700">No matching transactions found</p>
+                <p className="text-xs text-slate-500 mt-1">Try clearing your search query or selecting "All Categories".</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600 uppercase tracking-wider font-semibold border-b border-slate-100">
+                    <tr>
+                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Reference</th>
+                      <th className="py-3 px-4">Category</th>
+                      <th className="py-3 px-4">Patient / Recipient</th>
+                      <th className="py-3 px-4 text-right">Amount (₹)</th>
+                      <th className="py-3 px-4 text-center">Payment Status</th>
+                      <th className="py-3 px-4 text-center">Refund Status</th>
+                      <th className="py-3 px-4 text-center">Plan / Order Status</th>
+                      <th className="py-3 px-4">Cancellation Reason</th>
+                      <th className="py-3 px-4 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {paginatedOverviewTransactions.map((tx: any, idx: number) => {
+                      const isRefunded = tx.paymentStatus === 'Refunded' || tx.refundStatus === 'Refunded';
+                      const isSuccess = tx.paymentStatus === 'Successful';
+                      const isPending = tx.paymentStatus === 'Pending';
 
-                    return (
-                      <tr
-                        key={idx}
-                        className={`transition ${
-                          isTotal
-                            ? 'bg-emerald-50/60 font-bold text-slate-900 border-t-2 border-emerald-200'
-                            : 'hover:bg-slate-50/70'
-                        }`}
-                      >
-                        <td className="py-4 px-6 font-semibold flex items-center gap-2 text-slate-900">
-                          {isTotal && <CheckCircle2 size={16} className="text-emerald-700" />}
-                          {!isTotal && isAdd && <ShoppingBag size={14} className="text-teal-600" />}
-                          {!isTotal && !isAdd && <Truck size={14} className="text-amber-600" />}
-                          <span>{row.ledgerAccount}</span>
-                        </td>
-                        <td className="py-4 px-6 text-slate-600">{row.classification}</td>
-                        <td
-                          className={`py-4 px-6 font-medium ${
-                            isTotal
-                              ? 'text-emerald-800'
-                              : isAdd
-                              ? 'text-emerald-700'
-                              : 'text-rose-700'
-                          }`}
-                        >
-                          {row.treatment}
-                        </td>
-                        <td
-                          className={`py-4 px-6 text-right font-bold ${
-                            isTotal
-                              ? 'text-base text-emerald-800'
-                              : isAdd
-                              ? 'text-emerald-700'
-                              : 'text-rose-700'
-                          }`}
-                        >
-                          {row.amount >= 0
-                            ? `+₹${row.amount.toLocaleString('en-IN')}`
-                            : `-₹${Math.abs(row.amount).toLocaleString('en-IN')}`}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/80 transition">
+                          <td className="py-3 px-4 text-slate-600 whitespace-nowrap">
+                            {new Date(tx.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          </td>
+                          <td className="py-3 px-4 font-bold text-slate-900 whitespace-nowrap">
+                            {tx.reference}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700">
+                              {tx.category}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-800">
+                            {tx.patientName || 'Healthcare Recipient'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-black text-slate-900">
+                            ₹{(tx.amount || 0).toLocaleString('en-IN')}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                isSuccess
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : isPending
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                  : isRefunded
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                  : 'bg-slate-100 text-slate-800 border border-slate-200'
+                              }`}
+                            >
+                              {tx.paymentStatus}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {tx.refundStatus === 'Refunded' ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                Refunded (₹{(tx.refundAmount || tx.amount || 0).toLocaleString('en-IN')})
+                              </span>
+                            ) : tx.refundStatus === 'Refund Pending' ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                Refund Pending
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-[11px]">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700 capitalize">
+                              {tx.orderOrSubscriptionStatus || 'Active'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-slate-500 max-w-xs truncate" title={tx.cancellationReason || ''}>
+                            {tx.cancellationReason ? (
+                              <span className="text-rose-700 font-medium">
+                                {tx.cancellationReason} {tx.cancellationDate ? `(${new Date(tx.cancellationDate).toLocaleDateString('en-IN')})` : ''}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <button
+                              onClick={() => setSelectedTx(tx)}
+                              className="px-2 py-1 text-[11px] font-bold text-teal-700 hover:text-teal-900 hover:bg-teal-50 rounded-lg transition"
+                            >
+                              View
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Pagination Controls */}
+            {totalOverviewTxPages > 1 && (
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-xs text-slate-500">
+                  Showing {(overviewTxPage - 1) * RECORDS_PER_PAGE + 1} to {Math.min(overviewTxPage * RECORDS_PER_PAGE, totalOverviewTxCount)} of {totalOverviewTxCount} records
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setOverviewTxPage((p) => Math.max(1, p - 1))}
+                    disabled={overviewTxPage === 1}
+                    className="p-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-40 transition"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <span className="text-xs font-bold px-2 py-1 bg-slate-100 rounded-lg text-slate-700">
+                    {overviewTxPage} / {totalOverviewTxPages}
+                  </span>
+                  <button
+                    onClick={() => setOverviewTxPage((p) => Math.min(totalOverviewTxPages, p + 1))}
+                    disabled={overviewTxPage === totalOverviewTxPages}
+                    className="p-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-40 transition"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECONDARY ACCOUNTING & REGULATORY TAX RECORDS (COLLAPSIBLE AUDIT SECTION) */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+            <button
+              onClick={() => setShowSecondaryTaxRecords(!showSecondaryTaxRecords)}
+              className="w-full p-5 text-left flex items-center justify-between hover:bg-slate-50 transition"
+            >
+              <div className="flex items-center gap-3">
+                <span className="p-2 rounded-xl bg-purple-50 text-purple-700">
+                  <Receipt size={18} />
+                </span>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    Secondary Accounting &amp; Regulatory Tax Records (GST Audit)
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    Preserved statutory escrow, 12% &amp; 18% GST collections, and trade settlement liabilities.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                <span>{showSecondaryTaxRecords ? 'Hide Accounting Details' : 'Show Accounting Details'}</span>
+                {showSecondaryTaxRecords ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </button>
+
+            {showSecondaryTaxRecords && (
+              <div className="p-6 border-t border-slate-100 space-y-4 bg-slate-50/50 animate-in fade-in">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Total GST Held in Trust</p>
+                    <p className="text-xl font-black text-purple-900 mt-1">
+                      ₹{(exec.taxesCollected || 0).toLocaleString('en-IN')}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Statutory escrow (excluded from profit)</p>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Payment Gateway Fees</p>
+                    <p className="text-xl font-black text-slate-900 mt-1">
+                      ₹{(exec.paymentGatewayFees || 0).toLocaleString('en-IN')}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Razorpay ~2% processing fee</p>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Supplier Payables (Pending)</p>
+                    <p className="text-xl font-black text-amber-800 mt-1">
+                      ₹{(exec.supplierLiabilitiesPending || 0).toLocaleString('en-IN')}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Marketplace trade liabilities due</p>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Supplier Payables (Settled)</p>
+                    <p className="text-xl font-black text-emerald-800 mt-1">
+                      ₹{(exec.supplierLiabilitiesSettled || 0).toLocaleString('en-IN')}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Disbursed to certified vendors</p>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 text-xs text-purple-900 flex items-start gap-2">
+                  <ShieldCheck size={16} className="text-purple-700 shrink-0 mt-0.5" />
+                  <p className="leading-relaxed">
+                    <strong>Regulatory Compliance Note:</strong> Statutory taxes and fiduciary collections are recorded in real-time according to Indian GST DME (12%) and clinical healthcare guidelines (18%). These records remain fully accessible for statutory filings and audit exports.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

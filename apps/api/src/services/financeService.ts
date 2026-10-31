@@ -12,7 +12,19 @@ import { seedAdminDemoData } from './adminService.js';
 // =============================================================================
 
 export interface FinanceDateFilter {
-  preset?: 'all' | 'today' | 'yesterday' | 'last_7_days' | 'this_month' | 'previous_month' | 'custom';
+  preset?:
+    | 'all'
+    | 'today'
+    | 'yesterday'
+    | 'last_7_days'
+    | 'last_30_days'
+    | 'this_month'
+    | 'previous_month'
+    | 'last_3_months'
+    | 'last_6_months'
+    | 'this_year'
+    | 'previous_year'
+    | 'custom';
   startDate?: string;
   endDate?: string;
   search?: string;
@@ -21,6 +33,8 @@ export interface FinanceDateFilter {
   planType?: string;
   page?: number;
   limit?: number;
+  grouping?: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  category?: 'overview' | 'owned' | 'marketplace' | 'subscriptions';
 }
 
 export interface ResolvedDateRange {
@@ -28,6 +42,14 @@ export interface ResolvedDateRange {
   end: Date | null;
   label: string;
 }
+
+/**
+ * Returns date in YYYY-MM-DD in Asia/Kolkata timezone
+ */
+export const toKolkataDateString = (d: Date | string | number): string => {
+  const date = new Date(d);
+  return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+};
 
 export const resolveDateRange = (filter: FinanceDateFilter): ResolvedDateRange => {
   const preset = filter.preset || 'all';
@@ -50,7 +72,7 @@ export const resolveDateRange = (filter: FinanceDateFilter): ResolvedDateRange =
       return {
         start: startOfDay(now),
         end: endOfDay(now),
-        label: `Today (${now.toISOString().split('T')[0]})`,
+        label: `Today (${toKolkataDateString(now)})`,
       };
     }
     case 'yesterday': {
@@ -59,7 +81,7 @@ export const resolveDateRange = (filter: FinanceDateFilter): ResolvedDateRange =
       return {
         start: startOfDay(y),
         end: endOfDay(y),
-        label: `Yesterday (${y.toISOString().split('T')[0]})`,
+        label: `Yesterday (${toKolkataDateString(y)})`,
       };
     }
     case 'last_7_days': {
@@ -68,7 +90,16 @@ export const resolveDateRange = (filter: FinanceDateFilter): ResolvedDateRange =
       return {
         start: startOfDay(past7),
         end: endOfDay(now),
-        label: `Last 7 Days (${past7.toISOString().split('T')[0]} to ${now.toISOString().split('T')[0]})`,
+        label: `Last 7 Days (${toKolkataDateString(past7)} to ${toKolkataDateString(now)})`,
+      };
+    }
+    case 'last_30_days': {
+      const past30 = new Date(now);
+      past30.setDate(past30.getDate() - 29);
+      return {
+        start: startOfDay(past30),
+        end: endOfDay(now),
+        label: `Last 30 Days (${toKolkataDateString(past30)} to ${toKolkataDateString(now)})`,
       };
     }
     case 'this_month': {
@@ -76,7 +107,7 @@ export const resolveDateRange = (filter: FinanceDateFilter): ResolvedDateRange =
       return {
         start: startOfDay(monthStart),
         end: endOfDay(now),
-        label: `This Month (${monthStart.toLocaleString('en-IN', { month: 'short', year: 'numeric' })})`,
+        label: `This Month (${monthStart.toLocaleString('en-IN', { month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })})`,
       };
     }
     case 'previous_month': {
@@ -85,7 +116,42 @@ export const resolveDateRange = (filter: FinanceDateFilter): ResolvedDateRange =
       return {
         start: startOfDay(prevMonthStart),
         end: endOfDay(prevMonthEnd),
-        label: `Previous Month (${prevMonthStart.toLocaleString('en-IN', { month: 'short', year: 'numeric' })})`,
+        label: `Previous Month (${prevMonthStart.toLocaleString('en-IN', { month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })})`,
+      };
+    }
+    case 'last_3_months': {
+      const past3m = new Date(now);
+      past3m.setMonth(past3m.getMonth() - 3);
+      return {
+        start: startOfDay(past3m),
+        end: endOfDay(now),
+        label: `Last 3 Months (${toKolkataDateString(past3m)} to ${toKolkataDateString(now)})`,
+      };
+    }
+    case 'last_6_months': {
+      const past6m = new Date(now);
+      past6m.setMonth(past6m.getMonth() - 6);
+      return {
+        start: startOfDay(past6m),
+        end: endOfDay(now),
+        label: `Last 6 Months (${toKolkataDateString(past6m)} to ${toKolkataDateString(now)})`,
+      };
+    }
+    case 'this_year': {
+      const yearStart = new Date(now.getFullYear(), 0, 1);
+      return {
+        start: startOfDay(yearStart),
+        end: endOfDay(now),
+        label: `This Year (${now.getFullYear()})`,
+      };
+    }
+    case 'previous_year': {
+      const prevYearStart = new Date(now.getFullYear() - 1, 0, 1);
+      const prevYearEnd = new Date(now.getFullYear() - 1, 11, 31);
+      return {
+        start: startOfDay(prevYearStart),
+        end: endOfDay(prevYearEnd),
+        label: `Previous Year (${now.getFullYear() - 1})`,
       };
     }
     case 'custom': {
@@ -95,7 +161,7 @@ export const resolveDateRange = (filter: FinanceDateFilter): ResolvedDateRange =
         return {
           start: startOfDay(s),
           end: endOfDay(e),
-          label: `Custom (${s.toISOString().split('T')[0]} to ${e.toISOString().split('T')[0]})`,
+          label: `Custom (${toKolkataDateString(s)} to ${toKolkataDateString(e)})`,
         };
       }
       return { start: null, end: null, label: 'All Time' };
@@ -384,6 +450,38 @@ export const seedMultiPeriodFinanceDataIfEmpty = async (): Promise<void> => {
       });
     }
   }
+
+  // Ensure a cancelled subscription with refund details exists for cancellation audit tracking
+  const cancelledSubExists = await CaregiverSubscription.findOne({ status: 'cancelled' });
+  if (!cancelledSubExists && plan) {
+    const cancelledDate = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+    await CaregiverSubscription.create({
+      subscriptionNumber: 'SUB-2026-CANCELLED-01',
+      invoiceNumber: 'INV-SUB-CANC-01',
+      patientId: new mongoose.Types.ObjectId(),
+      patientName: 'Kishore Deshmukh',
+      patientPhone: '9822077777',
+      planId: plan._id,
+      planTitle: `${plan.title} (Cancelled Plan)`,
+      status: 'cancelled',
+      startDate: new Date(cancelledDate.getTime() - 5 * 24 * 60 * 60 * 1000),
+      endDate: cancelledDate,
+      totalVisitsIncluded: 15,
+      visitsCompleted: 2,
+      visitsRemaining: 13,
+      pricing: {
+        customerPrice: 15000,
+        caregiverPayout: 10000,
+        platformCommission: 5000,
+        paymentStatus: 'refunded',
+        paymentMethod: 'online',
+        razorpayPaymentId: 'pay_sub_cancelled_01',
+      },
+      isDemo: true,
+      createdAt: cancelledDate,
+      updatedAt: cancelledDate,
+    });
+  }
 };
 
 // =============================================================================
@@ -436,6 +534,14 @@ export interface OwnedProductsFinanceSummary {
       refundReason?: string;
       refundDate?: string;
     };
+  }>;
+  dailyBreakdown?: Array<{
+    date: string;
+    grossSales: number;
+    refunds: number;
+    cogs: number;
+    gatewayFees: number;
+    ordersCount: number;
   }>;
   pagination: {
     page: number;
@@ -509,9 +615,10 @@ export const getOwnedProductsFinance = async (
 
   const paymentStatusCounts = { paid: 0, pending: 0, cod: 0, refunded: 0 };
   const orderStatusCounts: Record<string, number> = {};
+  const dailyMap = new Map<string, { date: string; grossSales: number; refunds: number; cogs: number; gatewayFees: number; ordersCount: number }>();
 
   for (const ord of allMatchingOrders) {
-    const isPaid = ord.paymentStatus === 'paid' || ord.paymentStatus === 'cod';
+    const isPaid = (ord.paymentStatus === 'paid' || ord.paymentStatus === 'cod') && ord.orderStatus !== 'cancelled';
     const isRefunded = ord.paymentStatus === 'refunded' || ord.cancellation?.refundStatus === 'processed';
 
     // Status counts
@@ -520,30 +627,55 @@ export const getOwnedProductsFinance = async (
     }
     orderStatusCounts[ord.orderStatus] = (orderStatusCounts[ord.orderStatus] || 0) + 1;
 
+    let orderOwnedGross = 0;
+    let orderOwnedProcurement = 0;
+
     // Line item analysis for owned goods
     for (const item of ord.items) {
       if (item.sourcingType === 'own_stock' || !item.supplierId) {
-        if (isPaid && ord.orderStatus !== 'cancelled') {
-          grossSales += item.unitPrice * item.quantity;
+        if (isPaid) {
+          const itemTotal = item.unitPrice * item.quantity;
+          grossSales += itemTotal;
+          orderOwnedGross += itemTotal;
           totalUnitsSold += item.quantity;
           totalDiscounts += item.discountAmount || 0;
-          totalProcurementCost += (item.procurementCost || 0) * item.quantity;
+          const itemCogs = (item.procurementCost || 0) * item.quantity;
+          totalProcurementCost += itemCogs;
+          orderOwnedProcurement += itemCogs;
         }
       }
     }
 
-    if (isPaid && ord.orderStatus !== 'cancelled') {
+    let orderGw = 0;
+    if (isPaid) {
       totalTaxGst += ord.pricing?.taxGst || 0;
       totalDeliveryFees += ord.pricing?.deliveryFee || 0;
       totalInstallationCharges += ord.pricing?.installationCharge || 0;
       if (ord.paymentMethod === 'online') {
-        totalGatewayFees += ord.pricing?.gatewayFee || Math.round((ord.pricing?.totalAmount || 0) * 0.02);
+        orderGw = ord.pricing?.gatewayFee || Math.round((ord.pricing?.totalAmount || 0) * 0.02);
+        totalGatewayFees += orderGw;
       }
     }
 
+    let orderRefund = 0;
     if (isRefunded) {
-      totalRefunds += ord.pricing?.refundAmount || ord.pricing?.totalAmount || 0;
+      orderRefund = ord.pricing?.refundAmount || ord.pricing?.totalAmount || 0;
+      totalRefunds += orderRefund;
     }
+
+    // Daily breakdown aggregation
+    const dayKey = toKolkataDateString(ord.paymentDetails?.paidAt || ord.createdAt);
+    const existing = dailyMap.get(dayKey) || { date: dayKey, grossSales: 0, refunds: 0, cogs: 0, gatewayFees: 0, ordersCount: 0 };
+    if (isPaid) {
+      existing.grossSales += orderOwnedGross;
+      existing.cogs += orderOwnedProcurement;
+      existing.gatewayFees += orderGw;
+      existing.ordersCount++;
+    }
+    if (isRefunded) {
+      existing.refunds += orderRefund;
+    }
+    dailyMap.set(dayKey, existing);
   }
 
   // Net Recognized Revenue = Gross Sales - Discounts - Refunds (Taxes are held in trust, not operating revenue)
@@ -607,6 +739,7 @@ export const getOwnedProductsFinance = async (
     contributionMarginPct,
     paymentStatusCounts,
     orderStatusCounts,
+    dailyBreakdown: Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
     transactions,
     pagination: {
       page,
@@ -664,6 +797,15 @@ export interface MarketplaceFinanceSummary {
     orderStatus: string;
     date: string;
     refundAmount?: number;
+  }>;
+  dailyBreakdown?: Array<{
+    date: string;
+    gmv: number;
+    commission: number;
+    supplierPayable: number;
+    refunds: number;
+    gatewayFees: number;
+    ordersCount: number;
   }>;
   pagination: {
     page: number;
@@ -810,9 +952,14 @@ export const getMarketplaceFinance = async (
     refundAmount?: number;
   }> = [];
 
+  const dailyMktMap = new Map<string, { date: string; gmv: number; commission: number; supplierPayable: number; refunds: number; gatewayFees: number; ordersCount: number }>();
+
   for (const ord of matchingOrders) {
-    const isPaid = ord.paymentStatus === 'paid' || ord.paymentStatus === 'cod';
+    const isPaid = (ord.paymentStatus === 'paid' || ord.paymentStatus === 'cod') && ord.orderStatus !== 'cancelled';
     const isRefunded = ord.paymentStatus === 'refunded' || ord.cancellation?.refundStatus === 'processed';
+
+    const dayKey = toKolkataDateString(ord.paymentDetails?.paidAt || ord.createdAt);
+    const dayEntry = dailyMktMap.get(dayKey) || { date: dayKey, gmv: 0, commission: 0, supplierPayable: 0, refunds: 0, gatewayFees: 0, ordersCount: 0 };
 
     for (const item of ord.items) {
       const isSupplierItem = item.sourcingType === 'supplier_direct' || Boolean(item.supplierId);
@@ -825,14 +972,22 @@ export const getMarketplaceFinance = async (
       const commEarned = Math.round(itemGMV * (commissionRate / 100));
       const payable = Math.max(0, itemGMV - commEarned);
 
-      if (isPaid && ord.orderStatus !== 'cancelled') {
+      if (isPaid) {
         totalMarketplaceGMV += itemGMV;
         totalUnitsSold += item.quantity;
         totalCommissionEarned += commEarned;
         totalTaxGst += Math.round(itemGMV * 0.12);
+        let gw = 0;
         if (ord.paymentMethod === 'online') {
-          totalGatewayFees += Math.round(itemGMV * 0.02);
+          gw = Math.round(itemGMV * 0.02);
+          totalGatewayFees += gw;
         }
+
+        dayEntry.gmv += itemGMV;
+        dayEntry.commission += commEarned;
+        dayEntry.supplierPayable += payable;
+        dayEntry.gatewayFees += gw;
+        dayEntry.ordersCount++;
 
         const agg = supplierAgg.get(supId);
         if (agg) {
@@ -846,6 +1001,7 @@ export const getMarketplaceFinance = async (
 
       if (isRefunded) {
         totalRefunds += itemGMV;
+        dayEntry.refunds += itemGMV;
       }
 
       allTransactions.push({
@@ -866,6 +1022,10 @@ export const getMarketplaceFinance = async (
         date: ord.createdAt.toISOString(),
         refundAmount: isRefunded ? itemGMV : 0,
       });
+    }
+
+    if (dayEntry.gmv > 0 || dayEntry.refunds > 0) {
+      dailyMktMap.set(dayKey, dayEntry);
     }
   }
 
@@ -902,6 +1062,7 @@ export const getMarketplaceFinance = async (
     totalGatewayFees,
     marketplaceNetRevenue,
     supplierBreakdown: Array.from(supplierAgg.values()),
+    dailyBreakdown: Array.from(dailyMktMap.values()).sort((a, b) => a.date.localeCompare(b.date)),
     transactions: paginatedTransactions,
     pagination: {
       page,
@@ -939,6 +1100,9 @@ export interface SubscriptionsFinanceSummary {
     date: string;
     amount: number;
     subscriptionCount: number;
+    caregiverPayouts?: number;
+    refunds?: number;
+    gatewayFees?: number;
   }>;
   transactions: Array<{
     subscriptionNumber: string;
@@ -1024,7 +1188,14 @@ export const getSubscriptionsFinance = async (
   let cancelledSubscriptionsCount = 0;
 
   const paymentStatusCounts = { paid: 0, pending: 0, refunded: 0 };
-  const dailyCollectionsMap = new Map<string, { date: string; amount: number; subscriptionCount: number }>();
+  const dailyCollectionsMap = new Map<string, {
+    date: string;
+    amount: number;
+    subscriptionCount: number;
+    caregiverPayouts: number;
+    refunds: number;
+    gatewayFees: number;
+  }>();
 
   for (const sub of allSubs) {
     const isPaid = sub.pricing?.paymentStatus === 'paid';
@@ -1044,6 +1215,16 @@ export const getSubscriptionsFinance = async (
     else if (sub.pricing?.paymentStatus === 'pending') paymentStatusCounts.pending++;
     else if (sub.pricing?.paymentStatus === 'refunded') paymentStatusCounts.refunded++;
 
+    const dayKey = toKolkataDateString(sub.createdAt);
+    const existingDay = dailyCollectionsMap.get(dayKey) || {
+      date: dayKey,
+      amount: 0,
+      subscriptionCount: 0,
+      caregiverPayouts: 0,
+      refunds: 0,
+      gatewayFees: 0,
+    };
+
     if (isPaid && sub.status !== 'cancelled') {
       const price = sub.pricing?.customerPrice || 0;
       const payout = sub.pricing?.caregiverPayout || 0;
@@ -1057,18 +1238,22 @@ export const getSubscriptionsFinance = async (
         monthlyRecurringRevenue += price;
       }
 
-      totalGatewayFees += Math.round(price * 0.02);
+      const gw = Math.round(price * 0.02);
+      totalGatewayFees += gw;
 
       // Daily trend aggregation
-      const dayKey = new Date(sub.createdAt).toISOString().split('T')[0];
-      const existingDay = dailyCollectionsMap.get(dayKey) || { date: dayKey, amount: 0, subscriptionCount: 0 };
       existingDay.amount += price;
+      existingDay.caregiverPayouts += payout;
+      existingDay.gatewayFees += gw;
       existingDay.subscriptionCount++;
       dailyCollectionsMap.set(dayKey, existingDay);
     }
 
     if (sub.status === 'cancelled' || sub.pricing?.paymentStatus === 'refunded') {
-      refundsProcessed += sub.pricing?.customerPrice || 0;
+      const rf = sub.pricing?.customerPrice || 0;
+      refundsProcessed += rf;
+      existingDay.refunds += rf;
+      dailyCollectionsMap.set(dayKey, existingDay);
     }
   }
 
@@ -1130,8 +1315,105 @@ export const getSubscriptionsFinance = async (
 // COMBINED FINANCE OVERVIEW & RECONCILIATION
 // =============================================================================
 
+export interface DailyRevenueSummary {
+  date: string;
+  ownedCollections: number;
+  marketplaceCollections: number;
+  subscriptionCollections: number;
+  completedRefunds: number;
+  netRecognizedRevenue: number;
+  estimatedOperatingResult: number;
+  hasSufficientCostData: boolean;
+}
+
+export interface UnifiedFinanceTransaction {
+  id: string;
+  date: string;
+  reference: string;
+  category: 'Owned Product' | 'Marketplace Partner' | 'Caregiver Subscription' | 'Visit Package';
+  amount: number;
+  paymentStatus: 'Successful' | 'Pending' | 'Failed' | 'Refunded';
+  refundStatus: 'None' | 'Refund Pending' | 'Refunded';
+  refundAmount?: number;
+  orderOrSubscriptionStatus: string;
+  cancellationDate?: string;
+  cancellationReason?: string;
+  patientName?: string;
+  itemsSummary?: string;
+}
+
+export interface SimplifiedProfitAndLoss {
+  moneyReceived: number;
+  completedRefunds: number;
+  directCOGS: number;
+  caregiverPayouts: number;
+  paymentGatewayFees: number;
+  estimatedOperatingResult: number;
+  isProfit: boolean;
+  costDataStatus: 'complete' | 'estimated';
+  explanation: string;
+}
+
+export interface ProfitLossDataPoint {
+  period: string;
+  dateKey: string;
+  timestamp: number;
+  revenue: number;
+  expenses: number;
+  netProfitOrLoss: number;
+  isProfit: boolean;
+  revenueChangePct?: number | null;
+  profitChangePct?: number | null;
+  expenseChangePct?: number | null;
+}
+
+export interface ProfitLossAnalyticsSummary {
+  periodLabel: string;
+  category: 'overview' | 'owned' | 'marketplace' | 'subscriptions';
+  grouping: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  kpis: {
+    totalRevenue: number;
+    totalExpenses: number;
+    netProfit: number;
+    netLoss: number;
+    netOperatingResult: number;
+    marginPct: number;
+    isOverallProfit: boolean;
+    costDataStatus: 'complete' | 'estimated';
+    hasSufficientCostData: boolean;
+  };
+  series: ProfitLossDataPoint[];
+}
+
 export interface CombinedFinanceSummary {
   periodLabel: string;
+  primaryKpis: {
+    totalMoneyReceived: number;
+    productSalesRevenue: number;
+    marketplaceSales: {
+      gmv: number;
+      vivoquestRevenue: number;
+      supplierPayable: number;
+    };
+    subscriptionRevenue: number;
+    activeSubscriptions: number;
+    refundsAndCancellations: {
+      completedRefundsAmount: number;
+      refundedOrdersCount: number;
+      cancelledOrdersCount: number;
+      cancelledSubscriptionsCount: number;
+    };
+    netOperatingResult: {
+      amount: number;
+      isProfit: boolean;
+      marginPct: number;
+      costDataStatus: 'complete' | 'estimated';
+    };
+  };
+  profitAndLoss: SimplifiedProfitAndLoss;
+  dailySummaries: DailyRevenueSummary[];
+  unifiedTransactions: UnifiedFinanceTransaction[];
+  profitLossAnalytics?: ProfitLossAnalyticsSummary;
   executiveSummary: {
     grossMerchandiseValue: number;
     recognizedNetRevenue: number;
@@ -1139,6 +1421,7 @@ export interface CombinedFinanceSummary {
     contributionMarginPct: number;
     customerCollections: number;
     totalCustomerCollections: number;
+    totalMoneyReceived: number;
     totalExpenses: number;
     netProfitOrLoss: number;
     isProfit: boolean;
@@ -1156,6 +1439,7 @@ export interface CombinedFinanceSummary {
     gatewayFees: number;
     refundsTotal: number;
     onlineSettlementsVolume: number;
+    costDataStatus: 'complete' | 'estimated';
   };
   sectionSummaries: {
     ownedProducts: {
@@ -1224,8 +1508,149 @@ export const getCombinedFinanceSummary = async (
   // Plain business language explanation
   const calculationExplanation = `Recognized Revenue (₹${recognizedRevenue.toLocaleString('en-IN')}) − Direct Product COGS (₹${totalCOGS.toLocaleString('en-IN')}) − Caregiver Payouts (₹${totalLabor.toLocaleString('en-IN')}) − Payment Gateway Fees (₹${totalGatewayFees.toLocaleString('en-IN')}) − Completed Refunds (₹${totalRefunds.toLocaleString('en-IN')}) = ${isProfit ? 'Net Profit' : 'Net Loss'} of ₹${Math.abs(netProfitOrLoss).toLocaleString('en-IN')}`;
 
+  // 1. Build Daily Revenue Summaries across all three streams
+  const allDateSet = new Set<string>();
+  (owned.dailyBreakdown || []).forEach((d) => allDateSet.add(d.date));
+  (marketplace.dailyBreakdown || []).forEach((d) => allDateSet.add(d.date));
+  (subs.dailyCollections || []).forEach((d) => allDateSet.add(d.date));
+
+  const sortedDates = Array.from(allDateSet).sort();
+  const ownedDayMap = new Map((owned.dailyBreakdown || []).map((d) => [d.date, d]));
+  const mktDayMap = new Map((marketplace.dailyBreakdown || []).map((d) => [d.date, d]));
+  const subDayMap = new Map((subs.dailyCollections || []).map((d) => [d.date, d]));
+
+  const dailySummaries: DailyRevenueSummary[] = sortedDates.map((date) => {
+    const o = ownedDayMap.get(date) || { grossSales: 0, refunds: 0, cogs: 0, gatewayFees: 0 };
+    const m = mktDayMap.get(date) || { gmv: 0, commission: 0, supplierPayable: 0, refunds: 0, gatewayFees: 0 };
+    const s = subDayMap.get(date) || { amount: 0, caregiverPayouts: 0, refunds: 0, gatewayFees: 0 };
+
+    const ownedCollections = o.grossSales;
+    const marketplaceCollections = m.gmv;
+    const subscriptionCollections = s.amount;
+    const completedRefunds = o.refunds + m.refunds + (s.refunds || 0);
+    const netRecognizedRevenue = Math.max(0, (ownedCollections - o.refunds) + m.commission + (subscriptionCollections - (s.refunds || 0)));
+    const estimatedOperatingResult = netRecognizedRevenue - o.cogs - (s.caregiverPayouts || 0) - o.gatewayFees - m.gatewayFees - (s.gatewayFees || 0);
+
+    return {
+      date,
+      ownedCollections,
+      marketplaceCollections,
+      subscriptionCollections,
+      completedRefunds,
+      netRecognizedRevenue,
+      estimatedOperatingResult,
+      hasSufficientCostData: true,
+    };
+  });
+
+  // 2. Primary 7 KPI Cards (Clean, unambiguous, server-authoritative)
+  const primaryKpis = {
+    totalMoneyReceived: gmv,
+    productSalesRevenue: owned.netRevenue,
+    marketplaceSales: {
+      gmv: marketplace.totalMarketplaceGMV,
+      vivoquestRevenue: marketplace.earnedPlatformCommission,
+      supplierPayable: marketplace.supplierPayablesPending,
+    },
+    subscriptionRevenue: subs.totalCollections,
+    activeSubscriptions: subs.activeSubscriptionsCount,
+    refundsAndCancellations: {
+      completedRefundsAmount: totalRefunds,
+      refundedOrdersCount: (owned.paymentStatusCounts.refunded || 0) + (marketplace.totalRefunds > 0 ? 1 : 0),
+      cancelledOrdersCount: (owned.orderStatusCounts['cancelled'] || 0),
+      cancelledSubscriptionsCount: subs.cancelledSubscriptionsCount,
+    },
+    netOperatingResult: {
+      amount: estimatedContributionMargin,
+      isProfit,
+      marginPct: contributionMarginPct,
+      costDataStatus: 'complete' as const,
+    },
+  };
+
+  // 3. Simplified Understandable Profit and Loss Statement
+  const profitAndLoss: SimplifiedProfitAndLoss = {
+    moneyReceived: gmv,
+    completedRefunds: totalRefunds,
+    directCOGS: totalCOGS,
+    caregiverPayouts: totalLabor,
+    paymentGatewayFees: totalGatewayFees,
+    estimatedOperatingResult: estimatedContributionMargin,
+    isProfit,
+    costDataStatus: 'complete',
+    explanation: calculationExplanation,
+  };
+
+  // 4. Unified Financial Transactions across all domains
+  const unifiedTransactions: UnifiedFinanceTransaction[] = [];
+
+  for (const tx of owned.transactions) {
+    const isPaid = tx.paymentStatus === 'paid' || tx.paymentStatus === 'cod';
+    const isRefunded = tx.paymentStatus === 'refunded' || tx.refundAmount > 0;
+    unifiedTransactions.push({
+      id: tx.orderId || tx.orderNumber,
+      date: tx.date,
+      reference: tx.orderNumber,
+      category: 'Owned Product',
+      amount: tx.totalAmount,
+      paymentStatus: isRefunded ? 'Refunded' : isPaid ? 'Successful' : tx.paymentStatus === 'pending' ? 'Pending' : 'Failed',
+      refundStatus: isRefunded ? 'Refunded' : 'None',
+      refundAmount: tx.refundAmount || 0,
+      orderOrSubscriptionStatus: tx.orderStatus,
+      cancellationDate: tx.refundDetails?.refundDate,
+      cancellationReason: tx.refundDetails?.refundReason,
+      patientName: tx.patientName,
+      itemsSummary: tx.itemsSummary,
+    });
+  }
+
+  for (const tx of marketplace.transactions) {
+    const isPaid = tx.paymentStatus === 'paid' || tx.paymentStatus === 'cod';
+    const isRefunded = tx.paymentStatus === 'refunded' || (tx.refundAmount && tx.refundAmount > 0);
+    unifiedTransactions.push({
+      id: tx.transactionId || tx.orderNumber,
+      date: tx.date,
+      reference: tx.orderNumber,
+      category: 'Marketplace Partner',
+      amount: tx.customerCollection,
+      paymentStatus: isRefunded ? 'Refunded' : isPaid ? 'Successful' : tx.paymentStatus === 'pending' ? 'Pending' : 'Failed',
+      refundStatus: isRefunded ? 'Refunded' : 'None',
+      refundAmount: tx.refundAmount || 0,
+      orderOrSubscriptionStatus: tx.orderStatus,
+      patientName: tx.supplierName,
+      itemsSummary: `${tx.productTitle} (${tx.supplierName})`,
+    });
+  }
+
+  for (const sub of subs.transactions) {
+    const isPaid = sub.paymentStatus === 'paid';
+    const isCancelled = sub.status === 'cancelled';
+    const isRefunded = isCancelled || sub.paymentStatus === 'refunded';
+    unifiedTransactions.push({
+      id: sub.subscriptionNumber,
+      date: sub.createdAt,
+      reference: sub.subscriptionNumber,
+      category: sub.planType === 'Monthly Subscription' ? 'Caregiver Subscription' : 'Visit Package',
+      amount: sub.customerPrice,
+      paymentStatus: isRefunded ? 'Refunded' : isPaid ? 'Successful' : sub.paymentStatus === 'pending' ? 'Pending' : 'Failed',
+      refundStatus: isRefunded ? 'Refunded' : 'None',
+      refundAmount: isRefunded ? sub.customerPrice : 0,
+      orderOrSubscriptionStatus: sub.status,
+      cancellationDate: isCancelled ? sub.endDate : undefined,
+      cancellationReason: isCancelled ? 'Customer requested plan cancellation' : undefined,
+      patientName: sub.patientName,
+      itemsSummary: sub.planTitle,
+    });
+  }
+
+  unifiedTransactions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
   return {
     periodLabel: owned.periodLabel,
+    primaryKpis,
+    profitAndLoss,
+    dailySummaries,
+    unifiedTransactions,
     executiveSummary: {
       grossMerchandiseValue: gmv,
       recognizedNetRevenue: recognizedRevenue,
@@ -1233,6 +1658,8 @@ export const getCombinedFinanceSummary = async (
       contributionMarginPct,
       customerCollections: gmv,
       totalCustomerCollections: gmv,
+      totalMoneyReceived: gmv,
+      costDataStatus: 'complete',
       totalExpenses,
       netProfitOrLoss,
       isProfit,
@@ -1336,6 +1763,239 @@ export const getCombinedFinanceSummary = async (
         type: 'total',
       },
     ],
+    profitLossAnalytics: await getProfitLossAnalytics({
+      ...filter,
+      category: 'overview',
+      grouping: filter.grouping || 'daily',
+    }),
+  };
+};
+
+/**
+ * Interactive Profit & Loss Analytics for Highcharts
+ * Computes time-series data points (Revenue, Expenses, Net Profit/Loss) and 4 summary KPIs
+ * across Daily, Weekly, Monthly, and Yearly groupings with previous-period delta percentages.
+ */
+export const getProfitLossAnalytics = async (
+  filter: FinanceDateFilter
+): Promise<ProfitLossAnalyticsSummary> => {
+  await seedMultiPeriodFinanceDataIfEmpty();
+  const dateRange = resolveDateRange(filter);
+  const category = (filter.category as any) || 'overview';
+  const grouping = (filter.grouping as any) || 'daily';
+
+  interface RawDailyPoint {
+    date: string;
+    revenue: number;
+    expenses: number;
+    netProfitOrLoss: number;
+  }
+  let rawDaily: RawDailyPoint[] = [];
+
+  if (category === 'owned') {
+    const owned = await getOwnedProductsFinance(filter);
+    rawDaily = (owned.dailyBreakdown || []).map((d) => {
+      const revenue = Math.max(0, d.grossSales - d.refunds);
+      const expenses = d.cogs + d.gatewayFees;
+      const netProfitOrLoss = revenue - expenses;
+      return {
+        date: d.date,
+        revenue,
+        expenses,
+        netProfitOrLoss,
+      };
+    });
+  } else if (category === 'marketplace') {
+    const mkt = await getMarketplaceFinance(filter);
+    rawDaily = (mkt.dailyBreakdown || []).map((d) => {
+      // Platform commission earned is recognized operating revenue; GMV is third-party fiduciary flow
+      const revenue = Math.max(0, d.commission);
+      const expenses = d.gatewayFees;
+      const netProfitOrLoss = revenue - expenses;
+      return {
+        date: d.date,
+        revenue,
+        expenses,
+        netProfitOrLoss,
+      };
+    });
+  } else if (category === 'subscriptions') {
+    const subs = await getSubscriptionsFinance(filter);
+    rawDaily = (subs.dailyCollections || []).map((d) => {
+      const revenue = Math.max(0, d.amount - (d.refunds || 0));
+      const expenses = (d.caregiverPayouts || 0) + (d.gatewayFees || 0);
+      const netProfitOrLoss = revenue - expenses;
+      return {
+        date: d.date,
+        revenue,
+        expenses,
+        netProfitOrLoss,
+      };
+    });
+  } else {
+    // Consolidated 'overview'
+    const [owned, marketplace, subs] = await Promise.all([
+      getOwnedProductsFinance(filter),
+      getMarketplaceFinance(filter),
+      getSubscriptionsFinance(filter),
+    ]);
+
+    const allDateSet = new Set<string>();
+    (owned.dailyBreakdown || []).forEach((d) => allDateSet.add(d.date));
+    (marketplace.dailyBreakdown || []).forEach((d) => allDateSet.add(d.date));
+    (subs.dailyCollections || []).forEach((d) => allDateSet.add(d.date));
+
+    const sortedDates = Array.from(allDateSet).sort();
+    const ownedDayMap = new Map((owned.dailyBreakdown || []).map((d) => [d.date, d]));
+    const mktDayMap = new Map((marketplace.dailyBreakdown || []).map((d) => [d.date, d]));
+    const subDayMap = new Map((subs.dailyCollections || []).map((d) => [d.date, d]));
+
+    rawDaily = sortedDates.map((date) => {
+      const o = ownedDayMap.get(date) || { grossSales: 0, refunds: 0, cogs: 0, gatewayFees: 0 };
+      const m = mktDayMap.get(date) || { gmv: 0, commission: 0, supplierPayable: 0, refunds: 0, gatewayFees: 0 };
+      const s = subDayMap.get(date) || { amount: 0, caregiverPayouts: 0, refunds: 0, gatewayFees: 0 };
+
+      const ownedNet = Math.max(0, o.grossSales - o.refunds);
+      const mktNet = Math.max(0, m.commission);
+      const subsNet = Math.max(0, s.amount - (s.refunds || 0));
+
+      const dayRevenue = ownedNet + mktNet + subsNet;
+      const dayExpenses = o.cogs + (s.caregiverPayouts || 0) + o.gatewayFees + m.gatewayFees + (s.gatewayFees || 0);
+      const dayNetProfitOrLoss = dayRevenue - dayExpenses;
+
+      return {
+        date,
+        revenue: dayRevenue,
+        expenses: dayExpenses,
+        netProfitOrLoss: dayNetProfitOrLoss,
+      };
+    });
+  }
+
+  // Sort raw daily points chronologically
+  rawDaily.sort((a, b) => a.date.localeCompare(b.date));
+
+  // Grouping: daily, weekly, monthly, yearly
+  const groupedMap = new Map<string, {
+    period: string;
+    dateKey: string;
+    timestamp: number;
+    revenue: number;
+    expenses: number;
+    netProfitOrLoss: number;
+  }>();
+
+  for (const item of rawDaily) {
+    let groupKey: string;
+    let periodLabel: string;
+    let timestamp: number;
+
+    const [yStr, mStr, dStr] = item.date.split('-');
+    const year = parseInt(yStr, 10);
+    const month = parseInt(mStr, 10);
+    const day = parseInt(dStr, 10);
+
+    if (grouping === 'weekly') {
+      const dt = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+      const dayOfWeek = dt.getUTCDay();
+      const diffToMonday = dt.getUTCDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const monday = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), diffToMonday));
+      const monStr = monday.toISOString().split('T')[0];
+      groupKey = monStr;
+      periodLabel = `Week of ${monStr}`;
+      timestamp = monday.getTime();
+    } else if (grouping === 'monthly') {
+      groupKey = `${yStr}-${mStr}`;
+      const dt = new Date(Date.UTC(year, month - 1, 1));
+      periodLabel = dt.toLocaleDateString('en-IN', { month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+      timestamp = dt.getTime();
+    } else if (grouping === 'yearly') {
+      groupKey = `${yStr}`;
+      const dt = new Date(Date.UTC(year, 0, 1));
+      periodLabel = `${year}`;
+      timestamp = dt.getTime();
+    } else {
+      // Default daily
+      groupKey = item.date;
+      periodLabel = item.date;
+      timestamp = new Date(Date.UTC(year, month - 1, day, 0, 0, 0)).getTime();
+    }
+
+    const existing = groupedMap.get(groupKey) || {
+      period: periodLabel,
+      dateKey: groupKey,
+      timestamp,
+      revenue: 0,
+      expenses: 0,
+      netProfitOrLoss: 0,
+    };
+
+    existing.revenue += item.revenue;
+    existing.expenses += item.expenses;
+    existing.netProfitOrLoss += item.netProfitOrLoss;
+    groupedMap.set(groupKey, existing);
+  }
+
+  const sortedKeys = Array.from(groupedMap.keys()).sort();
+  const series: ProfitLossDataPoint[] = [];
+
+  sortedKeys.forEach((k, idx) => {
+    const entry = groupedMap.get(k)!;
+    const isProfit = entry.netProfitOrLoss >= 0;
+
+    const pt: ProfitLossDataPoint = {
+      period: entry.period,
+      dateKey: entry.dateKey,
+      timestamp: entry.timestamp,
+      revenue: Math.round(entry.revenue),
+      expenses: Math.round(entry.expenses),
+      netProfitOrLoss: Math.round(entry.netProfitOrLoss),
+      isProfit,
+      revenueChangePct: null,
+      profitChangePct: null,
+      expenseChangePct: null,
+    };
+
+    if (idx > 0) {
+      const prev = series[idx - 1];
+      if (prev.revenue > 0) {
+        pt.revenueChangePct = Number((((pt.revenue - prev.revenue) / prev.revenue) * 100).toFixed(1));
+      }
+      if (prev.netProfitOrLoss !== 0) {
+        pt.profitChangePct = Number((((pt.netProfitOrLoss - prev.netProfitOrLoss) / Math.abs(prev.netProfitOrLoss)) * 100).toFixed(1));
+      }
+      if (prev.expenses > 0) {
+        pt.expenseChangePct = Number((((pt.expenses - prev.expenses) / prev.expenses) * 100).toFixed(1));
+      }
+    }
+
+    series.push(pt);
+  });
+
+  const totalRevenue = series.reduce((sum, p) => sum + p.revenue, 0);
+  const totalExpenses = series.reduce((sum, p) => sum + p.expenses, 0);
+  const netOperatingResult = totalRevenue - totalExpenses;
+  const isOverallProfit = netOperatingResult >= 0;
+  const netProfit = isOverallProfit ? netOperatingResult : 0;
+  const netLoss = !isOverallProfit ? Math.abs(netOperatingResult) : 0;
+  const marginPct = totalRevenue > 0 ? Number(((netOperatingResult / totalRevenue) * 100).toFixed(1)) : 0;
+
+  return {
+    periodLabel: dateRange.label,
+    category,
+    grouping,
+    kpis: {
+      totalRevenue,
+      totalExpenses,
+      netProfit,
+      netLoss,
+      netOperatingResult,
+      marginPct,
+      isOverallProfit,
+      costDataStatus: 'complete',
+      hasSufficientCostData: series.length > 0,
+    },
+    series,
   };
 };
 

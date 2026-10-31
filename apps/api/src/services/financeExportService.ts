@@ -354,18 +354,18 @@ export const generateFinancePdf = async (
   } else {
     // COMBINED FINANCE REPORT
     const data: CombinedFinanceSummary = await getCombinedFinanceSummary(filter);
-    drawReportHeader('VivoQuest Comprehensive Financial Reconciliation', data.periodLabel);
+    drawReportHeader('VivoQuest Simplified Financial Statement & Reconciliation', data.periodLabel);
 
     drawKpiCards([
-      { label: 'Gross Merchandise Value', value: formatINR(data.executiveSummary.grossMerchandiseValue), sub: 'Total Inflow Across Platform' },
-      { label: 'Recognized Net Revenue', value: formatINR(data.executiveSummary.recognizedNetRevenue), sub: 'Owned Net + Commission + Subs' },
-      { label: 'Equipment Direct COGS', value: formatINR(data.executiveSummary.directCOGS), sub: 'Direct Stock Sourcing' },
-      { label: 'Caregiver Shift Liability', value: formatINR(data.executiveSummary.laborLiabilities), sub: 'Committed Clinical Care' },
-      { label: 'Supplier Trade Payables', value: formatINR(data.executiveSummary.supplierLiabilitiesPending), sub: 'Pending Marketplace Settlement' },
+      { label: 'Total Money Received', value: formatINR(data.primaryKpis?.totalMoneyReceived ?? data.executiveSummary.grossMerchandiseValue), sub: 'Verified Inflow' },
+      { label: 'Product Sales Revenue', value: formatINR(data.primaryKpis?.productSalesRevenue ?? data.sectionSummaries.ownedProducts.grossSales), sub: 'Owned Equipment Sales' },
+      { label: 'Marketplace Volume', value: formatINR(data.primaryKpis?.marketplaceSales?.gmv ?? data.sectionSummaries.marketplace.gmv), sub: `Own Rev: ${formatINR(data.primaryKpis?.marketplaceSales?.vivoquestRevenue ?? data.sectionSummaries.marketplace.earnedCommission)}` },
+      { label: 'Subscription Revenue', value: formatINR(data.primaryKpis?.subscriptionRevenue ?? data.sectionSummaries.subscriptions.collections), sub: `${data.primaryKpis?.activeSubscriptions ?? data.sectionSummaries.subscriptions.activeCount} Active Plans` },
+      { label: 'Refunds & Contra', value: formatINR(data.primaryKpis?.refundsAndCancellations?.completedRefundsAmount ?? data.executiveSummary.completedRefunds), sub: 'Completed Reimbursements' },
       {
-        label: 'Net Operating Margin',
-        value: formatINR(data.executiveSummary.estimatedContributionMargin),
-        sub: `Margin: ${data.executiveSummary.contributionMarginPct}%`,
+        label: 'Net Operating Result',
+        value: formatINR(data.primaryKpis?.netOperatingResult?.amount ?? data.executiveSummary.estimatedContributionMargin),
+        sub: `Margin: ${data.primaryKpis?.netOperatingResult?.marginPct ?? data.executiveSummary.contributionMarginPct}% (${data.primaryKpis?.netOperatingResult?.costDataStatus ?? 'Reconciled'})`,
         highlight: true,
       },
     ]);

@@ -8,6 +8,7 @@ import {
   getMarketplaceFinance,
   getSubscriptionsFinance,
   getCombinedFinanceSummary,
+  getProfitLossAnalytics,
   FinanceDateFilter,
 } from '../services/financeService.js';
 import {
@@ -31,6 +32,8 @@ const extractFinanceFilters = (req: Request): FinanceDateFilter => {
     planType: req.query.planType as string,
     page: req.query.page ? parseInt(req.query.page as string, 10) : 1,
     limit: req.query.limit ? parseInt(req.query.limit as string, 10) : 20,
+    grouping: (req.query.grouping as any) || 'daily',
+    category: (req.query.category as any) || 'overview',
   };
 };
 
@@ -54,6 +57,31 @@ financeRouter.get(
       res.status(500).json({
         success: false,
         error: { code: 'FINANCE_SUMMARY_ERROR', message: err.message || 'Failed to compute financial summary' },
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/v1/admin/finances/analytics
+ * Interactive Profit & Loss Analytics time-series and KPI aggregation for Highcharts
+ */
+financeRouter.get(
+  '/analytics',
+  authenticateUser,
+  requireRole(['admin', 'super_admin']),
+  async (req: Request, res: Response) => {
+    try {
+      const filters = extractFinanceFilters(req);
+      const analytics = await getProfitLossAnalytics(filters);
+      res.status(200).json({
+        success: true,
+        data: analytics,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: { code: 'FINANCE_ANALYTICS_ERROR', message: err.message || 'Failed to compute profit & loss analytics' },
       });
     }
   }

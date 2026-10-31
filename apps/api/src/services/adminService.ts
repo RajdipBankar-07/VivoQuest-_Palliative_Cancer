@@ -1538,7 +1538,7 @@ export const PERMITTED_ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus
   in_transit: ['out_for_delivery', 'delivery_attempt_failed', 'delivery_rescheduled', 'returned_to_origin', 'cancelled'],
   out_for_delivery: ['delivered', 'delivery_attempt_failed', 'delivery_rescheduled', 'returned_to_origin', 'cancelled'],
   delivery_attempt_failed: ['out_for_delivery', 'delivery_rescheduled', 'returned_to_origin', 'cancelled'],
-  delivery_rescheduled: ['in_transit', 'out_for_delivery', 'returned_to_origin', 'cancelled'],
+  delivery_rescheduled: ['in_transit', 'out_for_delivery', 'delivered', 'returned_to_origin', 'cancelled'],
   returned_to_origin: ['cancelled'],
   delivered: ['completed'],
   completed: [],

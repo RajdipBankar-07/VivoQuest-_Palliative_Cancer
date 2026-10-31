@@ -5,6 +5,11 @@ import { Providers } from '@/components/Providers';
 export const metadata: Metadata = {
   title: 'VivoQuest — Better Healthcare, Right at Home',
   description: 'Connect with qualified healthcare professionals, preventive care services, and essential medical equipment through one coordinated Indian healthcare marketplace.',
+  icons: {
+    icon: '/favicon.svg',
+    shortcut: '/favicon.svg',
+    apple: '/favicon.svg',
+  },
   keywords: [
     'VivoQuest',
     'Home Healthcare India',
@@ -31,6 +36,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       </head>

@@ -47,6 +47,12 @@ export interface IMedicalProduct extends Document {
   recommendedSpecialistRole?: string;
   stockQuantity: number;
   reservedQuantity: number;
+  reorderThreshold: number;
+  reorderQuantity: number;
+  supplierAvailabilityConfirmedAt?: Date;
+  supplierAvailabilityStatus?: 'confirmed' | 'pending_confirmation' | 'unconfirmed' | 'out_of_stock';
+  supplierLeadTimeDays?: number;
+  lastStockUpdateAt?: Date;
   sourcingType: 'own_stock' | 'supplier_direct';
   supplierId?: mongoose.Types.ObjectId;
   supplierName?: string;
@@ -197,6 +203,35 @@ const MedicalProductSchema = new Schema<IMedicalProduct>(
       required: true,
       default: 0,
       min: 0,
+    },
+    reorderThreshold: {
+      type: Number,
+      required: true,
+      default: 5,
+      min: 0,
+    },
+    reorderQuantity: {
+      type: Number,
+      required: true,
+      default: 15,
+      min: 1,
+    },
+    supplierAvailabilityConfirmedAt: {
+      type: Date,
+    },
+    supplierAvailabilityStatus: {
+      type: String,
+      enum: ['confirmed', 'pending_confirmation', 'unconfirmed', 'out_of_stock'],
+      default: 'confirmed',
+    },
+    supplierLeadTimeDays: {
+      type: Number,
+      default: 3,
+      min: 0,
+    },
+    lastStockUpdateAt: {
+      type: Date,
+      default: Date.now,
     },
     sourcingType: {
       type: String,
@@ -377,13 +412,17 @@ MedicalProductSchema.pre<IMedicalProduct>('save', function (next) {
     this.images = this.imageGallery.map((ig) => ig.url);
   }
 
-  // 4. Status synchronization with stock and isActive
+  // 4. Status synchronization with available-to-sell stock and isActive
+  const availableToSell = Math.max(0, (this.stockQuantity || 0) - (this.reservedQuantity || 0));
+  if (!this.lastStockUpdateAt) {
+    this.lastStockUpdateAt = new Date();
+  }
   if (!this.isActive && this.status !== 'archived') {
     this.status = 'archived';
   } else if (this.isActive) {
-    if (this.stockQuantity <= 0 && this.status === 'active') {
+    if (availableToSell <= 0 && this.status === 'active') {
       this.status = 'out_of_stock';
-    } else if (this.stockQuantity > 0 && this.status === 'out_of_stock') {
+    } else if (availableToSell > 0 && this.status === 'out_of_stock') {
       this.status = 'active';
     }
   }

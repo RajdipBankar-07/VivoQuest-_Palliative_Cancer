@@ -12,6 +12,8 @@
   "dependencies": {
     "canvas-confetti": "^1.9.4",
     "framer-motion": "^11.15.0",
+    "highcharts": "^13.1.1",
+    "highcharts-react-official": "^3.2.3",
     "lucide-react": "^1.17.0",
     "next": "^15.1.0",
     "react": "19.3.0",
